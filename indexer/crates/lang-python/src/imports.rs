@@ -106,8 +106,8 @@ fn push_import(
                 }
                 _ => Vec::new(),
             };
-            // Imported symbol names.
-            let mut symbols = Vec::new();
+            // Imported symbol names as (local_binding, original_name) pairs.
+            let mut symbols: Vec<(String, String)> = Vec::new();
             let mut nc = child.walk();
             for name in child.named_children(&mut nc) {
                 if Some(name) == module {
@@ -116,14 +116,20 @@ fn push_import(
                 match name.kind() {
                     "dotted_name" => {
                         if let Some(first) = dotted_parts(name, source).into_iter().next() {
-                            symbols.push(first);
+                            symbols.push((first.clone(), first));
                         }
                     }
                     "aliased_import" => {
-                        if let Some(n) = name.child_by_field_name("name") {
-                            if let Some(first) = dotted_parts(n, source).into_iter().next() {
-                                symbols.push(first);
-                            }
+                        let original = name
+                            .child_by_field_name("name")
+                            .and_then(|n| dotted_parts(n, source).into_iter().next())
+                            .unwrap_or_default();
+                        let local = name
+                            .child_by_field_name("alias")
+                            .map(|a| text(a, source).to_string())
+                            .unwrap_or_else(|| original.clone());
+                        if !original.is_empty() {
+                            symbols.push((local, original));
                         }
                     }
                     _ => {}
@@ -187,12 +193,12 @@ mod tests {
     fn finds_imports_in_try_and_if_blocks() {
         let src = b"try:\n    from app.fast import go\nexcept ImportError:\n    from app.slow import go\n\nif TYPE_CHECKING:\n    from app.types import T\n";
         let imps = imports_of(src, "app/svc.py");
-        let symbols: Vec<&str> = imps
+        let locals: Vec<&str> = imps
             .iter()
-            .flat_map(|i| i.symbols.iter().map(|s| s.as_str()))
+            .flat_map(|i| i.symbols.iter().map(|(local, _)| local.as_str()))
             .collect();
-        assert!(symbols.contains(&"go"), "import in try-block found");
-        assert!(symbols.contains(&"T"), "import in if-block found");
+        assert!(locals.contains(&"go"), "import in try-block found");
+        assert!(locals.contains(&"T"), "import in if-block found");
     }
 
     #[test]
@@ -210,17 +216,23 @@ mod tests {
 
         // from x.y import z
         assert_eq!(imps[1].candidate_paths, vec!["x/y.py", "x/y/__init__.py"]);
-        assert_eq!(imps[1].symbols, vec!["z"]);
+        assert_eq!(imps[1].symbols, vec![("z".into(), "z".into())]);
 
         // from .base import Base  (level 1: package = app/)
         assert_eq!(
             imps[2].candidate_paths,
             vec!["app/base.py", "app/base/__init__.py"]
         );
-        assert_eq!(imps[2].symbols, vec!["Base"]);
+        assert_eq!(imps[2].symbols, vec![("Base".into(), "Base".into())]);
 
         // from ..pkg import thing (level 2 from app/svc.py: drop "app", → pkg)
         assert_eq!(imps[3].candidate_paths, vec!["pkg.py", "pkg/__init__.py"]);
-        assert_eq!(imps[3].symbols, vec!["thing"]);
+        assert_eq!(imps[3].symbols, vec![("thing".into(), "thing".into())]);
+    }
+
+    #[test]
+    fn aliased_import_records_local_and_original() {
+        let imps = imports_of(b"from app.util import helper as h\n", "app/svc.py");
+        assert_eq!(imps[0].symbols, vec![("h".to_string(), "helper".to_string())]);
     }
 }
