@@ -19,13 +19,11 @@ impl Extractor for TypeScriptExtractor {
         let Some(tree) = parse(ctx.source, is_tsx_path(ctx.rel_path)) else {
             return ExtractOutput::default();
         };
+        let root = tree.root_node();
+        let imports = imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
-        w.walk(tree.root_node(), &[], ctx.file_id, defs::ScopeKind::Module);
-        ExtractOutput {
-            nodes: w.nodes,
-            edges: w.edges,
-            ..Default::default()
-        }
+        w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
+        ExtractOutput { nodes: w.nodes, edges: w.edges, imports, calls: w.calls }
     }
 }
 
@@ -74,6 +72,17 @@ mod tests {
         assert_eq!(tree.root_node().kind(), "program");
         let f = tree.root_node().named_child(0).unwrap();
         assert_eq!(f.kind(), "function_declaration");
+    }
+
+    #[test]
+    fn extractor_surfaces_imports_and_calls() {
+        use reposkein_core::extractor::{Extractor, FileContext};
+        let src = b"import { helper } from \"./util\";\nfunction run() { return helper(); }\n";
+        let ctx = FileContext { repo: "r", rel_path: "src/svc.ts", file_id: "rs1:r:file:src/svc.ts", source: src };
+        let out = TypeScriptExtractor.extract(&ctx);
+        assert_eq!(out.imports.len(), 1);
+        assert_eq!(out.imports[0].symbols, vec!["helper"]);
+        assert!(out.calls.iter().any(|c| c.callee_name == "helper"));
     }
 
     #[test]

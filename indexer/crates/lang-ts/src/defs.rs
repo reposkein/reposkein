@@ -18,6 +18,7 @@ pub struct Walk<'a> {
     source: &'a [u8],
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    pub calls: Vec<reposkein_core::extractor::RawCall>,
 }
 
 fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
@@ -58,6 +59,7 @@ impl<'a> Walk<'a> {
             source,
             nodes: Vec::new(),
             edges: Vec::new(),
+            calls: Vec::new(),
         }
     }
 
@@ -100,6 +102,7 @@ impl<'a> Walk<'a> {
         self.edges
             .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
         if let Some(body) = node.child_by_field_name("body") {
+            crate::calls::collect_calls(body, self.source, &id, &qualified, self.rel_path, &mut self.calls);
             self.walk(body, &qual, &id, ScopeKind::Function);
         }
     }
