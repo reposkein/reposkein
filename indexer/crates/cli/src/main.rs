@@ -100,6 +100,21 @@ enum Commands {
     },
 }
 
+/// Best-effort: pulls the repo's nodes (with summaries) from Neo4j so the
+/// agent's MCP-written summaries can be grafted into committed JSONL. Returns
+/// None if no DB is configured/reachable — the caller then keeps JSONL grafts
+/// only (graceful degradation, never blocks a commit).
+fn db_summary_nodes(repo: &str) -> Option<Vec<reposkein_core::model::Node>> {
+    if std::env::var("NEO4J_PASSWORD").is_err() {
+        return None; // no DB configured → skip (fast path)
+    }
+    let store = reposkein_neo4j_io::Neo4jStore::from_env().ok()?;
+    match store.export_graph(repo) {
+        Ok(graph) => Some(graph.nodes),
+        Err(_) => None,
+    }
+}
+
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
@@ -223,7 +238,8 @@ fn main() -> Result<()> {
             let out_dir = path.join(".reposkein");
             std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
             let nodes_path = out_dir.join("nodes.jsonl");
-            let nodes = if nodes_path.exists() {
+            // 1) Preserve summaries already committed in JSONL (hash-validated).
+            let mut nodes = if nodes_path.exists() {
                 let prev =
                     std::fs::read_to_string(&nodes_path).context("read existing nodes.jsonl")?;
                 let existing = reposkein_core::jsonl::read_nodes(&prev)?;
@@ -231,6 +247,11 @@ fn main() -> Result<()> {
             } else {
                 graph.nodes.clone()
             };
+            // 2) Overlay the live DB's summaries (the agent's latest, hash-valid)
+            //    so MCP-written summaries reach committed JSONL (PRD §9 Phase 3).
+            if let Some(db_nodes) = db_summary_nodes(&repo) {
+                nodes = reposkein_core::merge::graft_summaries(&nodes, &db_nodes);
+            }
             std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
                 .context("failed to write nodes.jsonl")?;
             std::fs::write(
