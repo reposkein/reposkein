@@ -10,3 +10,7 @@ neo4rs.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+reposkein-lang-python = { path = "../lang-python" }
+tempfile.workspace = true
