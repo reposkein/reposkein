@@ -21,7 +21,7 @@ pub fn collect_calls(
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "function_definition" | "class_definition" => {
+            "function_definition" | "class_definition" | "decorated_definition" => {
                 // Boundary: belongs to a nested scope, scanned separately.
                 continue;
             }
@@ -65,6 +65,22 @@ pub fn collect_calls(
 mod tests {
     use super::*;
     use crate::parse;
+
+    #[test]
+    fn decorator_calls_not_attributed_to_enclosing() {
+        // A function whose body contains a decorated nested def; the decorator
+        // call (register(...)) must NOT be attributed to `outer`.
+        let src = b"def outer():\n    helper()\n    @register(\"x\")\n    def inner():\n        pass\n";
+        let tree = parse(src).unwrap();
+        let func = tree.root_node().named_child(0).unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut calls = Vec::new();
+        collect_calls(body, src, "cid", "outer", "m.py", &mut calls);
+        let names: Vec<&str> = calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(names.contains(&"helper"));
+        assert!(!names.contains(&"register"), "decorator call must not attribute to outer");
+        assert!(!names.contains(&"inner"));
+    }
 
     #[test]
     fn collects_bare_and_attribute_calls_excluding_nested_defs() {
