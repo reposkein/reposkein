@@ -30,13 +30,16 @@ impl Extractor for PythonExtractor {
         let Some(tree) = parse(ctx.source) else {
             return ExtractOutput::default();
         };
+        let root = tree.root_node();
+        let imports =
+            imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.file_id, ctx.source);
-        w.walk(tree.root_node(), &[], ctx.file_id, defs::ScopeKind::Module);
+        w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
         ExtractOutput {
             nodes: w.nodes,
             edges: w.edges,
-            imports: Vec::new(),
-            calls: Vec::new(),
+            imports,
+            calls: w.calls,
         }
     }
 }
@@ -85,5 +88,22 @@ mod tests {
         let out = PythonExtractor.extract(&ctx);
         assert!(out.nodes.iter().any(|n| n.id == "rs1:r:func:m.py#foo@0"));
         assert_eq!(PythonExtractor.language(), "python");
+    }
+
+    #[test]
+    fn extractor_surfaces_imports_and_calls() {
+        use reposkein_core::extractor::{Extractor, FileContext};
+        let src = b"from .base import Base\n\ndef run():\n    helper()\n";
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "app/svc.py",
+            file_id: "rs1:r:file:app/svc.py",
+            source: src,
+        };
+        let out = PythonExtractor.extract(&ctx);
+        assert_eq!(out.imports.len(), 1);
+        assert_eq!(out.imports[0].symbols, vec!["Base"]);
+        assert!(out.calls.iter().any(|c| c.callee_name == "helper"
+            && c.caller_id == "rs1:r:func:app/svc.py#run@0"));
     }
 }
