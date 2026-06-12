@@ -87,7 +87,7 @@ fn resolve_one(
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
-    if matches!(c.receiver.as_deref(), Some("self") | Some("cls")) {
+    if matches!(c.receiver.as_deref(), Some("self") | Some("cls") | Some("this")) {
         if let Some((class, _)) = c.caller_qualified.rsplit_once('.') {
             let target_q = format!("{class}.{}", c.callee_name);
             if let Some(id) = by_file_qual.get(&(c.caller_path.clone(), target_q)) {
@@ -300,6 +300,18 @@ mod tests {
         let m_callee = func_node("r", "m.py", "Svc.help", 1);
         let nodes = vec![m_caller.clone(), m_callee.clone()];
         let calls = vec![call(&m_caller.id, "m.py", "Svc.run", "help", Some("self"))];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
+        assert_eq!(e.to, m_callee.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
+    }
+
+    #[test]
+    fn this_method_call_is_exact() {
+        let m_caller = func_node("r", "m.ts", "Svc.run", 0);
+        let m_callee = func_node("r", "m.ts", "Svc.go", 0);
+        let nodes = vec![m_caller.clone(), m_callee.clone()];
+        let calls = vec![call(&m_caller.id, "m.ts", "Svc.run", "go", Some("this"))];
         let edges = resolve(&nodes, &[], &calls, "r");
         let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
         assert_eq!(e.to, m_callee.id);
