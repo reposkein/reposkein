@@ -1,5 +1,6 @@
 //! reposkein-core: deterministic repository indexing primitives.
 
+pub mod cache;
 pub mod classify;
 pub mod extractor;
 pub mod hash;
