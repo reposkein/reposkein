@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/cli", "crates/lang-python"]
 
 [workspace.package]
 version = "0.0.0"
@@ -17,3 +17,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"            # NOTE: do NOT enable "preserve_order"
 tempfile = "3"
 assert_cmd = "2"
+tree-sitter = "0.26"
+tree-sitter-python = "0.25"
