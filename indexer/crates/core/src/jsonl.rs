@@ -154,6 +154,34 @@ pub fn read_edges(text: &str) -> Result<Vec<Edge>> {
     Ok(out)
 }
 
+/// Parses a summaries sidecar (`.reposkein/local/summaries.jsonl`) into Nodes
+/// carrying only `id` + summary props (labels empty). Feeds `graft_summaries`
+/// so JSONL-mode agent summaries reach committed `nodes.jsonl`. Best-effort:
+/// malformed lines are skipped (the sidecar is regenerable and must never abort
+/// an index).
+pub fn read_sidecar_summaries(text: &str) -> Vec<Node> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut obj: Map<String, Value> = match serde_json::from_str(line) {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let id = match obj.remove("id") {
+            Some(Value::String(s)) => s,
+            _ => continue,
+        };
+        out.push(Node {
+            id,
+            labels: Vec::new(),
+            props: obj,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +270,38 @@ mod tests {
         let parsed = read_edges(&text).unwrap();
         assert_eq!(parsed, edges);
         assert_eq!(edges_to_jsonl(&parsed), text);
+    }
+
+    #[test]
+    fn sidecar_parses_id_and_summary_props_skips_malformed() {
+        let text = concat!(
+            r#"{"id":"rs1:r:func:a.py#f@0","semantic_summary":"does f","summary_of_hash":"h1"}"#,
+            "\n",
+            "not json\n",
+            "\n",
+            r#"{"semantic_summary":"no id - skipped"}"#,
+            "\n",
+            r#"{"id":"rs1:r:func:b.py#g@0","semantic_summary":"does g","summary_of_hash":"h2"}"#,
+            "\n",
+        );
+        let nodes = read_sidecar_summaries(text);
+        assert_eq!(nodes.len(), 2, "two valid records; malformed + id-less skipped");
+        assert_eq!(nodes[0].id, "rs1:r:func:a.py#f@0");
+        assert!(nodes[0].labels.is_empty());
+        assert_eq!(nodes[0].props["semantic_summary"], json!("does f"));
+        assert_eq!(nodes[0].props["summary_of_hash"], json!("h1"));
+        assert_eq!(nodes[1].id, "rs1:r:func:b.py#g@0");
+    }
+
+    #[test]
+    fn sidecar_nodes_feed_graft_summaries() {
+        use crate::merge::graft_summaries;
+        let fresh = vec![Node::new("rs1:r:func:a.py#f@0", "Function")
+            .set("content_hash", json!("h1"))];
+        let sidecar = read_sidecar_summaries(
+            "{\"id\":\"rs1:r:func:a.py#f@0\",\"semantic_summary\":\"does f\",\"summary_of_hash\":\"h1\"}\n",
+        );
+        let out = graft_summaries(&fresh, &sidecar);
+        assert_eq!(out[0].props["semantic_summary"], json!("does f"));
     }
 }
