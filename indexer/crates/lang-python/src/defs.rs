@@ -53,6 +53,10 @@ impl<'a> Walk<'a> {
         )
     }
 
+    fn class_id(&self, qualified: &str) -> String {
+        format!("rs1:{}:class:{}#{}", self.repo, self.rel_path, qualified)
+    }
+
     /// Recursively walk `node` with the given scope stack (enclosing
     /// class/function names) and parent node id (File or Class/Function id).
     pub fn walk(&mut self, node: TsNode, scope: &[String], parent_id: &str) {
@@ -98,6 +102,49 @@ impl<'a> Walk<'a> {
                         self.walk(body, &qual, &id);
                     }
                 }
+                "class_definition" => {
+                    let name = child
+                        .child_by_field_name("name")
+                        .map(|n| text(n, self.source).to_string())
+                        .unwrap_or_default();
+                    let mut qual = scope.to_vec();
+                    qual.push(name.clone());
+                    let qualified = qual.join(".");
+                    let id = self.class_id(&qualified);
+
+                    self.nodes.push(
+                        Node::new(id.clone(), "Class")
+                            .set("name", json!(name))
+                            .set("qualified_name", json!(qualified))
+                            .set("file_path", json!(self.rel_path))
+                            .set("start_line", json!(child.start_position().row + 1))
+                            .set("end_line", json!(child.end_position().row + 1)),
+                    );
+                    self.edges
+                        .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
+
+                    // INHERITS: base classes named in the superclass list,
+                    // resolved intra-file only (exact). The `superclasses`
+                    // field is an `argument_list`.
+                    if let Some(supers) = child.child_by_field_name("superclasses") {
+                        let mut sc = supers.walk();
+                        for base in supers.named_children(&mut sc) {
+                            if base.kind() == "identifier" {
+                                let base_name = text(base, self.source);
+                                let base_id = self.class_id(base_name);
+                                self.edges.push(Edge::new(
+                                    id.clone(),
+                                    "INHERITS",
+                                    base_id,
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some(body) = child.child_by_field_name("body") {
+                        self.walk(body, &qual, &id);
+                    }
+                }
                 _ => {}
             }
         }
@@ -115,6 +162,37 @@ mod tests {
         let mut w = Walk::new("r", "m.py", "rs1:r:file:m.py", src);
         w.walk(tree.root_node(), &[], "rs1:r:file:m.py");
         w
+    }
+
+    #[test]
+    fn extracts_class_methods_and_inherits() {
+        let src = b"class Base:\n    pass\n\nclass Foo(Base):\n    def m(self, x):\n        return x\n";
+        let w = run(src);
+
+        let class_ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Class"])
+            .map(|n| n.id.as_str())
+            .collect();
+        assert!(class_ids.contains(&"rs1:r:class:m.py#Base"));
+        assert!(class_ids.contains(&"rs1:r:class:m.py#Foo"));
+
+        // Method qualified name is Foo.m; DEFINES from the class node.
+        let m = w
+            .nodes
+            .iter()
+            .find(|n| n.labels == ["Function"] && n.props["qualified_name"] == json!("Foo.m"))
+            .unwrap();
+        assert_eq!(m.id, "rs1:r:func:m.py#Foo.m@2");
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.py#Foo"
+            && e.typ == "DEFINES"
+            && e.to == m.id));
+
+        // Foo INHERITS Base (resolved intra-file).
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.py#Foo"
+            && e.typ == "INHERITS"
+            && e.to == "rs1:r:class:m.py#Base"));
     }
 
     #[test]
