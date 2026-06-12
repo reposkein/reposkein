@@ -2,6 +2,7 @@
 //! nodes and DEFINES/INHERITS edges. Pure static analysis — deterministic.
 
 pub mod defs;
+pub mod imports;
 
 use tree_sitter::{Parser, Tree};
 
@@ -33,6 +34,8 @@ impl Extractor for PythonExtractor {
         ExtractOutput {
             nodes: w.nodes,
             edges: w.edges,
+            imports: Vec::new(),
+            calls: Vec::new(),
         }
     }
 }
