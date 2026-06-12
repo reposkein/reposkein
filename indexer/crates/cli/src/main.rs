@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use reposkein_core::{index_tree, jsonl};
+use reposkein_core::{index_tree_with, jsonl};
 use reposkein_lang_python::PythonExtractor;
 use reposkein_lang_rust::RustExtractor;
 use reposkein_lang_ts::{JavaScriptExtractor, TypeScriptExtractor};
@@ -57,6 +57,9 @@ enum Commands {
         /// Repository display name (defaults to the root directory name).
         #[arg(long)]
         name: Option<String>,
+        /// Disable nested-repo federation (index child repos' sources under this repo).
+        #[arg(long)]
+        no_federation: bool,
     },
     /// Load committed .reposkein JSONL into Neo4j (reconstruct the DB).
     Load {
@@ -218,6 +221,7 @@ fn main() -> Result<()> {
             path,
             repo_id,
             name,
+            no_federation,
         } => {
             let repo = resolve_repo_id(&path, repo_id);
             let repo_name = name.unwrap_or_else(|| {
@@ -233,8 +237,31 @@ fn main() -> Result<()> {
             let rust = RustExtractor;
             let extractors: &[&dyn reposkein_core::extractor::Extractor] =
                 &[&python, &typescript, &javascript, &rust];
-            let graph = index_tree(&path, &repo, &repo_name, extractors)
+            let opts = reposkein_core::IndexOptions { federation: !no_federation };
+            let out = index_tree_with(&path, &repo, &repo_name, extractors, opts)
                 .context("failed to index repository tree")?;
+
+            // Collision guard: a child repo_id must not equal the root's or a sibling's.
+            let mut seen = std::collections::BTreeSet::new();
+            for c in &out.children {
+                if c.repo_id == repo {
+                    anyhow::bail!(
+                        "federation: child '{}' has the same repo_id as the root ({}); re-index it after deleting its .reposkein/meta.json",
+                        c.rel_path,
+                        repo
+                    );
+                }
+                if !seen.insert(c.repo_id.clone()) {
+                    anyhow::bail!(
+                        "federation: duplicate child repo_id '{}' (e.g. a copied repo dir); re-index the duplicate to mint a fresh id",
+                        c.repo_id
+                    );
+                }
+            }
+            for w in &out.warnings {
+                eprintln!("reposkein: {w}");
+            }
+            let graph = out.graph;
 
             let out_dir = path.join(".reposkein");
             std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
@@ -264,9 +291,10 @@ fn main() -> Result<()> {
             write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
 
             println!(
-                "indexed repo_id={repo} name={repo_name}: {} nodes, {} edges",
+                "indexed repo_id={repo} name={repo_name}: {} nodes, {} edges, {} federated children",
                 graph.nodes.len(),
-                graph.edges.len()
+                graph.edges.len(),
+                out.children.len()
             );
             Ok(())
         }
