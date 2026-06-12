@@ -33,6 +33,29 @@ enum Commands {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Load committed .reposkein JSONL into Neo4j (reconstruct the DB).
+    Load {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        repo_id: Option<String>,
+    },
+    /// Export the repo's graph from Neo4j to .reposkein JSONL.
+    Export {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        repo_id: Option<String>,
+        #[arg(long)]
+        full: bool,
+    },
+    /// Check Neo4j connectivity and version.
+    Doctor,
+    /// Delete all graph data for a repo_id from Neo4j.
+    Purge {
+        #[arg(long)]
+        repo: String,
+    },
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
@@ -102,6 +125,53 @@ fn main() -> Result<()> {
                 graph.nodes.len(),
                 graph.edges.len()
             );
+            Ok(())
+        }
+        Commands::Load { path, repo_id } => {
+            let repo = repo_id.unwrap_or_else(|| compute_repo_id(&path));
+            let dir = path.join(".reposkein");
+            let nodes_txt = std::fs::read_to_string(dir.join("nodes.jsonl"))
+                .context("read nodes.jsonl")?;
+            let edges_txt = std::fs::read_to_string(dir.join("edges.jsonl"))
+                .context("read edges.jsonl")?;
+            let graph = reposkein_core::Graph {
+                nodes: reposkein_core::jsonl::read_nodes(&nodes_txt)?,
+                edges: reposkein_core::jsonl::read_edges(&edges_txt)?,
+            };
+            let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
+            store.import_graph(&repo, &graph)?;
+            println!(
+                "loaded repo_id={repo}: {} nodes, {} edges into Neo4j",
+                graph.nodes.len(),
+                graph.edges.len()
+            );
+            Ok(())
+        }
+        Commands::Export { path, repo_id, full: _ } => {
+            let repo = repo_id.unwrap_or_else(|| compute_repo_id(&path));
+            let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
+            let graph = store.export_graph(&repo)?;
+            let dir = path.join(".reposkein");
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("nodes.jsonl"), reposkein_core::jsonl::nodes_to_jsonl(&graph.nodes))?;
+            std::fs::write(dir.join("edges.jsonl"), reposkein_core::jsonl::edges_to_jsonl(&graph.edges))?;
+            println!(
+                "exported repo_id={repo}: {} nodes, {} edges",
+                graph.nodes.len(),
+                graph.edges.len()
+            );
+            Ok(())
+        }
+        Commands::Doctor => {
+            let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
+            let r = store.doctor()?;
+            println!("neo4j reachable={} version={} edition={}", r.reachable, r.version, r.edition);
+            Ok(())
+        }
+        Commands::Purge { repo } => {
+            let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
+            let n = store.purge(&repo)?;
+            println!("purged {n} nodes for repo_id={repo}");
             Ok(())
         }
     }
