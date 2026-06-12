@@ -38,11 +38,17 @@ fn summary_survives_reindex_when_source_unchanged() {
     // Reindex without changing the source → summary preserved.
     index(root);
     let after = fs::read_to_string(&nodes_path).unwrap();
-    assert!(after.contains(r#""semantic_summary":"returns one""#), "summary should survive unchanged reindex");
+    assert!(
+        after.contains(r#""semantic_summary":"returns one""#),
+        "summary should survive unchanged reindex"
+    );
 
     // Now change the source → content_hash changes → summary dropped.
     fs::write(root.join("m.py"), b"def f():\n    return 2\n").unwrap();
     index(root);
     let changed = fs::read_to_string(&nodes_path).unwrap();
-    assert!(!changed.contains("returns one"), "stale summary should be dropped after source change");
+    assert!(
+        !changed.contains("returns one"),
+        "stale summary should be dropped after source change"
+    );
 }

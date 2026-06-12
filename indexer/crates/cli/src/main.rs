@@ -151,7 +151,8 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
             let nodes_path = out_dir.join("nodes.jsonl");
             let nodes = if nodes_path.exists() {
-                let prev = std::fs::read_to_string(&nodes_path).context("read existing nodes.jsonl")?;
+                let prev =
+                    std::fs::read_to_string(&nodes_path).context("read existing nodes.jsonl")?;
                 let existing = reposkein_core::jsonl::read_nodes(&prev)?;
                 reposkein_core::merge::graft_summaries(&graph.nodes, &existing)
             } else {
@@ -238,7 +239,8 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let hooks_dir = path.join(".git").join("hooks");
-            std::fs::create_dir_all(&hooks_dir).context("create .git/hooks (is this a git repo?)")?;
+            std::fs::create_dir_all(&hooks_dir)
+                .context("create .git/hooks (is this a git repo?)")?;
             let write_hook = |name: &str, body: &str| -> Result<()> {
                 let p = hooks_dir.join(name);
                 std::fs::write(&p, body).with_context(|| format!("write hook {name}"))?;
@@ -280,13 +282,19 @@ fn main() -> Result<()> {
                     .args(["config", k, v])
                     .status()
             };
-            run_cfg("merge.reposkein-jsonl.name", "RepoSkein canonical JSONL merge")?;
+            run_cfg(
+                "merge.reposkein-jsonl.name",
+                "RepoSkein canonical JSONL merge",
+            )?;
             run_cfg(
                 "merge.reposkein-jsonl.driver",
                 "reposkein-indexer merge-jsonl %O %A %B",
             )?;
 
-            println!("installed reposkein git hooks + merge driver in {}", path.display());
+            println!(
+                "installed reposkein git hooks + merge driver in {}",
+                path.display()
+            );
             Ok(())
         }
         Commands::MergeJsonl {

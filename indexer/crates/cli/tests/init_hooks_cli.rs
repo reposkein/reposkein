@@ -8,7 +8,12 @@ fn init_hooks_installs_all_artifacts() {
     let dir = tempdir().unwrap();
     let root = dir.path();
     // Make it a git repo.
-    Proc::new("git").arg("init").arg("-q").current_dir(root).status().unwrap();
+    Proc::new("git")
+        .arg("init")
+        .arg("-q")
+        .current_dir(root)
+        .status()
+        .unwrap();
 
     Command::cargo_bin("reposkein-indexer")
         .unwrap()
@@ -22,7 +27,10 @@ fn init_hooks_installs_all_artifacts() {
         let p = root.join(".git/hooks").join(hook);
         assert!(p.exists(), "{hook} should exist");
         let body = fs::read_to_string(&p).unwrap();
-        assert!(body.contains("reposkein"), "{hook} should reference reposkein");
+        assert!(
+            body.contains("reposkein"),
+            "{hook} should reference reposkein"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -52,5 +60,8 @@ fn init_hooks_installs_all_artifacts() {
         .assert()
         .success();
     let attrs2 = fs::read_to_string(root.join(".gitattributes")).unwrap();
-    assert_eq!(attrs2.matches("nodes.jsonl merge=reposkein-jsonl").count(), 1);
+    assert_eq!(
+        attrs2.matches("nodes.jsonl merge=reposkein-jsonl").count(),
+        1
+    );
 }

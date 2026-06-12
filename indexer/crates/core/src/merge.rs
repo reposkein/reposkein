@@ -223,15 +223,23 @@ mod tests {
     #[test]
     fn graft_keeps_matching_summary_and_drops_stale() {
         // Fresh structure for two functions; existing has a summary for each.
-        let fresh = vec![func("rs1:r:func:a#f@0", "ha"), func("rs1:r:func:b#g@0", "hb_new")];
+        let fresh = vec![
+            func("rs1:r:func:a#f@0", "ha"),
+            func("rs1:r:func:b#g@0", "hb_new"),
+        ];
         let existing = vec![
             with_summary(func("rs1:r:func:a#f@0", "ha"), "stable summary", "ha"), // hash matches → kept
             with_summary(func("rs1:r:func:b#g@0", "hb_old"), "old summary", "hb_old"), // source changed (hb_old→hb_new) → dropped
         ];
         let out = graft_summaries(&fresh, &existing);
         let get = |id: &str| out.iter().find(|n| n.id == id).unwrap();
-        assert_eq!(get("rs1:r:func:a#f@0").props["semantic_summary"], json!("stable summary"));
-        assert!(!get("rs1:r:func:b#g@0").props.contains_key("semantic_summary"));
+        assert_eq!(
+            get("rs1:r:func:a#f@0").props["semantic_summary"],
+            json!("stable summary")
+        );
+        assert!(!get("rs1:r:func:b#g@0")
+            .props
+            .contains_key("semantic_summary"));
     }
 
     #[test]
