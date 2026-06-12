@@ -95,17 +95,25 @@ pub fn merge_nodes(base: &[Node], ours: &[Node], theirs: &[Node]) -> Vec<Node> {
     for k in keys {
         match (om.get(k), tm.get(k)) {
             (Some(o), Some(t)) => out.push(merge_node(bm.get(k).copied(), o, t)),
-            (Some(o), None) => out.push((*o).clone()),
-            (None, Some(t)) => out.push((*t).clone()),
+            (Some(o), None) => {
+                // theirs deleted it; keep only if ours changed it from base.
+                match bm.get(k) {
+                    Some(b) if *b == *o => {} // unchanged + deleted-by-theirs → drop
+                    _ => out.push((*o).clone()),
+                }
+            }
+            (None, Some(t)) => {
+                // ours deleted it; keep only if theirs changed it from base.
+                match bm.get(k) {
+                    Some(b) if *b == *t => {} // unchanged + deleted-by-ours → drop
+                    _ => out.push((*t).clone()),
+                }
+            }
             (None, None) => {}
         }
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
-}
-
-fn edge_key(e: &Edge) -> (String, String, String) {
-    (e.from.clone(), e.typ.clone(), e.to.clone())
 }
 
 /// Carries summaries from `existing` records onto freshly-regenerated `fresh`
@@ -134,16 +142,36 @@ pub fn graft_summaries(fresh: &[Node], existing: &[Node]) -> Vec<Node> {
 }
 
 /// Three-way merge of edge records (all fields structural; ours-wins on
-/// conflict). Returned sorted by (from, type, to).
-pub fn merge_edges(_base: &[Edge], ours: &[Edge], theirs: &[Edge]) -> Vec<Edge> {
-    let mut map: BTreeMap<(String, String, String), Edge> = BTreeMap::new();
-    for e in theirs {
-        map.insert(edge_key(e), e.clone());
+/// conflict). Edges deleted on one side and unchanged on the other are dropped.
+/// Returned sorted by (from, type, to).
+pub fn merge_edges(base: &[Edge], ours: &[Edge], theirs: &[Edge]) -> Vec<Edge> {
+    let key = |e: &Edge| (e.from.clone(), e.typ.clone(), e.to.clone());
+    let bset: BTreeSet<_> = base.iter().map(key).collect();
+    let omap: BTreeMap<_, Edge> = ours.iter().map(|e| (key(e), e.clone())).collect();
+    let tmap: BTreeMap<_, Edge> = theirs.iter().map(|e| (key(e), e.clone())).collect();
+    let mut out: BTreeMap<_, Edge> = BTreeMap::new();
+    let all_keys: BTreeSet<_> = omap.keys().chain(tmap.keys()).cloned().collect();
+    for k in all_keys {
+        match (omap.get(&k), tmap.get(&k)) {
+            (Some(o), Some(_)) => {
+                out.insert(k, o.clone()); // both: ours-wins (props regenerate)
+            }
+            (Some(o), None) => {
+                // theirs deleted; keep only if ours newly added it (not in base)
+                if !bset.contains(&k) {
+                    out.insert(k, o.clone());
+                }
+            }
+            (None, Some(t)) => {
+                // ours deleted; keep only if theirs newly added it (not in base)
+                if !bset.contains(&k) {
+                    out.insert(k, t.clone());
+                }
+            }
+            (None, None) => {}
+        }
     }
-    for e in ours {
-        map.insert(edge_key(e), e.clone()); // ours overwrites theirs
-    }
-    map.into_values().collect()
+    out.into_values().collect()
 }
 
 #[cfg(test)]
@@ -248,5 +276,27 @@ mod tests {
         let out = graft_summaries(&fresh, &[]);
         assert_eq!(out.len(), 1);
         assert!(!out[0].props.contains_key("semantic_summary"));
+    }
+
+    #[test]
+    fn one_sided_deletion_of_unchanged_node_is_dropped() {
+        let n = func("rs1:r:func:m.py#f@0", "h");
+        let base = vec![n.clone()];
+        let ours = vec![n.clone()]; // ours unchanged
+        let theirs: Vec<Node> = vec![]; // theirs deleted it
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert!(
+            merged.is_empty(),
+            "a node deleted on one side and unchanged on the other is dropped"
+        );
+    }
+
+    #[test]
+    fn one_sided_deletion_but_modified_other_side_is_kept() {
+        let base = vec![func("rs1:r:func:m.py#f@0", "h1")];
+        let ours = vec![func("rs1:r:func:m.py#f@0", "h2")]; // ours changed it
+        let theirs: Vec<Node> = vec![]; // theirs deleted it
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged.len(), 1, "modify-vs-delete keeps the modified side");
     }
 }
