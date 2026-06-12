@@ -51,17 +51,22 @@ fn candidates(base: &str) -> Vec<String> {
 }
 
 /// Imported symbol names from an import_clause (named + default + namespace).
-fn clause_symbols(clause: TsNode, source: &[u8]) -> Vec<String> {
+/// Returns (local_binding, original_name) pairs; equal when not aliased.
+fn clause_symbols(clause: TsNode, source: &[u8]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut c = clause.walk();
     for child in clause.named_children(&mut c) {
         match child.kind() {
-            "identifier" => out.push(text(child, source).to_string()), // default import
+            "identifier" => {
+                let s = text(child, source).to_string();
+                out.push((s.clone(), s));
+            } // default import
             "namespace_import" => {
                 let mut nc = child.walk();
                 for n in child.named_children(&mut nc) {
                     if n.kind() == "identifier" {
-                        out.push(text(n, source).to_string());
+                        let s = text(n, source).to_string();
+                        out.push((s.clone(), s));
                     }
                 }
             }
@@ -70,7 +75,12 @@ fn clause_symbols(clause: TsNode, source: &[u8]) -> Vec<String> {
                 for spec in child.named_children(&mut nc) {
                     if spec.kind() == "import_specifier" {
                         if let Some(name) = spec.child_by_field_name("name") {
-                            out.push(text(name, source).to_string());
+                            let original = text(name, source).to_string();
+                            let local = spec
+                                .child_by_field_name("alias")
+                                .map(|a| text(a, source).to_string())
+                                .unwrap_or_else(|| original.clone());
+                            out.push((local, original));
                         }
                     }
                 }
@@ -139,9 +149,15 @@ mod tests {
         assert!(imps[0]
             .candidate_paths
             .contains(&"src/base/index.ts".to_string()));
-        assert_eq!(imps[0].symbols, vec!["Base"]);
+        assert_eq!(imps[0].symbols, vec![("Base".into(), "Base".into())]);
         assert_eq!(imps[1].candidate_paths[0], "lib/util.ts");
-        assert_eq!(imps[1].symbols, vec!["x"]);
+        assert_eq!(imps[1].symbols, vec![("x".into(), "x".into())]);
+    }
+
+    #[test]
+    fn aliased_named_import_records_local_and_original() {
+        let imps = imports_of(b"import { helper as h } from \"./util\";\n", "src/app.ts");
+        assert_eq!(imps[0].symbols, vec![("h".to_string(), "helper".to_string())]);
     }
 
     #[test]

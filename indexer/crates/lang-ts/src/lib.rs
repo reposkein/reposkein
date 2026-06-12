@@ -108,7 +108,7 @@ mod tests {
         };
         let out = TypeScriptExtractor.extract(&ctx);
         assert_eq!(out.imports.len(), 1);
-        assert_eq!(out.imports[0].symbols, vec!["helper"]);
+        assert_eq!(out.imports[0].symbols, vec![("helper".to_string(), "helper".to_string())]);
         assert!(out.calls.iter().any(|c| c.callee_name == "helper"));
     }
 
