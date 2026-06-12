@@ -108,6 +108,31 @@ fn edge_key(e: &Edge) -> (String, String, String) {
     (e.from.clone(), e.typ.clone(), e.to.clone())
 }
 
+/// Carries summaries from `existing` records onto freshly-regenerated `fresh`
+/// records, keyed by id, keeping a summary only when its `summary_of_hash`
+/// still matches the fresh record's `content_hash` (PRD §3.5/§4.1.6). Fresh
+/// structure always wins; stale summaries are dropped (regenerated JIT).
+pub fn graft_summaries(fresh: &[Node], existing: &[Node]) -> Vec<Node> {
+    let ex = node_map(existing);
+    fresh
+        .iter()
+        .map(|f| {
+            let mut node = f.clone();
+            if let Some(old) = ex.get(f.id.as_str()) {
+                let old_sum = summary_part(&old.props);
+                if has_summary(&old_sum)
+                    && old_sum.get("summary_of_hash") == f.props.get("content_hash")
+                {
+                    for (k, v) in old_sum {
+                        node.props.insert(k, v);
+                    }
+                }
+            }
+            node
+        })
+        .collect()
+}
+
 /// Three-way merge of edge records (all fields structural; ours-wins on
 /// conflict). Returned sorted by (from, type, to).
 pub fn merge_edges(_base: &[Edge], ours: &[Edge], theirs: &[Edge]) -> Vec<Edge> {
@@ -193,5 +218,27 @@ mod tests {
         let theirs = vec![Edge::new("a", "CALLS", "c")];
         let merged = merge_edges(&base, &ours, &theirs);
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn graft_keeps_matching_summary_and_drops_stale() {
+        // Fresh structure for two functions; existing has a summary for each.
+        let fresh = vec![func("rs1:r:func:a#f@0", "ha"), func("rs1:r:func:b#g@0", "hb_new")];
+        let existing = vec![
+            with_summary(func("rs1:r:func:a#f@0", "ha"), "stable summary", "ha"), // hash matches → kept
+            with_summary(func("rs1:r:func:b#g@0", "hb_old"), "old summary", "hb_old"), // source changed (hb_old→hb_new) → dropped
+        ];
+        let out = graft_summaries(&fresh, &existing);
+        let get = |id: &str| out.iter().find(|n| n.id == id).unwrap();
+        assert_eq!(get("rs1:r:func:a#f@0").props["semantic_summary"], json!("stable summary"));
+        assert!(!get("rs1:r:func:b#g@0").props.contains_key("semantic_summary"));
+    }
+
+    #[test]
+    fn graft_leaves_new_nodes_untouched() {
+        let fresh = vec![func("rs1:r:func:c#h@0", "hc")];
+        let out = graft_summaries(&fresh, &[]);
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].props.contains_key("semantic_summary"));
     }
 }
