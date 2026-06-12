@@ -6,10 +6,11 @@ import { makeReadCypher } from "./tools/readCypher.js";
 import { makeGetContextProfile } from "./tools/getContextProfile.js";
 import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
 import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
+import { resolveRepoId } from "./store/repoId.js";
 
 export async function main(): Promise<void> {
   const store = Neo4jGraphStore.fromEnv();
-  const repoId = process.env.REPOSKEIN_REPO_ID;
+  const repoId = resolveRepoId(process.env.REPOSKEIN_REPO_PATH, process.env.REPOSKEIN_REPO_ID);
 
   const server = new McpServer({ name: "@reposkein/mcp", version: "0.0.0" });
   const readCypher = makeReadCypher(store, repoId);
