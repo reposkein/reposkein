@@ -1,6 +1,8 @@
 //! Python definition extractor (Tree-sitter). Produces Class/Function/Variable
 //! nodes and DEFINES/INHERITS edges. Pure static analysis — deterministic.
 
+pub mod defs;
+
 use tree_sitter::{Node as TsNode, Parser, Tree};
 
 /// Parses Python source into a Tree-sitter CST. Returns None on parser-setup
