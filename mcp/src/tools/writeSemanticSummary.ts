@@ -32,6 +32,12 @@ export function makeWriteSemanticSummary(store: GraphStore, repoId: string) {
         };
       }
       const row = rows[0]!;
+      if (row.chash === null || row.chash === undefined) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: "node has no content_hash; not summarizable" }) }],
+          isError: true,
+        };
+      }
       const stale_replaced =
         row.old != null && (row.oldhash ?? null) !== (row.chash ?? null);
 

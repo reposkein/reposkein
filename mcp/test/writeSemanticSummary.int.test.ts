@@ -61,4 +61,17 @@ gated("write_semantic_summary (integration)", () => {
     const res = await handler({ node_id: "rs1:wsstest:func:nope@0", summary: "x" });
     expect(res.isError).toBe(true);
   });
+
+  it("rejects a summary for a node without content_hash", async () => {
+    const s = driver.session();
+    await s.run(
+      "CREATE (n:Rs:Variable {id:$id, repo_id:$repo, name:'v'})",
+      { id: "rs1:wsstest:var:a.py#v", repo: REPO }
+    );
+    await s.close();
+    const handler = makeWriteSemanticSummary(store, REPO);
+    const res = await handler({ node_id: "rs1:wsstest:var:a.py#v", summary: "a var" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/content_hash/);
+  });
 });
