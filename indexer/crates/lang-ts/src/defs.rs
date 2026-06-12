@@ -42,16 +42,30 @@ fn name_of(node: TsNode, source: &[u8]) -> String {
 }
 
 fn first_line(node: TsNode, source: &[u8]) -> String {
-    text(node, source).lines().next().unwrap_or("").trim().to_string()
+    text(node, source)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 impl<'a> Walk<'a> {
     pub fn new(repo: &'a str, rel_path: &'a str, source: &'a [u8]) -> Self {
-        Walk { repo, rel_path, source, nodes: Vec::new(), edges: Vec::new() }
+        Walk {
+            repo,
+            rel_path,
+            source,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        }
     }
 
     fn func_id(&self, qualified: &str, arity: usize) -> String {
-        format!("rs1:{}:func:{}#{}@{}", self.repo, self.rel_path, qualified, arity)
+        format!(
+            "rs1:{}:func:{}#{}@{}",
+            self.repo, self.rel_path, qualified, arity
+        )
     }
     fn class_id(&self, qualified: &str) -> String {
         format!("rs1:{}:class:{}#{}", self.repo, self.rel_path, qualified)
@@ -83,13 +97,20 @@ impl<'a> Walk<'a> {
                 .set("signature", json!(first_line(node, self.source)))
                 .set("content_hash", json!(content_hash(span))),
         );
-        self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
+        self.edges
+            .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
         if let Some(body) = node.child_by_field_name("body") {
             self.walk(body, &qual, &id, ScopeKind::Function);
         }
     }
 
-    fn push_variable(&mut self, name: &str, scope: &[String], parent_id: &str, scope_kind: ScopeKind) {
+    fn push_variable(
+        &mut self,
+        name: &str,
+        scope: &[String],
+        parent_id: &str,
+        scope_kind: ScopeKind,
+    ) {
         if scope_kind == ScopeKind::Function {
             return; // module/class scope only (PRD §5.1)
         }
@@ -112,7 +133,8 @@ impl<'a> Walk<'a> {
                 .set("file_path", json!(self.rel_path))
                 .set("kind", json!(kind)),
         );
-        self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id));
+        self.edges
+            .push(Edge::new(parent_id.to_string(), "DEFINES", id));
     }
 
     pub fn walk(&mut self, node: TsNode, scope: &[String], parent_id: &str, scope_kind: ScopeKind) {
@@ -143,7 +165,9 @@ impl<'a> Walk<'a> {
                         let name = name_of(decl, self.source);
                         let is_arrow = decl
                             .child_by_field_name("value")
-                            .map(|v| v.kind() == "arrow_function" || v.kind() == "function_expression")
+                            .map(|v| {
+                                v.kind() == "arrow_function" || v.kind() == "function_expression"
+                            })
                             .unwrap_or(false);
                         if is_arrow {
                             let value = decl.child_by_field_name("value").unwrap();
@@ -167,7 +191,8 @@ impl<'a> Walk<'a> {
                             .set("start_line", json!(child.start_position().row + 1))
                             .set("end_line", json!(child.end_position().row + 1)),
                     );
-                    self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
+                    self.edges
+                        .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
 
                     // Heritage: extends → INHERITS, implements → IMPLEMENTS (intra-file).
                     let mut hc = child.walk();
@@ -179,7 +204,11 @@ impl<'a> Walk<'a> {
                                     "extends_clause" => {
                                         if let Some(base) = clause.child_by_field_name("value") {
                                             let base_name = text(base, self.source);
-                                            self.edges.push(Edge::new(id.clone(), "INHERITS", self.class_id(base_name)));
+                                            self.edges.push(Edge::new(
+                                                id.clone(),
+                                                "INHERITS",
+                                                self.class_id(base_name),
+                                            ));
                                         }
                                     }
                                     "implements_clause" => {
@@ -190,7 +219,10 @@ impl<'a> Walk<'a> {
                                                 self.edges.push(Edge::new(
                                                     id.clone(),
                                                     "IMPLEMENTS",
-                                                    format!("rs1:{}:iface:{}#{}", self.repo, self.rel_path, iname),
+                                                    format!(
+                                                        "rs1:{}:iface:{}#{}",
+                                                        self.repo, self.rel_path, iname
+                                                    ),
                                                 ));
                                             }
                                         }
@@ -215,7 +247,8 @@ impl<'a> Walk<'a> {
                             .set("start_line", json!(child.start_position().row + 1))
                             .set("end_line", json!(child.end_position().row + 1)),
                     );
-                    self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id));
+                    self.edges
+                        .push(Edge::new(parent_id.to_string(), "DEFINES", id));
                 }
                 "enum_declaration" => {
                     let name = name_of(child, self.source);
@@ -228,7 +261,8 @@ impl<'a> Walk<'a> {
                             .set("start_line", json!(child.start_position().row + 1))
                             .set("end_line", json!(child.end_position().row + 1)),
                     );
-                    self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id));
+                    self.edges
+                        .push(Edge::new(parent_id.to_string(), "DEFINES", id));
                 }
                 "public_field_definition" => {
                     let name = name_of(child, self.source);
@@ -261,15 +295,22 @@ mod tests {
         assert!(ids.contains(&"rs1:r:func:m.ts#arrow@1"));
         assert!(ids.contains(&"rs1:r:class:m.ts#Svc"));
         assert!(ids.contains(&"rs1:r:func:m.ts#Svc.run@1"));
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc" && e.typ == "DEFINES" && e.to == "rs1:r:func:m.ts#Svc.run@1"));
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc"
+            && e.typ == "DEFINES"
+            && e.to == "rs1:r:func:m.ts#Svc.run@1"));
     }
 
     #[test]
     fn extracts_inherits_and_implements() {
-        let src = b"class Base {}\ninterface Greeter {}\nclass Svc extends Base implements Greeter {}\n";
+        let src =
+            b"class Base {}\ninterface Greeter {}\nclass Svc extends Base implements Greeter {}\n";
         let w = run(src);
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc" && e.typ == "INHERITS" && e.to == "rs1:r:class:m.ts#Base"));
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc" && e.typ == "IMPLEMENTS" && e.to == "rs1:r:iface:m.ts#Greeter"));
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc"
+            && e.typ == "INHERITS"
+            && e.to == "rs1:r:class:m.ts#Base"));
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc"
+            && e.typ == "IMPLEMENTS"
+            && e.to == "rs1:r:iface:m.ts#Greeter"));
     }
 
     #[test]
@@ -277,12 +318,21 @@ mod tests {
         let src = b"interface Greeter { greet(): string; }\nenum Color { Red, Green }\nconst MAX = 5;\nlet name = 'x';\nclass C { label = 'svc'; }\n";
         let w = run(src);
         let find = |id: &str| w.nodes.iter().find(|n| n.id == id);
-        assert_eq!(find("rs1:r:iface:m.ts#Greeter").unwrap().labels, ["Interface"]);
+        assert_eq!(
+            find("rs1:r:iface:m.ts#Greeter").unwrap().labels,
+            ["Interface"]
+        );
         assert_eq!(find("rs1:r:enum:m.ts#Color").unwrap().labels, ["Enum"]);
         let max = find("rs1:r:var:m.ts#MAX").unwrap();
         assert_eq!(max.labels, ["Variable"]);
         assert_eq!(max.props["kind"], json!("const"));
-        assert_eq!(find("rs1:r:var:m.ts#name").unwrap().props["kind"], json!("module"));
-        assert_eq!(find("rs1:r:var:m.ts#C.label").unwrap().props["kind"], json!("class"));
+        assert_eq!(
+            find("rs1:r:var:m.ts#name").unwrap().props["kind"],
+            json!("module")
+        );
+        assert_eq!(
+            find("rs1:r:var:m.ts#C.label").unwrap().props["kind"],
+            json!("class")
+        );
     }
 }

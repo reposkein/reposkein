@@ -19,7 +19,11 @@ impl Extractor for TypeScriptExtractor {
         };
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
         w.walk(tree.root_node(), &[], ctx.file_id, defs::ScopeKind::Module);
-        ExtractOutput { nodes: w.nodes, edges: w.edges, ..Default::default() }
+        ExtractOutput {
+            nodes: w.nodes,
+            edges: w.edges,
+            ..Default::default()
+        }
     }
 }
 
@@ -44,6 +48,22 @@ pub fn parse(source: &[u8], tsx: bool) -> Option<Tree> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extraction_is_deterministic() {
+        use reposkein_core::extractor::{Extractor, FileContext};
+        let src = b"class A { m(x) {} }\nfunction f() {}\nconst g = () => 1;\n";
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "m.ts",
+            file_id: "rs1:r:file:m.ts",
+            source: src,
+        };
+        let a = TypeScriptExtractor.extract(&ctx);
+        let b = TypeScriptExtractor.extract(&ctx);
+        assert_eq!(a.nodes, b.nodes);
+        assert_eq!(a.edges, b.edges);
+    }
 
     #[test]
     fn parses_typescript() {
