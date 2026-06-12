@@ -126,7 +126,10 @@ pub fn walk_federated(root: &Path, federation: bool) -> Result<WalkOutput> {
     entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     entries.dedup_by(|a, b| a.rel_path == b.rel_path);
 
-    Ok(WalkOutput { entries, boundaries })
+    Ok(WalkOutput {
+        entries,
+        boundaries,
+    })
 }
 
 pub fn walk(root: &Path) -> Result<Vec<Entry>> {
@@ -146,23 +149,36 @@ mod tests {
         fs::write(root.join("top.py"), b"t").unwrap();
         // A nested RepoSkein child: has .reposkein/meta.json.
         fs::create_dir_all(root.join("vendor/childA/.reposkein")).unwrap();
-        fs::write(root.join("vendor/childA/.reposkein/meta.json"), b"{\"repo_id\":\"childa\"}").unwrap();
+        fs::write(
+            root.join("vendor/childA/.reposkein/meta.json"),
+            b"{\"repo_id\":\"childa\"}",
+        )
+        .unwrap();
         fs::write(root.join("vendor/childA/inner.py"), b"i").unwrap(); // must NOT be walked
-        // A git-only nested repo: has .git, no .reposkein.
+                                                                       // A git-only nested repo: has .git, no .reposkein.
         fs::create_dir_all(root.join("vendor/childB/.git")).unwrap();
-        fs::write(root.join("vendor/childB/x.py"), b"x").unwrap();      // must NOT be walked
+        fs::write(root.join("vendor/childB/x.py"), b"x").unwrap(); // must NOT be walked
 
         let out = walk_federated(root, true).unwrap();
         let paths: Vec<&str> = out.entries.iter().map(|e| e.rel_path.as_str()).collect();
         // Root files + the vendor dirs (as boundary Directory entries), but NOT child contents.
         assert!(paths.contains(&"top.py"));
-        assert!(paths.contains(&"vendor/childA"));   // synthesized boundary dir entry
+        assert!(paths.contains(&"vendor/childA")); // synthesized boundary dir entry
         assert!(paths.contains(&"vendor/childB"));
-        assert!(!paths.iter().any(|p| p.contains("inner.py")), "child source must be pruned");
-        assert!(!paths.iter().any(|p| p.contains("childB/x.py")), "git-only child pruned");
+        assert!(
+            !paths.iter().any(|p| p.contains("inner.py")),
+            "child source must be pruned"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("childB/x.py")),
+            "git-only child pruned"
+        );
 
-        let kinds: Vec<(&str, &BoundaryKind)> =
-            out.boundaries.iter().map(|b| (b.rel_path.as_str(), &b.kind)).collect();
+        let kinds: Vec<(&str, &BoundaryKind)> = out
+            .boundaries
+            .iter()
+            .map(|b| (b.rel_path.as_str(), &b.kind))
+            .collect();
         assert!(kinds.contains(&("vendor/childA", &BoundaryKind::ReposkeinChild)));
         assert!(kinds.contains(&("vendor/childB", &BoundaryKind::GitOnly)));
     }
@@ -172,10 +188,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path();
         fs::create_dir_all(root.join("vendor/childA/.reposkein")).unwrap();
-        fs::write(root.join("vendor/childA/.reposkein/meta.json"), b"{\"repo_id\":\"childa\"}").unwrap();
+        fs::write(
+            root.join("vendor/childA/.reposkein/meta.json"),
+            b"{\"repo_id\":\"childa\"}",
+        )
+        .unwrap();
         fs::write(root.join("vendor/childA/inner.py"), b"i").unwrap();
         let out = walk_federated(root, false).unwrap();
-        assert!(out.entries.iter().any(|e| e.rel_path == "vendor/childA/inner.py"), "old behavior: descend");
+        assert!(
+            out.entries
+                .iter()
+                .any(|e| e.rel_path == "vendor/childA/inner.py"),
+            "old behavior: descend"
+        );
         assert!(out.boundaries.is_empty());
     }
 

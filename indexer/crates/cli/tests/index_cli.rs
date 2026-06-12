@@ -8,26 +8,53 @@ fn index_federates_nested_child_repo() {
     let root = dir.path();
     fs::write(root.join("top.py"), b"def t():\n    return 1\n").unwrap();
     fs::create_dir_all(root.join("vendor/child/.reposkein")).unwrap();
-    fs::write(root.join("vendor/child/.reposkein/meta.json"), b"{\"repo_id\":\"childx\"}").unwrap();
-    fs::write(root.join("vendor/child/inner.py"), b"def i():\n    return 2\n").unwrap();
+    fs::write(
+        root.join("vendor/child/.reposkein/meta.json"),
+        b"{\"repo_id\":\"childx\"}",
+    )
+    .unwrap();
+    fs::write(
+        root.join("vendor/child/inner.py"),
+        b"def i():\n    return 2\n",
+    )
+    .unwrap();
 
-    Command::cargo_bin("reposkein-indexer").unwrap()
-        .args(["index", "--repo-id", "rootx", "--name", "r"]).arg(root)
-        .assert().success();
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args(["index", "--repo-id", "rootx", "--name", "r"])
+        .arg(root)
+        .assert()
+        .success();
 
     let nodes = fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap();
     assert!(nodes.contains(r#""id":"rs1:rootx:repo:vendor/child""#)); // proxy
     assert!(nodes.contains(r#""federated_repo_id":"childx""#));
-    assert!(!nodes.contains("inner.py"), "child source must not be indexed under the root");
+    assert!(
+        !nodes.contains("inner.py"),
+        "child source must not be indexed under the root"
+    );
     let edges = fs::read_to_string(root.join(".reposkein/edges.jsonl")).unwrap();
     assert!(edges.contains("FEDERATES_TO"));
 
     // --no-federation descends into the child (old behavior).
-    Command::cargo_bin("reposkein-indexer").unwrap()
-        .args(["index", "--repo-id", "rootx", "--name", "r", "--no-federation"]).arg(root)
-        .assert().success();
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args([
+            "index",
+            "--repo-id",
+            "rootx",
+            "--name",
+            "r",
+            "--no-federation",
+        ])
+        .arg(root)
+        .assert()
+        .success();
     let nodes2 = fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap();
-    assert!(nodes2.contains("vendor/child/inner.py"), "--no-federation indexes child source");
+    assert!(
+        nodes2.contains("vendor/child/inner.py"),
+        "--no-federation indexes child source"
+    );
 }
 
 #[test]

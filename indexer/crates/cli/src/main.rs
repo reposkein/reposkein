@@ -237,7 +237,9 @@ fn main() -> Result<()> {
             let rust = RustExtractor;
             let extractors: &[&dyn reposkein_core::extractor::Extractor] =
                 &[&python, &typescript, &javascript, &rust];
-            let opts = reposkein_core::IndexOptions { federation: !no_federation };
+            let opts = reposkein_core::IndexOptions {
+                federation: !no_federation,
+            };
             let out = index_tree_with(&path, &repo, &repo_name, extractors, opts)
                 .context("failed to index repository tree")?;
 

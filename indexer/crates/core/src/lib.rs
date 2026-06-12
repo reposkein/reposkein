@@ -250,25 +250,45 @@ mod tests {
         let root = dir.path();
         fs::write(root.join("top.py"), b"x = 1\n").unwrap();
         fs::create_dir_all(root.join("vendor/childA/.reposkein")).unwrap();
-        fs::write(root.join("vendor/childA/.reposkein/meta.json"), b"{\"repo_id\":\"childa\"}").unwrap();
+        fs::write(
+            root.join("vendor/childA/.reposkein/meta.json"),
+            b"{\"repo_id\":\"childa\"}",
+        )
+        .unwrap();
         fs::write(root.join("vendor/childA/inner.py"), b"y = 2\n").unwrap();
 
-        let out = index_tree_with(root, "rootid", "root", &[], IndexOptions { federation: true }).unwrap();
+        let out = index_tree_with(
+            root,
+            "rootid",
+            "root",
+            &[],
+            IndexOptions { federation: true },
+        )
+        .unwrap();
 
         // Proxy Repository node owned by the root, pointing at the child.
-        let proxy = out.graph.nodes.iter()
-            .find(|n| n.id == "rs1:rootid:repo:vendor/childA").expect("proxy node");
+        let proxy = out
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "rs1:rootid:repo:vendor/childA")
+            .expect("proxy node");
         assert_eq!(proxy.labels, ["Repository"]);
         assert_eq!(proxy.props["federated_repo_id"], json!("childa"));
         assert_eq!(proxy.props["is_nested"], json!(true));
         assert_eq!(proxy.props["root_path"], json!("vendor/childA"));
         // FEDERATES_TO root -> proxy.
-        assert!(out.graph.edges.iter().any(|e|
-            e.from == "rs1:rootid:repo:." && e.typ == "FEDERATES_TO" && e.to == "rs1:rootid:repo:vendor/childA"));
+        assert!(out.graph.edges.iter().any(|e| e.from == "rs1:rootid:repo:."
+            && e.typ == "FEDERATES_TO"
+            && e.to == "rs1:rootid:repo:vendor/childA"));
         // Child source NOT indexed under the root.
         assert!(!out.graph.nodes.iter().any(|n| n.id.contains("inner.py")));
         // The boundary dir still has a Directory node.
-        assert!(out.graph.nodes.iter().any(|n| n.id == "rs1:rootid:dir:vendor/childA"));
+        assert!(out
+            .graph
+            .nodes
+            .iter()
+            .any(|n| n.id == "rs1:rootid:dir:vendor/childA"));
         // children reported.
         assert_eq!(out.children.len(), 1);
         assert_eq!(out.children[0].repo_id, "childa");
