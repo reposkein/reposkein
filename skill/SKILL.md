@@ -44,8 +44,9 @@ grep when the graph can answer structurally.
    `name_match`/`ambiguous` edges (and any `confidence < 1`) as hypotheses —
    verify them by reading the code before acting on them.
 5. **Graph over grep.** Use `read_cypher` for multi-hop questions. Keep
-   traversals ≤ 2 hops and filter by `repo_id` (a `$repo_id` parameter is
-   available) unless you are explicitly asked to cross repositories.
+   traversals ≤ 2 hops and filter by `n.repo_id = $repo_id`. To trace across
+   nested repositories, pass `federated: true` and filter by
+   `n.repo_id IN $repo_ids`.
 6. **Reindex after editing.** After modifying any source file, call
    `reindex_file` for it so the graph reflects your change before you continue
    reasoning over it.
