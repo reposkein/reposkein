@@ -2,16 +2,17 @@
 //! (a BTreeMap when serde_json's `preserve_order` feature is OFF), which
 //! gives sorted property keys for free — the canonical writer depends on this.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
     pub labels: Vec<String>,
     pub props: Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     pub from: String,
     pub typ: String,
