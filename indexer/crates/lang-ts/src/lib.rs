@@ -3,6 +3,7 @@
 
 use tree_sitter::{Parser, Tree};
 
+pub mod calls;
 pub mod defs;
 pub mod imports;
 
