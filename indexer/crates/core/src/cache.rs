@@ -124,7 +124,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let cache = FsExtractCache::open(dir.path()).unwrap();
         cache.put("r", "a.py", "h1", &sample());
-        assert!(cache.get("r", "a.py", "h2").is_none(), "edited file must miss");
+        assert!(
+            cache.get("r", "a.py", "h2").is_none(),
+            "edited file must miss"
+        );
     }
 
     #[test]

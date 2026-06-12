@@ -289,7 +289,10 @@ mod tests {
             "rootid",
             "root",
             &[],
-            IndexOptions { federation: true, cache: None },
+            IndexOptions {
+                federation: true,
+                cache: None,
+            },
         )
         .unwrap();
 
@@ -379,5 +382,80 @@ mod tests {
         let out = drop_dangling_edges(&nodes, edges);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].typ, "DEFINES");
+    }
+
+    /// A minimal extractor that emits one Function node + a self-call, so the
+    /// cached ExtractOutput carries nodes, edges, imports, and calls — all the
+    /// fields that must survive the cache to keep output byte-identical.
+    struct StubExtractor;
+    impl extractor::Extractor for StubExtractor {
+        fn language(&self) -> &'static str {
+            "python"
+        }
+        fn extract(&self, ctx: &extractor::FileContext) -> extractor::ExtractOutput {
+            let func_id = format!("rs1:{}:func:{}#f@0", ctx.repo, ctx.rel_path);
+            let mut out = extractor::ExtractOutput::default();
+            out.nodes.push(
+                Node::new(func_id.clone(), "Function")
+                    .set("qualified_name", json!("f"))
+                    .set("name", json!("f"))
+                    .set("file_path", json!(ctx.rel_path))
+                    .set("start_line", json!(1))
+                    .set("end_line", json!(2))
+                    .set("content_hash", json!("stubhash")),
+            );
+            out.edges.push(Edge::new(ctx.file_id, "DEFINES", &func_id));
+            out.calls.push(extractor::RawCall {
+                caller_id: func_id,
+                caller_path: ctx.rel_path.to_string(),
+                caller_qualified: "f".to_string(),
+                callee_name: "f".to_string(),
+                receiver: None,
+            });
+            out
+        }
+    }
+
+    #[test]
+    fn cache_warm_run_is_byte_identical_to_cold() {
+        let dir = fixture(); // has src/a.py (python) + README.md
+        let stub = StubExtractor;
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+
+        // Cold run: no cache.
+        let cold = index_tree_with(dir.path(), "r", "demo", extractors, IndexOptions::default())
+            .unwrap()
+            .graph;
+
+        // Warm run: a populated FsExtractCache in a temp dir.
+        let cache_dir = tempdir().unwrap();
+        let c = cache::FsExtractCache::open(cache_dir.path()).unwrap();
+        let opts = IndexOptions {
+            federation: false,
+            cache: Some(&c),
+        };
+        // First pass populates the cache (cold through the cache).
+        let warm1 = index_tree_with(dir.path(), "r", "demo", extractors, opts)
+            .unwrap()
+            .graph;
+        // Second pass should be served entirely from the cache (warm).
+        let warm2 = index_tree_with(dir.path(), "r", "demo", extractors, opts)
+            .unwrap()
+            .graph;
+
+        let cold_nodes = jsonl::nodes_to_jsonl(&cold.nodes);
+        let cold_edges = jsonl::edges_to_jsonl(&cold.edges);
+        assert_eq!(jsonl::nodes_to_jsonl(&warm1.nodes), cold_nodes);
+        assert_eq!(jsonl::edges_to_jsonl(&warm1.edges), cold_edges);
+        assert_eq!(
+            jsonl::nodes_to_jsonl(&warm2.nodes),
+            cold_nodes,
+            "warm nodes must match cold byte-for-byte"
+        );
+        assert_eq!(
+            jsonl::edges_to_jsonl(&warm2.edges),
+            cold_edges,
+            "warm edges must match cold byte-for-byte"
+        );
     }
 }

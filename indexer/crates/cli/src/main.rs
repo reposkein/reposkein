@@ -348,12 +348,17 @@ fn main() -> Result<()> {
                 None
             } else {
                 reposkein_core::cache::FsExtractCache::open(
-                    path.join(".reposkein").join("local").join("cache").join("extract"),
+                    path.join(".reposkein")
+                        .join("local")
+                        .join("cache")
+                        .join("extract"),
                 )
             };
             let opts = reposkein_core::IndexOptions {
                 federation: !no_federation,
-                cache: cache.as_ref().map(|c| c as &dyn reposkein_core::cache::ExtractCache),
+                cache: cache
+                    .as_ref()
+                    .map(|c| c as &dyn reposkein_core::cache::ExtractCache),
             };
             let out = index_tree_with(&path, &repo, &repo_name, extractors, opts)
                 .context("failed to index repository tree")?;

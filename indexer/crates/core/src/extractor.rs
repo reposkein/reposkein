@@ -70,8 +70,11 @@ mod tests {
                 .set("start_line", json!(3))
                 .set("confidence", json!(0.7)),
         );
-        out.edges
-            .push(Edge::new("rs1:r:func:a.py#f@1", "DEFINES", "rs1:r:func:a.py#g@0"));
+        out.edges.push(Edge::new(
+            "rs1:r:func:a.py#f@1",
+            "DEFINES",
+            "rs1:r:func:a.py#g@0",
+        ));
         out.imports.push(RawImport {
             importing_file_id: "rs1:r:file:a.py".into(),
             importing_path: "a.py".into(),
