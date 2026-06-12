@@ -268,8 +268,7 @@ fn load_federation(
                 node.props.get("federated_repo_id").and_then(|v| v.as_str()),
                 node.props.get("root_path").and_then(|v| v.as_str()),
             ) {
-                let (cr, cn, ce) =
-                    load_federation(store, &path.join(rp), fed, seen, skipped)?;
+                let (cr, cn, ce) = load_federation(store, &path.join(rp), fed, seen, skipped)?;
                 repos += cr;
                 n += cn;
                 e += ce;
@@ -281,11 +280,7 @@ fn load_federation(
 
 /// Collects a federation's repo_ids from committed JSONL (no DB), starting at
 /// `repo_id`/`path` and following proxy `federated_repo_id`/`root_path`.
-fn federation_repo_ids(
-    path: &Path,
-    repo_id: &str,
-    seen: &mut std::collections::BTreeSet<String>,
-) {
+fn federation_repo_ids(path: &Path, repo_id: &str, seen: &mut std::collections::BTreeSet<String>) {
     if !seen.insert(repo_id.to_string()) {
         return;
     }
@@ -417,8 +412,7 @@ fn main() -> Result<()> {
             } else {
                 let mut seen = std::collections::BTreeSet::new();
                 let mut skipped = Vec::new();
-                let (repos, n, e) =
-                    load_federation(&store, &path, &repo, &mut seen, &mut skipped)?;
+                let (repos, n, e) = load_federation(&store, &path, &repo, &mut seen, &mut skipped)?;
                 let stitches = store.stitch_federation()?;
                 for s in &skipped {
                     eprintln!("reposkein: skipped (no .reposkein JSONL): {s}");
