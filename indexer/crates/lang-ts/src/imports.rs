@@ -153,7 +153,11 @@ mod tests {
         assert!(imps[0].candidate_paths.contains(&"src/util.ts".to_string()));
         assert!(imps[0].candidate_paths.contains(&"src/util.js".to_string()));
         // "./helpers" → src/helpers.* incl. .js and index variants
-        assert!(imps[1].candidate_paths.contains(&"src/helpers.js".to_string()));
-        assert!(imps[1].candidate_paths.contains(&"src/helpers/index.ts".to_string()));
+        assert!(imps[1]
+            .candidate_paths
+            .contains(&"src/helpers.js".to_string()));
+        assert!(imps[1]
+            .candidate_paths
+            .contains(&"src/helpers/index.ts".to_string()));
     }
 }
