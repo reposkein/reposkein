@@ -60,6 +60,38 @@ fn index_writes_canonical_jsonl_with_fixed_repo_id() {
 }
 
 #[test]
+fn index_resolves_imports_and_calls_across_files() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("app")).unwrap();
+    fs::write(
+        root.join("app/base.py"),
+        b"def helper():\n    return 1\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/svc.py"),
+        b"from app.base import helper\n\ndef run():\n    return helper()\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args(["index", "--repo-id", "r", "--name", "d"])
+        .arg(root)
+        .assert()
+        .success();
+
+    let edges = fs::read_to_string(root.join(".reposkein/edges.jsonl")).unwrap();
+    // IMPORTS app/svc.py -> app/base.py
+    assert!(edges.contains(r#""from":"rs1:r:file:app/svc.py","type":"IMPORTS","to":"rs1:r:file:app/base.py""#));
+    // CALLS run -> helper, exact (import-followed), confidence 1.0
+    assert!(edges.contains(r#""type":"CALLS""#));
+    assert!(edges.contains(r#""to":"rs1:r:func:app/base.py#helper@0""#));
+    assert!(edges.contains(r#""resolution":"exact""#));
+}
+
+#[test]
 fn index_is_idempotent_byte_identical() {
     let dir = tempdir().unwrap();
     let root = dir.path();

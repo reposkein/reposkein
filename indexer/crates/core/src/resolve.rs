@@ -76,12 +76,118 @@ fn resolve_imports(
     (edges, sym_map)
 }
 
-/// Public entry point (CALLS added in the next task).
-pub fn resolve(nodes: &[Node], imports: &[RawImport], _calls: &[RawCall], repo: &str) -> Vec<Edge> {
+fn round2(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
+
+/// Resolves one call into zero or more (target_id, resolution, confidence).
+fn resolve_one(
+    c: &RawCall,
+    by_name: &BTreeMap<String, Vec<String>>,            // name -> sorted func ids
+    by_file_name: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> ids
+    by_file_qual: &BTreeMap<(String, String), String>,  // (path,qualified) -> id
+    import_targets: &HashMap<(String, String), String>, // (importing_file_id, sym) -> path
+    caller_file_id: &str,
+) -> Vec<(String, &'static str, f64)> {
+    // Rung 1: self/cls method call.
+    if matches!(c.receiver.as_deref(), Some("self") | Some("cls")) {
+        if let Some((class, _)) = c.caller_qualified.rsplit_once('.') {
+            let target_q = format!("{class}.{}", c.callee_name);
+            if let Some(id) = by_file_qual.get(&(c.caller_path.clone(), target_q)) {
+                return vec![(id.clone(), "exact", 1.0)];
+            }
+        }
+    }
+    if c.receiver.is_none() {
+        // Rung 2: same-file function.
+        if let Some(ids) = by_file_name.get(&(c.caller_path.clone(), c.callee_name.clone())) {
+            return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
+        }
+        // Rung 3: import-followed.
+        if let Some(target_path) =
+            import_targets.get(&(caller_file_id.to_string(), c.callee_name.clone()))
+        {
+            if let Some(ids) =
+                by_file_name.get(&(target_path.clone(), c.callee_name.clone()))
+            {
+                return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
+            }
+        }
+        // Rungs 4/5: repo-wide name match.
+        if let Some(ids) = by_name.get(&c.callee_name) {
+            return if ids.len() == 1 {
+                vec![(ids[0].clone(), "name_match", 0.7)]
+            } else {
+                let conf = round2(1.0 / ids.len() as f64);
+                ids.iter().map(|id| (id.clone(), "ambiguous", conf)).collect()
+            };
+        }
+        return Vec::new();
+    }
+    // Rungs 6/7: attribute call (obj.callee), no type info.
+    if let Some(ids) = by_name.get(&c.callee_name) {
+        return if ids.len() == 1 {
+            vec![(ids[0].clone(), "name_match", 0.5)]
+        } else {
+            let conf = round2(1.0 / ids.len() as f64);
+            ids.iter().map(|id| (id.clone(), "ambiguous", conf)).collect()
+        };
+    }
+    Vec::new()
+}
+
+pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &str) -> Vec<Edge> {
     let files = file_paths(nodes);
-    let (import_edges, _sym_map) = resolve_imports(imports, &files, repo);
-    let _ = functions(nodes); // used in the next task
-    import_edges
+    let (mut edges, import_targets) = resolve_imports(imports, &files, repo);
+
+    let funcs = functions(nodes);
+    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
+    for f in &funcs {
+        by_name.entry(f.name.clone()).or_default().push(f.id.clone());
+        by_file_name
+            .entry((f.file_path.clone(), f.name.clone()))
+            .or_default()
+            .push(f.id.clone());
+        by_file_qual.insert((f.file_path.clone(), f.qualified.clone()), f.id.clone());
+    }
+    for v in by_name.values_mut() {
+        v.sort();
+    }
+    for v in by_file_name.values_mut() {
+        v.sort();
+    }
+
+    // Aggregate call sites: (caller_id, target_id) -> (count, resolution, confidence).
+    let mut agg: BTreeMap<(String, String), (u64, &'static str, f64)> = BTreeMap::new();
+    for c in calls {
+        let caller_file_id = id::file_id(repo, &c.caller_path);
+        let resolved = resolve_one(
+            c,
+            &by_name,
+            &by_file_name,
+            &by_file_qual,
+            &import_targets,
+            &caller_file_id,
+        );
+        for (target, res, conf) in resolved {
+            let entry = agg
+                .entry((c.caller_id.clone(), target))
+                .or_insert((0, res, conf));
+            entry.0 += 1;
+            entry.1 = res;
+            entry.2 = conf;
+        }
+    }
+    for ((from, to), (count, res, conf)) in agg {
+        let mut e = Edge::new(from, "CALLS", to);
+        e.props.insert("resolution".to_string(), json!(res));
+        e.props.insert("confidence".to_string(), json!(conf));
+        e.props.insert("call_sites".to_string(), json!(count));
+        edges.push(e);
+    }
+    edges
 }
 
 #[cfg(test)]
@@ -124,5 +230,68 @@ mod tests {
         }];
         let edges = resolve(&nodes, &imports, &[], "r");
         assert!(edges.iter().all(|e| e.typ != "IMPORTS"));
+    }
+
+    fn func_node(repo: &str, path: &str, qualified: &str, arity: u32) -> Node {
+        let id = format!("rs1:{repo}:func:{path}#{qualified}@{arity}");
+        let name = qualified.rsplit('.').next().unwrap().to_string();
+        Node::new(id, "Function")
+            .set("name", json!(name))
+            .set("qualified_name", json!(qualified))
+            .set("file_path", json!(path))
+    }
+
+    fn call(caller_id: &str, caller_path: &str, caller_q: &str, callee: &str, recv: Option<&str>) -> RawCall {
+        RawCall {
+            caller_id: caller_id.to_string(),
+            caller_path: caller_path.to_string(),
+            caller_qualified: caller_q.to_string(),
+            callee_name: callee.to_string(),
+            receiver: recv.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn same_file_call_is_exact() {
+        let f_caller = func_node("r", "m.py", "a", 0);
+        let f_callee = func_node("r", "m.py", "helper", 0);
+        let nodes = vec![f_caller.clone(), f_callee.clone()];
+        let calls = vec![call(&f_caller.id, "m.py", "a", "helper", None)];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
+        assert_eq!(e.from, f_caller.id);
+        assert_eq!(e.to, f_callee.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+        assert_eq!(e.props["call_sites"], json!(1));
+    }
+
+    #[test]
+    fn ambiguous_name_fans_out_with_split_confidence() {
+        let caller = func_node("r", "m.py", "a", 0);
+        let t1 = func_node("r", "x.py", "run", 0);
+        let t2 = func_node("r", "y.py", "run", 0);
+        let nodes = vec![caller.clone(), t1.clone(), t2.clone()];
+        // bare call to `run`, defined twice elsewhere → ambiguous, 1/2 each.
+        let calls = vec![call(&caller.id, "m.py", "a", "run", None)];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let calls_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "CALLS").collect();
+        assert_eq!(calls_edges.len(), 2);
+        for e in calls_edges {
+            assert_eq!(e.props["resolution"], json!("ambiguous"));
+            assert_eq!(e.props["confidence"], json!(0.5));
+        }
+    }
+
+    #[test]
+    fn self_method_call_is_exact() {
+        let m_caller = func_node("r", "m.py", "Svc.run", 1);
+        let m_callee = func_node("r", "m.py", "Svc.help", 1);
+        let nodes = vec![m_caller.clone(), m_callee.clone()];
+        let calls = vec![call(&m_caller.id, "m.py", "Svc.run", "help", Some("self"))];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
+        assert_eq!(e.to, m_callee.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
     }
 }

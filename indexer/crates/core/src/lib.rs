@@ -59,6 +59,8 @@ pub fn index_tree(
 
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
+    let mut all_imports: Vec<extractor::RawImport> = Vec::new();
+    let mut all_calls: Vec<extractor::RawCall> = Vec::new();
 
     // Repository node (root_path is "." by convention).
     nodes.push(
@@ -134,9 +136,14 @@ pub fn index_tree(
                 let mut out = ext_impl.extract(&ctx);
                 nodes.append(&mut out.nodes);
                 edges.append(&mut out.edges);
+                all_imports.append(&mut out.imports);
+                all_calls.append(&mut out.calls);
             }
         }
     }
+
+    let mut resolved = resolve::resolve(&nodes, &all_imports, &all_calls, repo);
+    edges.append(&mut resolved);
 
     Ok(Graph { nodes, edges })
 }
