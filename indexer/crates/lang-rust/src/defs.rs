@@ -130,7 +130,14 @@ impl<'a> Walk<'a> {
         self.edges
             .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
         if let Some(body) = node.child_by_field_name("body") {
-            crate::calls::collect_calls(body, self.source, &id, qualified, self.rel_path, &mut self.calls);
+            crate::calls::collect_calls(
+                body,
+                self.source,
+                &id,
+                qualified,
+                self.rel_path,
+                &mut self.calls,
+            );
         }
     }
 

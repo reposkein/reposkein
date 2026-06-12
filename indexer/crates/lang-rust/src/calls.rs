@@ -71,7 +71,8 @@ mod tests {
 
     #[test]
     fn collects_self_bare_and_scoped_calls() {
-        let src = b"impl S { fn run(&self) { self.go(); helper(); String::new(); } fn go(&self){} }";
+        let src =
+            b"impl S { fn run(&self) { self.go(); helper(); String::new(); } fn go(&self){} }";
         let tree = parse(src).unwrap();
         // Navigate to run's body.
         let impl_item = tree.root_node().named_child(0).unwrap();
@@ -80,8 +81,10 @@ mod tests {
         let rbody = run.child_by_field_name("body").unwrap();
         let mut calls = Vec::new();
         collect_calls(rbody, src, "cid", "S.run", "m.rs", &mut calls);
-        let pairs: Vec<(&str, Option<&str>)> =
-            calls.iter().map(|c| (c.callee_name.as_str(), c.receiver.as_deref())).collect();
+        let pairs: Vec<(&str, Option<&str>)> = calls
+            .iter()
+            .map(|c| (c.callee_name.as_str(), c.receiver.as_deref()))
+            .collect();
         assert!(pairs.contains(&("go", Some("self"))));
         assert!(pairs.contains(&("helper", None)));
         assert!(pairs.contains(&("new", Some("String"))));
