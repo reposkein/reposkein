@@ -230,11 +230,25 @@ pub fn index_tree_with(
     }
     children.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
+    let edges = drop_dangling_edges(&nodes, edges);
+
     Ok(IndexOutput {
         graph: Graph { nodes, edges },
         children,
         warnings,
     })
+}
+
+/// Removes edges whose endpoints are not present in the node set. Dangling
+/// cross-file structural edges (e.g. INHERITS to a base defined in another
+/// file) carry no information and would be silently dropped by the DB import,
+/// breaking the byte-identical load->export round-trip (PRD §6.2.7).
+fn drop_dangling_edges(nodes: &[Node], edges: Vec<Edge>) -> Vec<Edge> {
+    let ids: std::collections::HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    edges
+        .into_iter()
+        .filter(|e| ids.contains(e.from.as_str()) && ids.contains(e.to.as_str()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -339,5 +353,18 @@ mod tests {
             jsonl::edges_to_jsonl(&g1.edges),
             jsonl::edges_to_jsonl(&g2.edges)
         );
+    }
+
+    #[test]
+    fn drop_dangling_edges_removes_unmatched_endpoints() {
+        let nodes = vec![Node::new("a", "File"), Node::new("b", "Function")];
+        let edges = vec![
+            Edge::new("a", "DEFINES", "b"),      // both exist — kept
+            Edge::new("a", "INHERITS", "ghost"), // dangling to — dropped
+            Edge::new("ghost", "CALLS", "b"),    // dangling from — dropped
+        ];
+        let out = drop_dangling_edges(&nodes, edges);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].typ, "DEFINES");
     }
 }
