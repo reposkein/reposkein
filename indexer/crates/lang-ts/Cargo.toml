@@ -1,0 +1,11 @@
+[package]
+name = "reposkein-lang-ts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reposkein-core = { path = "../core" }
+tree-sitter.workspace = true
+tree-sitter-typescript.workspace = true
+serde_json.workspace = true
