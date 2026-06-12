@@ -50,25 +50,30 @@ fn resolve_imports(
     files: &BTreeSet<String>,
     repo: &str,
 ) -> (Vec<Edge>, HashMap<(String, String), String>) {
-    let mut edges = Vec::new();
+    // (from_id, to_id) -> sorted-unique symbols
+    let mut agg: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut sym_map: HashMap<(String, String), String> = HashMap::new();
     for imp in imports {
         let Some(target) = imp.candidate_paths.iter().find(|p| files.contains(*p)) else {
-            continue; // external / stdlib / unresolved
+            continue;
         };
-        let mut edge = Edge::new(
-            imp.importing_file_id.clone(),
-            "IMPORTS",
-            id::file_id(repo, target),
-        );
-        if !imp.symbols.is_empty() {
-            let arr: Vec<Value> = imp.symbols.iter().cloned().map(Value::String).collect();
-            edge.props.insert("symbols".to_string(), Value::Array(arr));
+        let to_id = id::file_id(repo, target);
+        let entry = agg.entry((imp.importing_file_id.clone(), to_id)).or_default();
+        for s in &imp.symbols {
+            entry.insert(s.clone());
         }
-        edges.push(edge);
         for sym in &imp.symbols {
             sym_map.insert((imp.importing_file_id.clone(), sym.clone()), target.clone());
         }
+    }
+    let mut edges = Vec::new();
+    for ((from, to), symbols) in agg {
+        let mut e = Edge::new(from, "IMPORTS", to);
+        if !symbols.is_empty() {
+            let arr: Vec<Value> = symbols.into_iter().map(Value::String).collect();
+            e.props.insert("symbols".to_string(), Value::Array(arr));
+        }
+        edges.push(e);
     }
     (edges, sym_map)
 }
@@ -203,6 +208,24 @@ mod tests {
 
     fn file_node(repo: &str, path: &str) -> Node {
         Node::new(id::file_id(repo, path), "File").set("path", json!(path))
+    }
+
+    #[test]
+    fn imports_to_same_target_aggregate_into_one_edge() {
+        let nodes = vec![file_node("r", "app/svc.py"), file_node("r", "app/base.py")];
+        let mk = |sym: &str| RawImport {
+            importing_file_id: id::file_id("r", "app/svc.py"),
+            importing_path: "app/svc.py".to_string(),
+            symbols: vec![sym.to_string()],
+            candidate_paths: vec!["app/base.py".to_string()],
+        };
+        // Two separate imports from the same module.
+        let imports = vec![mk("Base"), mk("helper")];
+        let edges = resolve(&nodes, &imports, &[], "r");
+        let import_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "IMPORTS").collect();
+        assert_eq!(import_edges.len(), 1, "one aggregated IMPORTS edge");
+        // Symbols are the sorted union.
+        assert_eq!(import_edges[0].props["symbols"], serde_json::json!(["Base", "helper"]));
     }
 
     #[test]
