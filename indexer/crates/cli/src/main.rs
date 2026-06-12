@@ -402,8 +402,24 @@ fn main() -> Result<()> {
             if let Some(db_nodes) = db_summary_nodes(&repo) {
                 nodes = reposkein_core::merge::graft_summaries(&nodes, &db_nodes);
             }
+            // 3) Overlay JSONL-mode sidecar summaries (.reposkein/local/summaries.jsonl)
+            //    so zero-infra (no-DB) agent summaries also reach committed JSONL.
+            let sidecar_path = out_dir.join("local").join("summaries.jsonl");
+            let had_sidecar = sidecar_path.exists();
+            if had_sidecar {
+                if let Ok(text) = std::fs::read_to_string(&sidecar_path) {
+                    let sidecar_nodes = reposkein_core::jsonl::read_sidecar_summaries(&text);
+                    nodes = reposkein_core::merge::graft_summaries(&nodes, &sidecar_nodes);
+                }
+            }
             std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
                 .context("failed to write nodes.jsonl")?;
+            // 4) Truncate the sidecar: its valid summaries are now in committed
+            //    nodes.jsonl (stale ones were intentionally dropped by graft).
+            //    Best-effort — a failure here never fails the index.
+            if had_sidecar {
+                let _ = std::fs::write(&sidecar_path, "");
+            }
             std::fs::write(
                 out_dir.join("edges.jsonl"),
                 jsonl::edges_to_jsonl(&graph.edges),
