@@ -28,7 +28,8 @@ grep when the graph can answer structurally.
   writes are rejected.
 - **`init_cpg_skeleton`** — build (or fully rebuild) the graph for a repository.
   Run once on a fresh repo, or with `full: true` to rebuild.
-- **`reindex_file`** — refresh the graph after editing a source file.
+- **`reindex_file`** — refresh the graph after editing a source file. Reindex
+  is cache-accelerated (only the edited file is re-parsed).
 
 ## Workflow Rules
 
