@@ -1,23 +1,47 @@
 import { pathToFileURL } from "node:url";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Neo4jGraphStore } from "./store/Neo4jGraphStore.js";
 import { UnconfiguredStore } from "./store/UnconfiguredStore.js";
 import type { GraphStore } from "./store/GraphStore.js";
+import { JsonlGraphStore } from "./store/JsonlGraphStore.js";
 import { makeReadCypher } from "./tools/readCypher.js";
 import { makeGetContextProfile } from "./tools/getContextProfile.js";
 import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
 import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
 import { resolveRepoId } from "./store/repoId.js";
 
-/** Lazy store: returns a real Neo4j store if configured, otherwise UnconfiguredStore. */
-function buildStore(): GraphStore {
-  try {
-    return Neo4jGraphStore.fromEnv();
-  } catch {
-    return new UnconfiguredStore();
+/** Selects the store backend.
+ *  REPOSKEIN_STORE = "jsonl" | "neo4j" | "auto" (default "auto").
+ *  - auto: JSONL if <repoPath>/.reposkein/nodes.jsonl exists, else Neo4j if
+ *    NEO4J_PASSWORD is set, else Unconfigured.
+ *  - jsonl: JSONL if available, else Unconfigured.
+ *  - neo4j: Neo4j if configured, else Unconfigured. */
+function buildStore(repoPath: string | undefined, repoId: string | undefined): GraphStore {
+  const mode = (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase();
+  const jsonlReady =
+    !!repoPath && !!repoId && existsSync(join(repoPath, ".reposkein", "nodes.jsonl"));
+
+  const neo4j = (): GraphStore => {
+    try {
+      return Neo4jGraphStore.fromEnv();
+    } catch {
+      return new UnconfiguredStore();
+    }
+  };
+
+  if (mode === "jsonl") {
+    return jsonlReady ? new JsonlGraphStore(repoPath!, repoId!) : new UnconfiguredStore();
   }
+  if (mode === "neo4j") {
+    return neo4j();
+  }
+  // auto
+  if (jsonlReady) return new JsonlGraphStore(repoPath!, repoId!);
+  return neo4j();
 }
 
 const REPO_REQUIRED_MSG =
@@ -25,8 +49,9 @@ const REPO_REQUIRED_MSG =
   "Set REPOSKEIN_REPO_PATH to the root of the repository you want to work with.";
 
 export async function main(): Promise<void> {
-  const store = buildStore();
-  const repoId = resolveRepoId(process.env.REPOSKEIN_REPO_PATH, process.env.REPOSKEIN_REPO_ID);
+  const repoPath = process.env.REPOSKEIN_REPO_PATH;
+  const repoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
+  const store = buildStore(repoPath, repoId);
 
   const server = new McpServer({ name: "@reposkein/mcp", version: "0.0.0" });
   const readCypher = makeReadCypher(store, repoId);
