@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { Neo4jGraphStore } from "./store/Neo4jGraphStore.js";
 import { makeReadCypher } from "./tools/readCypher.js";
+import { makeGetContextProfile } from "./tools/getContextProfile.js";
 
 export async function main(): Promise<void> {
   const store = Neo4jGraphStore.fromEnv();
@@ -25,6 +26,27 @@ export async function main(): Promise<void> {
     },
     async (args) => readCypher(args)
   );
+
+  if (repoId) {
+    const getContextProfile = makeGetContextProfile(store, repoId);
+    server.registerTool(
+      "get_context_profile",
+      {
+        title: "Get context profile",
+        description:
+          "Resolve a function/class (by node_id, file_path+name, or name) and return its caller/callee neighborhood (hops 1-2) with inlined prose and an enrichment_needed list. Never guesses — returns candidates if a name is ambiguous.",
+        inputSchema: {
+          node_id: z.string().optional(),
+          file_path: z.string().optional(),
+          name: z.string().optional(),
+          hops: z.union([z.literal(1), z.literal(2)]).optional(),
+        },
+      },
+      async (args) => getContextProfile(args)
+    );
+  } else {
+    console.error("[reposkein-mcp] REPOSKEIN_REPO_ID not set; get_context_profile disabled");
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
