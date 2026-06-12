@@ -1,6 +1,7 @@
 //! Python definition extractor (Tree-sitter). Produces Class/Function/Variable
 //! nodes and DEFINES/INHERITS edges. Pure static analysis — deterministic.
 
+pub mod calls;
 pub mod defs;
 pub mod imports;
 
