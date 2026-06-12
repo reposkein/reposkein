@@ -44,15 +44,15 @@ fn file_paths(nodes: &[Node]) -> BTreeSet<String> {
 }
 
 /// Resolves imports → IMPORTS edges, and returns a map
-/// (importing_file_id, symbol) → resolved target file path, for call following.
+/// (importing_file_id, local_binding) → (target_path, original_name), for call following.
 fn resolve_imports(
     imports: &[RawImport],
     files: &BTreeSet<String>,
     repo: &str,
-) -> (Vec<Edge>, HashMap<(String, String), String>) {
-    // (from_id, to_id) -> sorted-unique symbols
+) -> (Vec<Edge>, HashMap<(String, String), (String, String)>) {
+    // (from_id, to_id) -> sorted-unique local names (for the edge's symbols property)
     let mut agg: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
-    let mut sym_map: HashMap<(String, String), String> = HashMap::new();
+    let mut sym_map: HashMap<(String, String), (String, String)> = HashMap::new();
     for imp in imports {
         let Some(target) = imp.candidate_paths.iter().find(|p| files.contains(*p)) else {
             continue;
@@ -61,11 +61,12 @@ fn resolve_imports(
         let entry = agg
             .entry((imp.importing_file_id.clone(), to_id))
             .or_default();
-        for s in &imp.symbols {
-            entry.insert(s.clone());
-        }
-        for sym in &imp.symbols {
-            sym_map.insert((imp.importing_file_id.clone(), sym.clone()), target.clone());
+        for (local, original) in &imp.symbols {
+            entry.insert(local.clone());
+            sym_map.insert(
+                (imp.importing_file_id.clone(), local.clone()),
+                (target.clone(), original.clone()),
+            );
         }
     }
     let mut edges = Vec::new();
@@ -90,7 +91,7 @@ fn resolve_one(
     by_name: &BTreeMap<String, Vec<String>>, // name -> sorted func ids
     by_file_freefn: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> module-level fn ids only
     by_file_qual: &BTreeMap<(String, String), String>,        // (path,qualified) -> id
-    import_targets: &HashMap<(String, String), String>,       // (importing_file_id, sym) -> path
+    import_targets: &HashMap<(String, String), (String, String)>, // (importing_file_id, local) -> (path, original)
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
@@ -111,10 +112,10 @@ fn resolve_one(
             return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
         }
         // Rung 3: import-followed module-level function.
-        if let Some(target_path) =
+        if let Some((target_path, original)) =
             import_targets.get(&(caller_file_id.to_string(), c.callee_name.clone()))
         {
-            if let Some(ids) = by_file_freefn.get(&(target_path.clone(), c.callee_name.clone())) {
+            if let Some(ids) = by_file_freefn.get(&(target_path.clone(), original.clone())) {
                 return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
             }
         }
@@ -220,7 +221,7 @@ mod tests {
         let mk = |sym: &str| RawImport {
             importing_file_id: id::file_id("r", "app/svc.py"),
             importing_path: "app/svc.py".to_string(),
-            symbols: vec![sym.to_string()],
+            symbols: vec![(sym.into(), sym.into())],
             candidate_paths: vec!["app/base.py".to_string()],
         };
         // Two separate imports from the same module.
@@ -241,7 +242,7 @@ mod tests {
         let imports = vec![RawImport {
             importing_file_id: id::file_id("r", "app/svc.py"),
             importing_path: "app/svc.py".to_string(),
-            symbols: vec!["Base".to_string()],
+            symbols: vec![("Base".into(), "Base".into())],
             candidate_paths: vec![
                 "app/base.py".to_string(),
                 "app/base/__init__.py".to_string(),
@@ -263,7 +264,7 @@ mod tests {
         let imports = vec![RawImport {
             importing_file_id: id::file_id("r", "app/svc.py"),
             importing_path: "app/svc.py".to_string(),
-            symbols: vec!["sqrt".to_string()],
+            symbols: vec![("sqrt".into(), "sqrt".into())],
             candidate_paths: vec!["math.py".to_string(), "math/__init__.py".to_string()],
         }];
         let edges = resolve(&nodes, &imports, &[], "r");
@@ -393,5 +394,29 @@ mod tests {
         let a = resolve(&nodes, &[], &calls, "r");
         let b = resolve(&nodes, &[], &calls, "r");
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn aliased_import_resolves_to_original_in_target() {
+        let caller = func_node("r", "m.py", "use", 0);
+        let target_fn = func_node("r", "util.py", "helper", 0); // original name in target
+        let nodes = vec![
+            file_node("r", "m.py"),
+            file_node("r", "util.py"),
+            caller.clone(),
+            target_fn.clone(),
+        ];
+        let imports = vec![RawImport {
+            importing_file_id: id::file_id("r", "m.py"),
+            importing_path: "m.py".to_string(),
+            symbols: vec![("h".to_string(), "helper".to_string())], // imported as `h`
+            candidate_paths: vec!["util.py".to_string()],
+        }];
+        // call site uses the alias `h`
+        let calls = vec![call(&caller.id, "m.py", "use", "h", None)];
+        let edges = resolve(&nodes, &imports, &calls, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
+        assert_eq!(e.to, target_fn.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
     }
 }

@@ -21,7 +21,8 @@ pub struct FileContext<'a> {
 pub struct RawImport {
     pub importing_file_id: String,
     pub importing_path: String,
-    pub symbols: Vec<String>,
+    /// Imported symbols as (local_binding, original_name); equal when not aliased.
+    pub symbols: Vec<(String, String)>,
     pub candidate_paths: Vec<String>,
 }
 
