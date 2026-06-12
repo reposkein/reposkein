@@ -89,8 +89,8 @@ fn resolve_one(
     c: &RawCall,
     by_name: &BTreeMap<String, Vec<String>>, // name -> sorted func ids
     by_file_freefn: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> module-level fn ids only
-    by_file_qual: &BTreeMap<(String, String), String>, // (path,qualified) -> id
-    import_targets: &HashMap<(String, String), String>, // (importing_file_id, sym) -> path
+    by_file_qual: &BTreeMap<(String, String), String>,        // (path,qualified) -> id
+    import_targets: &HashMap<(String, String), String>,       // (importing_file_id, sym) -> path
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
@@ -360,8 +360,11 @@ mod tests {
         let calls = vec![call(&caller.id, "m.py", "caller", "helper", None)];
         let edges = resolve(&nodes, &[], &calls, "r");
         if let Some(e) = edges.iter().find(|e| e.typ == "CALLS") {
-            assert_ne!(e.props["resolution"], json!("exact"),
-                "a bare call must not bind to a same-file method as exact");
+            assert_ne!(
+                e.props["resolution"],
+                json!("exact"),
+                "a bare call must not bind to a same-file method as exact"
+            );
         }
     }
 
