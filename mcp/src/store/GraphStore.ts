@@ -7,5 +7,10 @@ export interface GraphStore {
     params?: Record<string, unknown>,
     opts?: { timeoutMs?: number }
   ): Promise<Record<string, unknown>[]>;
+  runWrite(
+    query: string,
+    params?: Record<string, unknown>,
+    opts?: { timeoutMs?: number }
+  ): Promise<Record<string, unknown>[]>;
   close(): Promise<void>;
 }

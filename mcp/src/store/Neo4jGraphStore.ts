@@ -37,6 +37,24 @@ export class Neo4jGraphStore implements GraphStore {
     }
   }
 
+  async runWrite(
+    query: string,
+    params: Record<string, unknown> = {},
+    opts: { timeoutMs?: number } = {}
+  ): Promise<Record<string, unknown>[]> {
+    const session = this.driver.session({
+      defaultAccessMode: neo4j.session.WRITE,
+    });
+    try {
+      const result = await session.run(query, params, {
+        timeout: opts.timeoutMs ?? 10_000,
+      });
+      return result.records.map((r) => r.toObject() as Record<string, unknown>);
+    } finally {
+      await session.close();
+    }
+  }
+
   async close(): Promise<void> {
     await this.driver.close();
   }

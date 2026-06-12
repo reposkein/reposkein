@@ -5,6 +5,7 @@ import type { GraphStore } from "../src/store/GraphStore.js";
 function mockStore(rows: Record<string, unknown>[]): GraphStore {
   return {
     runRead: vi.fn(async () => rows),
+    runWrite: vi.fn(async () => []),
     close: vi.fn(async () => {}),
   };
 }
@@ -44,6 +45,7 @@ describe("makeReadCypher", () => {
       runRead: vi.fn(async () => {
         throw new Error("Neo.ClientError.Statement.SyntaxError: bad");
       }),
+      runWrite: vi.fn(async () => []),
       close: vi.fn(async () => {}),
     };
     const handler = makeReadCypher(store, "repo123");
