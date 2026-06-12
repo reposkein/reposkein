@@ -61,6 +61,7 @@ pub fn edge_line(edge: &Edge) -> String {
 pub fn nodes_to_jsonl(nodes: &[Node]) -> String {
     let mut sorted: Vec<&Node> = nodes.iter().collect();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    sorted.dedup_by(|a, b| a.id == b.id);
     let mut out = String::new();
     for n in sorted {
         out.push_str(&node_line(n));
@@ -79,6 +80,8 @@ pub fn edges_to_jsonl(edges: &[Edge]) -> String {
             b.to.as_str(),
         ))
     });
+    sorted.dedup_by(|a, b| (a.from.as_str(), a.typ.as_str(), a.to.as_str())
+        == (b.from.as_str(), b.typ.as_str(), b.to.as_str()));
     let mut out = String::new();
     for e in sorted {
         out.push_str(&edge_line(e));
@@ -153,6 +156,22 @@ pub fn read_edges(text: &str) -> Result<Vec<Edge>> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn nodes_dedup_by_id() {
+        let a1 = Node::new("rs1:r:file:a.py", "File").set("path", json!("a.py"));
+        let a2 = Node::new("rs1:r:file:a.py", "File").set("path", json!("a.py"));
+        let out = nodes_to_jsonl(&[a1, a2]);
+        assert_eq!(out.lines().count(), 1, "duplicate ids collapse to one line");
+    }
+
+    #[test]
+    fn edges_dedup_by_key() {
+        let e1 = Edge::new("a", "CONTAINS", "b");
+        let e2 = Edge::new("a", "CONTAINS", "b");
+        let out = edges_to_jsonl(&[e1, e2]);
+        assert_eq!(out.lines().count(), 1, "duplicate edge keys collapse to one line");
+    }
 
     #[test]
     fn node_line_orders_id_labels_then_sorted_props() {
