@@ -6,6 +6,13 @@ use reposkein_core::model::{Edge, Node};
 use serde_json::json;
 use tree_sitter::Node as TsNode;
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum ScopeKind {
+    Module,
+    Class,
+    Function,
+}
+
 /// A definition discovered during the walk, with enough info to build a Node
 /// and the DEFINES edge from its parent scope.
 pub struct Walk<'a> {
@@ -57,9 +64,13 @@ impl<'a> Walk<'a> {
         format!("rs1:{}:class:{}#{}", self.repo, self.rel_path, qualified)
     }
 
+    fn var_id(&self, qualified: &str) -> String {
+        format!("rs1:{}:var:{}#{}", self.repo, self.rel_path, qualified)
+    }
+
     /// Recursively walk `node` with the given scope stack (enclosing
     /// class/function names) and parent node id (File or Class/Function id).
-    pub fn walk(&mut self, node: TsNode, scope: &[String], parent_id: &str) {
+    pub fn walk(&mut self, node: TsNode, scope: &[String], parent_id: &str, scope_kind: ScopeKind) {
         let mut cursor = node.walk();
         let children: Vec<TsNode> = node.named_children(&mut cursor).collect();
         for child in children {
@@ -99,7 +110,7 @@ impl<'a> Walk<'a> {
 
                     // Recurse into the function body for nested defs/classes.
                     if let Some(body) = child.child_by_field_name("body") {
-                        self.walk(body, &qual, &id);
+                        self.walk(body, &qual, &id, ScopeKind::Function);
                     }
                 }
                 "class_definition" => {
@@ -142,7 +153,46 @@ impl<'a> Walk<'a> {
                     }
 
                     if let Some(body) = child.child_by_field_name("body") {
-                        self.walk(body, &qual, &id);
+                        self.walk(body, &qual, &id, ScopeKind::Class);
+                    }
+                }
+                "expression_statement" => {
+                    // Only module/class scope produces Variable nodes (PRD §5.1).
+                    if scope_kind == ScopeKind::Function {
+                        continue;
+                    }
+                    if let Some(assign) = child.named_child(0) {
+                        if assign.kind() == "assignment" {
+                            if let Some(lhs) = assign.child_by_field_name("left") {
+                                if lhs.kind() == "identifier" {
+                                    let name = text(lhs, self.source).to_string();
+                                    let mut qual = scope.to_vec();
+                                    qual.push(name.clone());
+                                    let qualified = qual.join(".");
+                                    let kind = if scope_kind == ScopeKind::Class {
+                                        "class"
+                                    } else if name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+                                        && name.chars().any(|c| c.is_ascii_uppercase())
+                                    {
+                                        "const"
+                                    } else {
+                                        "module"
+                                    };
+                                    let id = self.var_id(&qualified);
+                                    self.nodes.push(
+                                        Node::new(id.clone(), "Variable")
+                                            .set("name", json!(name))
+                                            .set("file_path", json!(self.rel_path))
+                                            .set("kind", json!(kind)),
+                                    );
+                                    self.edges.push(Edge::new(
+                                        parent_id.to_string(),
+                                        "DEFINES",
+                                        id,
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -160,8 +210,31 @@ mod tests {
         let tree = parse(src).unwrap();
         // Leak nothing: build a Walk borrowing the inputs, walk the root.
         let mut w = Walk::new("r", "m.py", "rs1:r:file:m.py", src);
-        w.walk(tree.root_node(), &[], "rs1:r:file:m.py");
+        w.walk(tree.root_node(), &[], "rs1:r:file:m.py", ScopeKind::Module);
         w
+    }
+
+    #[test]
+    fn extracts_module_and_class_variables() {
+        let src = b"TIMEOUT = 30\nname = 'x'\n\nclass C:\n    LIMIT = 5\n";
+        let w = run(src);
+
+        let var = |id: &str| w.nodes.iter().find(|n| n.id == id);
+        let timeout = var("rs1:r:var:m.py#TIMEOUT").expect("TIMEOUT");
+        assert_eq!(timeout.labels, ["Variable"]);
+        assert_eq!(timeout.props["kind"], json!("const")); // ALL_CAPS module var
+        let name = var("rs1:r:var:m.py#name").expect("name");
+        assert_eq!(name.props["kind"], json!("module"));
+        let limit = var("rs1:r:var:m.py#C.LIMIT").expect("C.LIMIT");
+        assert_eq!(limit.props["kind"], json!("class"));
+
+        // DEFINES from File for module vars, from Class for class vars.
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:file:m.py"
+            && e.typ == "DEFINES"
+            && e.to == "rs1:r:var:m.py#TIMEOUT"));
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.py#C"
+            && e.typ == "DEFINES"
+            && e.to == "rs1:r:var:m.py#C.LIMIT"));
     }
 
     #[test]
