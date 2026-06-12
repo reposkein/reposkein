@@ -101,7 +101,10 @@ mod tests {
         };
         let out = PythonExtractor.extract(&ctx);
         assert_eq!(out.imports.len(), 1);
-        assert_eq!(out.imports[0].symbols, vec![("Base".to_string(), "Base".to_string())]);
+        assert_eq!(
+            out.imports[0].symbols,
+            vec![("Base".to_string(), "Base".to_string())]
+        );
         assert!(out
             .calls
             .iter()

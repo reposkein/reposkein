@@ -233,6 +233,9 @@ mod tests {
     #[test]
     fn aliased_import_records_local_and_original() {
         let imps = imports_of(b"from app.util import helper as h\n", "app/svc.py");
-        assert_eq!(imps[0].symbols, vec![("h".to_string(), "helper".to_string())]);
+        assert_eq!(
+            imps[0].symbols,
+            vec![("h".to_string(), "helper".to_string())]
+        );
     }
 }

@@ -43,13 +43,16 @@ fn file_paths(nodes: &[Node]) -> BTreeSet<String> {
         .collect()
 }
 
+/// Map from (importing_file_id, local_binding) → (target_path, original_name).
+type ImportTargets = HashMap<(String, String), (String, String)>;
+
 /// Resolves imports → IMPORTS edges, and returns a map
 /// (importing_file_id, local_binding) → (target_path, original_name), for call following.
 fn resolve_imports(
     imports: &[RawImport],
     files: &BTreeSet<String>,
     repo: &str,
-) -> (Vec<Edge>, HashMap<(String, String), (String, String)>) {
+) -> (Vec<Edge>, ImportTargets) {
     // (from_id, to_id) -> sorted-unique local names (for the edge's symbols property)
     let mut agg: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut sym_map: HashMap<(String, String), (String, String)> = HashMap::new();
@@ -91,7 +94,7 @@ fn resolve_one(
     by_name: &BTreeMap<String, Vec<String>>, // name -> sorted func ids
     by_file_freefn: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> module-level fn ids only
     by_file_qual: &BTreeMap<(String, String), String>,        // (path,qualified) -> id
-    import_targets: &HashMap<(String, String), (String, String)>, // (importing_file_id, local) -> (path, original)
+    import_targets: &ImportTargets, // (importing_file_id, local) -> (path, original)
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
