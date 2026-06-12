@@ -161,7 +161,10 @@ uri = "neo4j://localhost:7687"
 /// Writes meta.json, .reposkein/.gitignore, default config.toml (if absent),
 /// and the git-ignored local/ dir.
 fn write_reposkein_layout(out_dir: &Path, repo_id: &str) -> Result<()> {
-    std::fs::write(out_dir.join("meta.json"), reposkein_core::meta::meta_json(repo_id))?;
+    std::fs::write(
+        out_dir.join("meta.json"),
+        reposkein_core::meta::meta_json(repo_id),
+    )?;
     std::fs::write(out_dir.join(".gitignore"), "local/\n")?;
     std::fs::create_dir_all(out_dir.join("local"))?;
     let cfg = out_dir.join("config.toml");
@@ -177,7 +180,7 @@ fn compute_repo_id(root: &Path) -> String {
     let first = run_git(root, &["rev-list", "--max-parents=0", "HEAD"])
         .unwrap_or_default()
         .lines()
-        .next()      // first root commit only (multi-root repos)
+        .next() // first root commit only (multi-root repos)
         .unwrap_or_default()
         .to_string();
     let remote = run_git(root, &["remote", "get-url", "origin"])
@@ -257,9 +260,10 @@ fn main() -> Result<()> {
                 edges: reposkein_core::jsonl::read_edges(&edges_txt)?,
             };
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
+            store.purge(&repo)?;
             store.import_graph(&repo, &graph)?;
             println!(
-                "loaded repo_id={repo}: {} nodes, {} edges into Neo4j",
+                "loaded repo_id={repo}: {} nodes, {} edges into Neo4j (clean rebuild)",
                 graph.nodes.len(),
                 graph.edges.len()
             );

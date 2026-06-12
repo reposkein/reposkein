@@ -11,7 +11,10 @@ pub const INDEXER_VERSION_MIN: &str = "0.0.0";
 pub fn meta_json(repo_id: &str) -> String {
     let mut m: Map<String, Value> = Map::new();
     m.insert("id_scheme".into(), Value::String(ID_SCHEME.to_string()));
-    m.insert("indexer_version_min".into(), Value::String(INDEXER_VERSION_MIN.to_string()));
+    m.insert(
+        "indexer_version_min".into(),
+        Value::String(INDEXER_VERSION_MIN.to_string()),
+    );
     m.insert("repo_id".into(), Value::String(repo_id.to_string()));
     m.insert("schema_version".into(), Value::from(SCHEMA_VERSION));
     // serde_json::Map is a BTreeMap (no preserve_order) → sorted keys.
