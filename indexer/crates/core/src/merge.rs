@@ -147,8 +147,14 @@ mod tests {
         let theirs = vec![a.clone(), with_summary(b.clone(), "does B", "hb")];
         let merged = merge_nodes(&base, &ours, &theirs);
         let get = |id: &str| merged.iter().find(|n| n.id == id).unwrap();
-        assert_eq!(get("rs1:r:func:a#f@0").props["semantic_summary"], json!("does A"));
-        assert_eq!(get("rs1:r:func:b#g@0").props["semantic_summary"], json!("does B"));
+        assert_eq!(
+            get("rs1:r:func:a#f@0").props["semantic_summary"],
+            json!("does A")
+        );
+        assert_eq!(
+            get("rs1:r:func:b#g@0").props["semantic_summary"],
+            json!("does B")
+        );
     }
 
     #[test]
@@ -169,7 +175,11 @@ mod tests {
         // against the old hash (ha). Merged structural takes theirs (ha->hb);
         // ours' summary no longer matches → dropped.
         let base = vec![func("rs1:r:func:a#f@0", "ha")];
-        let ours = vec![with_summary(func("rs1:r:func:a#f@0", "ha"), "old summary", "ha")];
+        let ours = vec![with_summary(
+            func("rs1:r:func:a#f@0", "ha"),
+            "old summary",
+            "ha",
+        )];
         let theirs = vec![func("rs1:r:func:a#f@0", "hb")];
         let merged = merge_nodes(&base, &ours, &theirs);
         assert_eq!(merged[0].props["content_hash"], json!("hb"));

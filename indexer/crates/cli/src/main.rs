@@ -196,7 +196,12 @@ fn main() -> Result<()> {
             println!("purged {n} nodes for repo_id={repo}");
             Ok(())
         }
-        Commands::MergeJsonl { kind, base, ours, theirs } => {
+        Commands::MergeJsonl {
+            kind,
+            base,
+            ours,
+            theirs,
+        } => {
             let read = |p: &PathBuf| -> Result<String> {
                 std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))
             };
