@@ -357,7 +357,10 @@ mod tests {
         let w = run(src);
         let ids: Vec<&str> = w.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains(&"rs1:r:func:m.rs#util.helper@0"), "fn in mod");
-        assert!(ids.contains(&"rs1:r:class:m.rs#util.Inner"), "struct in mod");
+        assert!(
+            ids.contains(&"rs1:r:class:m.rs#util.Inner"),
+            "struct in mod"
+        );
         assert!(
             ids.contains(&"rs1:r:func:m.rs#tests.it_works@0"),
             "fn in #[cfg(test)] mod"
