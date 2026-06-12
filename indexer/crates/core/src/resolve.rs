@@ -88,7 +88,7 @@ fn round2(x: f64) -> f64 {
 fn resolve_one(
     c: &RawCall,
     by_name: &BTreeMap<String, Vec<String>>, // name -> sorted func ids
-    by_file_name: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> ids
+    by_file_freefn: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> module-level fn ids only
     by_file_qual: &BTreeMap<(String, String), String>, // (path,qualified) -> id
     import_targets: &HashMap<(String, String), String>, // (importing_file_id, sym) -> path
     caller_file_id: &str,
@@ -106,15 +106,15 @@ fn resolve_one(
         }
     }
     if c.receiver.is_none() {
-        // Rung 2: same-file function.
-        if let Some(ids) = by_file_name.get(&(c.caller_path.clone(), c.callee_name.clone())) {
+        // Rung 2: same-file module-level function (bare name cannot reach a method).
+        if let Some(ids) = by_file_freefn.get(&(c.caller_path.clone(), c.callee_name.clone())) {
             return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
         }
-        // Rung 3: import-followed.
+        // Rung 3: import-followed module-level function.
         if let Some(target_path) =
             import_targets.get(&(caller_file_id.to_string(), c.callee_name.clone()))
         {
-            if let Some(ids) = by_file_name.get(&(target_path.clone(), c.callee_name.clone())) {
+            if let Some(ids) = by_file_freefn.get(&(target_path.clone(), c.callee_name.clone())) {
                 return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
             }
         }
@@ -151,23 +151,25 @@ pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &
 
     let funcs = functions(nodes);
     let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let mut by_file_freefn: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
     for f in &funcs {
         by_name
             .entry(f.name.clone())
             .or_default()
             .push(f.id.clone());
-        by_file_name
-            .entry((f.file_path.clone(), f.name.clone()))
-            .or_default()
-            .push(f.id.clone());
+        if !f.qualified.contains('.') {
+            by_file_freefn
+                .entry((f.file_path.clone(), f.name.clone()))
+                .or_default()
+                .push(f.id.clone());
+        }
         by_file_qual.insert((f.file_path.clone(), f.qualified.clone()), f.id.clone());
     }
     for v in by_name.values_mut() {
         v.sort();
     }
-    for v in by_file_name.values_mut() {
+    for v in by_file_freefn.values_mut() {
         v.sort();
     }
 
@@ -178,7 +180,7 @@ pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &
         let resolved = resolve_one(
             c,
             &by_name,
-            &by_file_name,
+            &by_file_freefn,
             &by_file_qual,
             &import_targets,
             &caller_file_id,
@@ -346,6 +348,32 @@ mod tests {
         let edges = resolve(&nodes, &[], &calls, "r");
         let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
         assert_eq!(e.to, m_callee.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
+    }
+
+    #[test]
+    fn bare_call_does_not_bind_to_same_file_method_as_exact() {
+        // Same file has only a METHOD named `helper` (no module-level helper).
+        let caller = func_node("r", "m.py", "caller", 0);
+        let method = func_node("r", "m.py", "Cls.helper", 1);
+        let nodes = vec![caller.clone(), method.clone()];
+        let calls = vec![call(&caller.id, "m.py", "caller", "helper", None)];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        if let Some(e) = edges.iter().find(|e| e.typ == "CALLS") {
+            assert_ne!(e.props["resolution"], json!("exact"),
+                "a bare call must not bind to a same-file method as exact");
+        }
+    }
+
+    #[test]
+    fn bare_call_still_exact_for_same_file_free_function() {
+        let caller = func_node("r", "m.py", "caller", 0);
+        let free = func_node("r", "m.py", "helper", 0); // module-level
+        let nodes = vec![caller.clone(), free.clone()];
+        let calls = vec![call(&caller.id, "m.py", "caller", "helper", None)];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
+        assert_eq!(e.to, free.id);
         assert_eq!(e.props["resolution"], json!("exact"));
     }
 
