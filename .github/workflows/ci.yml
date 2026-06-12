@@ -63,7 +63,11 @@ jobs:
         with:
           workspaces: indexer
       - name: load -> export byte-identical round-trip (PRD §6.2.7)
-        run: cargo test -p reposkein-neo4j-io -- --ignored
+        # --test-threads=1: these gated tests share one Neo4j instance and each
+        # calls setup_schema (CREATE INDEX IF NOT EXISTS). On a fresh DB, running
+        # them in parallel races on index creation (both see "not exists", both
+        # create) → EquivalentSchemaRuleAlreadyExists. Serialize them.
+        run: cargo test -p reposkein-neo4j-io -- --ignored --test-threads=1
 
   mcp:
     name: mcp (typecheck + build + test)
