@@ -285,7 +285,11 @@ mod tests {
             "\n",
         );
         let nodes = read_sidecar_summaries(text);
-        assert_eq!(nodes.len(), 2, "two valid records; malformed + id-less skipped");
+        assert_eq!(
+            nodes.len(),
+            2,
+            "two valid records; malformed + id-less skipped"
+        );
         assert_eq!(nodes[0].id, "rs1:r:func:a.py#f@0");
         assert!(nodes[0].labels.is_empty());
         assert_eq!(nodes[0].props["semantic_summary"], json!("does f"));
@@ -296,8 +300,8 @@ mod tests {
     #[test]
     fn sidecar_nodes_feed_graft_summaries() {
         use crate::merge::graft_summaries;
-        let fresh = vec![Node::new("rs1:r:func:a.py#f@0", "Function")
-            .set("content_hash", json!("h1"))];
+        let fresh =
+            vec![Node::new("rs1:r:func:a.py#f@0", "Function").set("content_hash", json!("h1"))];
         let sidecar = read_sidecar_summaries(
             "{\"id\":\"rs1:r:func:a.py#f@0\",\"semantic_summary\":\"does f\",\"summary_of_hash\":\"h1\"}\n",
         );
