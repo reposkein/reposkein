@@ -19,11 +19,15 @@ fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
 }
 
 fn name_of(node: TsNode, source: &[u8]) -> String {
-    node.child_by_field_name("name").map(|n| text(n, source).to_string()).unwrap_or_default()
+    node.child_by_field_name("name")
+        .map(|n| text(n, source).to_string())
+        .unwrap_or_default()
 }
 
 fn arity(node: TsNode) -> usize {
-    let Some(params) = node.child_by_field_name("parameters") else { return 0 };
+    let Some(params) = node.child_by_field_name("parameters") else {
+        return 0;
+    };
     let mut c = params.walk();
     params
         .named_children(&mut c)
@@ -32,7 +36,13 @@ fn arity(node: TsNode) -> usize {
 }
 
 fn first_line(node: TsNode, source: &[u8]) -> String {
-    text(node, source).lines().next().unwrap_or("").trim_end_matches('{').trim().to_string()
+    text(node, source)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('{')
+        .trim()
+        .to_string()
 }
 
 /// The type_identifier name within an impl `type:` node (handles generic_type).
@@ -51,11 +61,20 @@ fn type_name(node: TsNode, source: &[u8]) -> String {
 
 impl<'a> Walk<'a> {
     pub fn new(repo: &'a str, rel_path: &'a str, source: &'a [u8]) -> Self {
-        Walk { repo, rel_path, source, nodes: Vec::new(), edges: Vec::new() }
+        Walk {
+            repo,
+            rel_path,
+            source,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        }
     }
 
     fn func_id(&self, qualified: &str, arity: usize) -> String {
-        format!("rs1:{}:func:{}#{}@{}", self.repo, self.rel_path, qualified, arity)
+        format!(
+            "rs1:{}:func:{}#{}@{}",
+            self.repo, self.rel_path, qualified, arity
+        )
     }
     fn class_id(&self, name: &str) -> String {
         format!("rs1:{}:class:{}#{}", self.repo, self.rel_path, name)
@@ -74,7 +93,11 @@ impl<'a> Walk<'a> {
         let a = arity(node);
         let id = self.func_id(qualified, a);
         let span = &self.source[node.byte_range()];
-        let name = qualified.rsplit('.').next().unwrap_or(qualified).to_string();
+        let name = qualified
+            .rsplit('.')
+            .next()
+            .unwrap_or(qualified)
+            .to_string();
         self.nodes.push(
             Node::new(id.clone(), "Function")
                 .set("name", json!(name))
@@ -85,7 +108,8 @@ impl<'a> Walk<'a> {
                 .set("signature", json!(first_line(node, self.source)))
                 .set("content_hash", json!(content_hash(span))),
         );
-        self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id));
+        self.edges
+            .push(Edge::new(parent_id.to_string(), "DEFINES", id));
     }
 
     fn push_type(&mut self, id: String, label: &str, name: &str, node: TsNode, parent_id: &str) {
@@ -97,7 +121,8 @@ impl<'a> Walk<'a> {
                 .set("start_line", json!(node.start_position().row + 1))
                 .set("end_line", json!(node.end_position().row + 1)),
         );
-        self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id));
+        self.edges
+            .push(Edge::new(parent_id.to_string(), "DEFINES", id));
     }
 
     pub fn walk(&mut self, node: TsNode, parent_id: &str) {
@@ -127,14 +152,19 @@ impl<'a> Walk<'a> {
                 "const_item" | "static_item" => {
                     let name = name_of(child, self.source);
                     let id = self.var_id(&name);
-                    let kind = if child.kind() == "static_item" { "static" } else { "const" };
+                    let kind = if child.kind() == "static_item" {
+                        "static"
+                    } else {
+                        "const"
+                    };
                     self.nodes.push(
                         Node::new(id.clone(), "Variable")
                             .set("name", json!(name))
                             .set("file_path", json!(self.rel_path))
                             .set("kind", json!(kind)),
                     );
-                    self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id));
+                    self.edges
+                        .push(Edge::new(parent_id.to_string(), "DEFINES", id));
                 }
                 "impl_item" => {
                     let ty = child
@@ -149,7 +179,11 @@ impl<'a> Walk<'a> {
                     if let Some(tr) = child.child_by_field_name("trait") {
                         let trait_name = type_name(tr, self.source);
                         if !trait_name.is_empty() {
-                            self.edges.push(Edge::new(class_id.clone(), "IMPLEMENTS", self.iface_id(&trait_name)));
+                            self.edges.push(Edge::new(
+                                class_id.clone(),
+                                "IMPLEMENTS",
+                                self.iface_id(&trait_name),
+                            ));
                         }
                     }
                     // Methods attribute to the type.
@@ -188,13 +222,25 @@ mod tests {
         let src = b"struct Service;\ntrait Greeter {}\nimpl Service { fn run(&self, x: u32) -> u32 { x } }\nimpl Greeter for Service { fn greet(&self) {} }\n";
         let w = run(src);
         // Method run is qualified Service.run, DEFINES from the Service class node.
-        let m = w.nodes.iter().find(|n| n.props.get("qualified_name") == Some(&json!("Service.run"))).unwrap();
+        let m = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("qualified_name") == Some(&json!("Service.run")))
+            .unwrap();
         assert_eq!(m.id, "rs1:r:func:m.rs#Service.run@2"); // &self + x
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.rs#Service" && e.typ == "DEFINES" && e.to == m.id));
+        assert!(w
+            .edges
+            .iter()
+            .any(|e| e.from == "rs1:r:class:m.rs#Service" && e.typ == "DEFINES" && e.to == m.id));
         // greet from the trait impl, also under Service.
-        assert!(w.nodes.iter().any(|n| n.props.get("qualified_name") == Some(&json!("Service.greet"))));
+        assert!(w
+            .nodes
+            .iter()
+            .any(|n| n.props.get("qualified_name") == Some(&json!("Service.greet"))));
         // Service IMPLEMENTS Greeter.
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.rs#Service" && e.typ == "IMPLEMENTS" && e.to == "rs1:r:iface:m.rs#Greeter"));
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.rs#Service"
+            && e.typ == "IMPLEMENTS"
+            && e.to == "rs1:r:iface:m.rs#Greeter"));
     }
 
     #[test]
@@ -202,11 +248,22 @@ mod tests {
         let src = b"fn helper(x: u32) -> u32 { x }\nstruct Service { label: String }\ntrait Greeter {}\nenum Color { Red }\nconst MAX: u32 = 5;\n";
         let w = run(src);
         let find = |id: &str| w.nodes.iter().find(|n| n.id == id);
-        assert_eq!(find("rs1:r:func:m.rs#helper@1").unwrap().labels, ["Function"]);
+        assert_eq!(
+            find("rs1:r:func:m.rs#helper@1").unwrap().labels,
+            ["Function"]
+        );
         assert_eq!(find("rs1:r:class:m.rs#Service").unwrap().labels, ["Class"]);
-        assert_eq!(find("rs1:r:iface:m.rs#Greeter").unwrap().labels, ["Interface"]);
+        assert_eq!(
+            find("rs1:r:iface:m.rs#Greeter").unwrap().labels,
+            ["Interface"]
+        );
         assert_eq!(find("rs1:r:enum:m.rs#Color").unwrap().labels, ["Enum"]);
-        assert_eq!(find("rs1:r:var:m.rs#MAX").unwrap().props["kind"], json!("const"));
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:file:m.rs" && e.typ == "DEFINES" && e.to == "rs1:r:class:m.rs#Service"));
+        assert_eq!(
+            find("rs1:r:var:m.rs#MAX").unwrap().props["kind"],
+            json!("const")
+        );
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:file:m.rs"
+            && e.typ == "DEFINES"
+            && e.to == "rs1:r:class:m.rs#Service"));
     }
 }

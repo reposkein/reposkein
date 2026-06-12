@@ -3,6 +3,33 @@ use std::fs;
 use tempfile::tempdir;
 
 #[test]
+fn index_extracts_rust_definitions() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join("svc.rs"),
+        b"trait Greeter { fn greet(&self); }\nstruct Service;\nimpl Greeter for Service { fn greet(&self) {} }\nfn main() {}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args(["index", "--repo-id", "r", "--name", "d"])
+        .arg(root)
+        .assert()
+        .success();
+
+    let nodes = fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap();
+    assert!(nodes.contains(r#""id":"rs1:r:class:svc.rs#Service""#));
+    assert!(nodes.contains(r#""id":"rs1:r:iface:svc.rs#Greeter""#));
+    assert!(nodes.contains(r#""id":"rs1:r:func:svc.rs#Service.greet@1""#));
+    assert!(nodes.contains(r#""id":"rs1:r:func:svc.rs#main@0""#));
+
+    let edges = fs::read_to_string(root.join(".reposkein/edges.jsonl")).unwrap();
+    assert!(edges.contains("IMPLEMENTS"));
+}
+
+#[test]
 fn index_resolves_typescript_imports_and_calls() {
     let dir = tempdir().unwrap();
     let root = dir.path();
