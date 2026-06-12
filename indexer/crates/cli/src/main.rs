@@ -113,11 +113,38 @@ fn run_git(root: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// repo_id = BLAKE3(first_commit_hash + "\n" + origin_url), 12 hex chars.
+/// Canonicalizes a git remote URL to `host/org/repo` so all schemes
+/// (https, scp-style git@, ssh://) produce the same repo_id.
+pub(crate) fn normalize_remote(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if let Some(i) = s.find("://") {
+        s = s[i + 3..].to_string(); // drop scheme://
+    }
+    if let Some(i) = s.find('@') {
+        s = s[i + 1..].to_string(); // drop user@
+    }
+    if let Some(stripped) = s.strip_suffix(".git") {
+        s = stripped.to_string();
+    }
+    // scp form host:org/repo → host/org/repo (first ':' becomes '/')
+    if let Some(i) = s.find(':') {
+        s.replace_range(i..i + 1, "/");
+    }
+    s
+}
+
+/// repo_id = BLAKE3(first_commit_hash + "\n" + normalized_origin_url), 12 hex chars.
 /// Falls back to a hash of the absolute root path when git is unavailable.
 fn compute_repo_id(root: &Path) -> String {
-    let first = run_git(root, &["rev-list", "--max-parents=0", "HEAD"]).unwrap_or_default();
-    let remote = run_git(root, &["remote", "get-url", "origin"]).unwrap_or_default();
+    let first = run_git(root, &["rev-list", "--max-parents=0", "HEAD"])
+        .unwrap_or_default()
+        .lines()
+        .next()      // first root commit only (multi-root repos)
+        .unwrap_or_default()
+        .to_string();
+    let remote = run_git(root, &["remote", "get-url", "origin"])
+        .map(|u| normalize_remote(&u))
+        .unwrap_or_default();
     let basis = if first.is_empty() && remote.is_empty() {
         root.canonicalize()
             .map(|p| p.to_string_lossy().to_string())
@@ -341,5 +368,20 @@ fn main() -> Result<()> {
             std::fs::write(&ours, merged).with_context(|| format!("write {}", ours.display()))?;
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_remote;
+
+    #[test]
+    fn remote_schemes_normalize_equal() {
+        let https = normalize_remote("https://github.com/reposkein/reposkein.git");
+        let ssh = normalize_remote("git@github.com:reposkein/reposkein.git");
+        let ssh2 = normalize_remote("ssh://git@github.com/reposkein/reposkein.git");
+        assert_eq!(https, "github.com/reposkein/reposkein");
+        assert_eq!(https, ssh);
+        assert_eq!(https, ssh2);
     }
 }
