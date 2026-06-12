@@ -14,6 +14,7 @@ import {
   type ParsedGraph,
   type ParsedNode,
 } from "./jsonlGraph.js";
+import { readSidecar, upsertSidecar, sidecarPath } from "./sidecar.js";
 
 function str(v: unknown): string | null {
   return typeof v === "string" ? v : null;
@@ -57,13 +58,14 @@ const hasLabel = (n: ParsedNode, l: string): boolean => n.labels.includes(l);
 
 /** A GraphStore over a single repo's committed .reposkein JSONL. Holds exactly
  *  the repo whose files it loaded; all methods scope on repo === this.repoId.
- *  Reloads when either JSONL file's mtime changes. writeSummary is in-memory
- *  only in this milestone (durable sidecar is B1-M3). */
+ *  Reloads when either JSONL file's mtime changes. writeSummary persists to the
+ *  durable sidecar (.reposkein/local/summaries.jsonl) added in B1-M3. */
 export class JsonlGraphStore implements GraphStore {
   private graph: ParsedGraph = emptyGraph();
   private mtime = -1;
   private readonly nodesPath: string;
   private readonly edgesPath: string;
+  private readonly sidecarFile: string;
 
   constructor(
     repoPath: string,
@@ -72,6 +74,7 @@ export class JsonlGraphStore implements GraphStore {
     const dir = join(repoPath, ".reposkein");
     this.nodesPath = join(dir, "nodes.jsonl");
     this.edgesPath = join(dir, "edges.jsonl");
+    this.sidecarFile = sidecarPath(repoPath);
     this.ensureFresh();
   }
 
@@ -90,6 +93,17 @@ export class JsonlGraphStore implements GraphStore {
       const nodesText = existsSync(this.nodesPath) ? readFileSync(this.nodesPath, "utf8") : "";
       const edgesText = existsSync(this.edgesPath) ? readFileSync(this.edgesPath, "utf8") : "";
       this.graph = buildGraph(nodesText, edgesText);
+      // Overlay durable JSONL-mode summaries (visible even before reindex).
+      for (const [id, rec] of readSidecar(this.sidecarFile)) {
+        const n = this.graph.byId.get(id);
+        if (n) {
+          n.props.semantic_summary = rec.semantic_summary;
+          n.props.summary_of_hash = rec.summary_of_hash;
+          n.props.summary_model = rec.summary_model;
+          n.props.summary_at = rec.summary_at;
+          n.props.summary_by = rec.summary_by;
+        }
+      }
     } catch {
       this.graph = emptyGraph();
     }
@@ -176,12 +190,19 @@ export class JsonlGraphStore implements GraphStore {
     const oldSummary = str(n.props.semantic_summary);
     const oldHash = str(n.props.summary_of_hash);
     const stale_replaced = oldSummary !== null && oldHash !== chash;
-    // In-memory only this milestone (B1-M3 adds the durable sidecar).
     n.props.semantic_summary = fields.summary;
     n.props.summary_of_hash = chash;
     n.props.summary_model = fields.model;
     n.props.summary_at = fields.at;
     n.props.summary_by = fields.by;
+    upsertSidecar(this.sidecarFile, {
+      id,
+      semantic_summary: fields.summary,
+      summary_of_hash: chash,
+      summary_model: fields.model,
+      summary_at: fields.at,
+      summary_by: fields.by,
+    });
     return { kind: "ok", stale_replaced };
   }
 

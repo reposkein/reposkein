@@ -68,6 +68,24 @@ describe("JsonlGraphStore", () => {
     expect(node?.semantic_summary).toBe("Helper does X.");
   });
 
+  it("persists a summary to the sidecar (durable across a fresh store instance)", async () => {
+    const store = new JsonlGraphStore(root, CONFORMANCE_REPO);
+    const id = "rs1:proftest:func:base.py#helper@0";
+    const res = await store.writeSummary(CONFORMANCE_REPO, id, {
+      summary: "Helper does X.",
+      model: "opus",
+      at: "2026-06-12",
+      by: "agent",
+    });
+    expect(res.kind).toBe("ok");
+
+    // A brand-new store instance (cold load) must see the persisted summary.
+    const fresh = new JsonlGraphStore(root, CONFORMANCE_REPO);
+    const node = await fresh.getNode(CONFORMANCE_REPO, id);
+    expect(node?.semantic_summary).toBe("Helper does X.");
+    expect(node?.summary_of_hash).toBe("hh"); // helper's content_hash in the fixture
+  });
+
   it("reloads when the nodes file mtime changes", async () => {
     const store = new JsonlGraphStore(root, CONFORMANCE_REPO);
     const before = await store.resolveByName(CONFORMANCE_REPO, "added");
