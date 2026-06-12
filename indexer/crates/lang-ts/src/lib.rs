@@ -9,6 +9,24 @@ pub mod imports;
 
 use reposkein_core::extractor::{ExtractOutput, Extractor, FileContext};
 
+/// Shared TS/JS extraction: grammar chosen by extension (.jsx/.tsx → TSX,
+/// else the TS grammar which also parses plain JS). Same defs/imports/calls.
+pub fn extract_module(ctx: &FileContext) -> ExtractOutput {
+    let Some(tree) = parse(ctx.source, is_tsx_path(ctx.rel_path)) else {
+        return ExtractOutput::default();
+    };
+    let root = tree.root_node();
+    let imports = imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
+    let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
+    w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
+    ExtractOutput {
+        nodes: w.nodes,
+        edges: w.edges,
+        imports,
+        calls: w.calls,
+    }
+}
+
 pub struct TypeScriptExtractor;
 
 impl Extractor for TypeScriptExtractor {
@@ -16,19 +34,18 @@ impl Extractor for TypeScriptExtractor {
         "typescript"
     }
     fn extract(&self, ctx: &FileContext) -> ExtractOutput {
-        let Some(tree) = parse(ctx.source, is_tsx_path(ctx.rel_path)) else {
-            return ExtractOutput::default();
-        };
-        let root = tree.root_node();
-        let imports = imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
-        let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
-        w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
-        ExtractOutput {
-            nodes: w.nodes,
-            edges: w.edges,
-            imports,
-            calls: w.calls,
-        }
+        extract_module(ctx)
+    }
+}
+
+pub struct JavaScriptExtractor;
+
+impl Extractor for JavaScriptExtractor {
+    fn language(&self) -> &'static str {
+        "javascript"
+    }
+    fn extract(&self, ctx: &FileContext) -> ExtractOutput {
+        extract_module(ctx)
     }
 }
 
@@ -101,5 +118,22 @@ mod tests {
         let src = b"const x = <Foo>bar;\n";
         assert!(!parse(src, false).unwrap().root_node().has_error());
         assert!(parse(src, true).unwrap().root_node().has_error());
+    }
+
+    #[test]
+    fn javascript_extractor_handles_js() {
+        use reposkein_core::extractor::{Extractor, FileContext};
+        let src = b"export function f(a) { return a; }\nclass C { m() {} }\n";
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "m.js",
+            file_id: "rs1:r:file:m.js",
+            source: src,
+        };
+        let out = JavaScriptExtractor.extract(&ctx);
+        assert_eq!(JavaScriptExtractor.language(), "javascript");
+        assert!(out.nodes.iter().any(|n| n.id == "rs1:r:func:m.js#f@1"));
+        assert!(out.nodes.iter().any(|n| n.id == "rs1:r:class:m.js#C"));
+        assert!(out.nodes.iter().any(|n| n.id == "rs1:r:func:m.js#C.m@0"));
     }
 }
