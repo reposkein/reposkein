@@ -133,13 +133,15 @@ impl<'a> Walk<'a> {
                     let qualified = qual.join(".");
                     let id = self.class_id(&qualified);
 
+                    let span = &self.source[child.byte_range()];
                     self.nodes.push(
                         Node::new(id.clone(), "Class")
                             .set("name", json!(name))
                             .set("qualified_name", json!(qualified))
                             .set("file_path", json!(self.rel_path))
                             .set("start_line", json!(child.start_position().row + 1))
-                            .set("end_line", json!(child.end_position().row + 1)),
+                            .set("end_line", json!(child.end_position().row + 1))
+                            .set("content_hash", json!(content_hash(span))),
                     );
                     self.edges
                         .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
@@ -276,6 +278,14 @@ mod tests {
         assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.py#Foo"
             && e.typ == "INHERITS"
             && e.to == "rs1:r:class:m.py#Base"));
+    }
+
+    #[test]
+    fn class_has_content_hash() {
+        let src = b"class Foo:\n    x = 1\n";
+        let w = run(src);
+        let c = w.nodes.iter().find(|n| n.labels == ["Class"]).unwrap();
+        assert!(c.props.get("content_hash").and_then(|v| v.as_str()).is_some());
     }
 
     #[test]

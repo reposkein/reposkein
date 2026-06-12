@@ -193,13 +193,15 @@ impl<'a> Walk<'a> {
                     qual.push(name.clone());
                     let qualified = qual.join(".");
                     let id = self.class_id(&qualified);
+                    let span = &self.source[child.byte_range()];
                     self.nodes.push(
                         Node::new(id.clone(), "Class")
                             .set("name", json!(name))
                             .set("qualified_name", json!(qualified))
                             .set("file_path", json!(self.rel_path))
                             .set("start_line", json!(child.start_position().row + 1))
-                            .set("end_line", json!(child.end_position().row + 1)),
+                            .set("end_line", json!(child.end_position().row + 1))
+                            .set("content_hash", json!(content_hash(span))),
                     );
                     self.edges
                         .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
@@ -294,6 +296,13 @@ mod tests {
         let mut w = Walk::new("r", "m.ts", src);
         w.walk(tree.root_node(), &[], "rs1:r:file:m.ts", ScopeKind::Module);
         w
+    }
+
+    #[test]
+    fn class_has_content_hash() {
+        let w = run(b"class Svc { m() {} }\n");
+        let c = w.nodes.iter().find(|n| n.labels == ["Class"]).unwrap();
+        assert!(c.props.get("content_hash").and_then(|v| v.as_str()).is_some());
     }
 
     #[test]

@@ -113,13 +113,15 @@ impl<'a> Walk<'a> {
     }
 
     fn push_type(&mut self, id: String, label: &str, name: &str, node: TsNode, parent_id: &str) {
+        let span = &self.source[node.byte_range()];
         self.nodes.push(
             Node::new(id.clone(), label)
                 .set("name", json!(name))
                 .set("qualified_name", json!(name))
                 .set("file_path", json!(self.rel_path))
                 .set("start_line", json!(node.start_position().row + 1))
-                .set("end_line", json!(node.end_position().row + 1)),
+                .set("end_line", json!(node.end_position().row + 1))
+                .set("content_hash", json!(content_hash(span))),
         );
         self.edges
             .push(Edge::new(parent_id.to_string(), "DEFINES", id));
@@ -215,6 +217,13 @@ mod tests {
         let mut w = Walk::new("r", "m.rs", src);
         w.walk(tree.root_node(), "rs1:r:file:m.rs");
         w
+    }
+
+    #[test]
+    fn struct_has_content_hash() {
+        let w = run(b"struct Service { label: String }\n");
+        let c = w.nodes.iter().find(|n| n.labels == ["Class"]).unwrap();
+        assert!(c.props.get("content_hash").and_then(|v| v.as_str()).is_some());
     }
 
     #[test]
