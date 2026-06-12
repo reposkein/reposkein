@@ -1,10 +1,13 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Neo4jGraphStore } from "../src/store/Neo4jGraphStore.js";
 
 const gated = process.env.NEO4J_PASSWORD ? describe : describe.skip;
 
 gated("Neo4jGraphStore (integration)", () => {
-  const store = Neo4jGraphStore.fromEnv();
+  let store: Neo4jGraphStore;
+  beforeAll(() => {
+    store = Neo4jGraphStore.fromEnv();
+  });
   afterAll(async () => {
     await store.close();
   });

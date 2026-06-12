@@ -9,6 +9,7 @@ export interface ReadCypherArgs {
 }
 
 export interface ToolResult {
+  [key: string]: unknown;
   content: { type: "text"; text: string }[];
   isError?: boolean;
 }
