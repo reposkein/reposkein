@@ -136,7 +136,35 @@ impl<'a> Walk<'a> {
                     );
                     self.edges.push(Edge::new(parent_id.to_string(), "DEFINES", id));
                 }
-                // impl_item handled in Task 3
+                "impl_item" => {
+                    let ty = child
+                        .child_by_field_name("type")
+                        .map(|n| type_name(n, self.source))
+                        .unwrap_or_default();
+                    if ty.is_empty() {
+                        continue;
+                    }
+                    let class_id = self.class_id(&ty);
+                    // Trait impl → IMPLEMENTS.
+                    if let Some(tr) = child.child_by_field_name("trait") {
+                        let trait_name = type_name(tr, self.source);
+                        if !trait_name.is_empty() {
+                            self.edges.push(Edge::new(class_id.clone(), "IMPLEMENTS", self.iface_id(&trait_name)));
+                        }
+                    }
+                    // Methods attribute to the type.
+                    if let Some(body) = child.child_by_field_name("body") {
+                        let mut bc = body.walk();
+                        let methods: Vec<TsNode> = body.named_children(&mut bc).collect();
+                        for m in methods {
+                            if m.kind() == "function_item" {
+                                let mname = name_of(m, self.source);
+                                let qualified = format!("{ty}.{mname}");
+                                self.push_function(m, &qualified, &class_id);
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -153,6 +181,20 @@ mod tests {
         let mut w = Walk::new("r", "m.rs", src);
         w.walk(tree.root_node(), "rs1:r:file:m.rs");
         w
+    }
+
+    #[test]
+    fn impl_methods_attribute_to_type_and_trait_impl_implements() {
+        let src = b"struct Service;\ntrait Greeter {}\nimpl Service { fn run(&self, x: u32) -> u32 { x } }\nimpl Greeter for Service { fn greet(&self) {} }\n";
+        let w = run(src);
+        // Method run is qualified Service.run, DEFINES from the Service class node.
+        let m = w.nodes.iter().find(|n| n.props.get("qualified_name") == Some(&json!("Service.run"))).unwrap();
+        assert_eq!(m.id, "rs1:r:func:m.rs#Service.run@2"); // &self + x
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.rs#Service" && e.typ == "DEFINES" && e.to == m.id));
+        // greet from the trait impl, also under Service.
+        assert!(w.nodes.iter().any(|n| n.props.get("qualified_name") == Some(&json!("Service.greet"))));
+        // Service IMPLEMENTS Greeter.
+        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.rs#Service" && e.typ == "IMPLEMENTS" && e.to == "rs1:r:iface:m.rs#Greeter"));
     }
 
     #[test]
