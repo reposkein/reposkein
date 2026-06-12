@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Neo4jGraphStore } from "./store/Neo4jGraphStore.js";
 import { makeReadCypher } from "./tools/readCypher.js";
 import { makeGetContextProfile } from "./tools/getContextProfile.js";
+import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
 
 export async function main(): Promise<void> {
   const store = Neo4jGraphStore.fromEnv();
@@ -43,6 +44,21 @@ export async function main(): Promise<void> {
         },
       },
       async (args) => getContextProfile(args)
+    );
+    const writeSummary = makeWriteSemanticSummary(store, repoId);
+    server.registerTool(
+      "write_semantic_summary",
+      {
+        title: "Write semantic summary",
+        description:
+          "Attach a 1-3 sentence plain-text business-logic summary to a node, stamped with its current content hash for staleness tracking. Plain text only (no markdown links or code fences), max 1000 chars.",
+        inputSchema: {
+          node_id: z.string(),
+          summary: z.string(),
+          model: z.string().optional(),
+        },
+      },
+      async (args) => writeSummary(args)
     );
   } else {
     console.error("[reposkein-mcp] REPOSKEIN_REPO_ID not set; get_context_profile disabled");
