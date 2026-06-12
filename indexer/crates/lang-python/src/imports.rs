@@ -78,7 +78,8 @@ pub fn extract_imports(
                         for part in m.named_children(&mut mc) {
                             match part.kind() {
                                 "import_prefix" => {
-                                    level = text(part, source).chars().filter(|c| *c == '.').count();
+                                    level =
+                                        text(part, source).chars().filter(|c| *c == '.').count();
                                 }
                                 "dotted_name" => mod_parts = dotted_parts(part, source),
                                 _ => {}
@@ -102,9 +103,7 @@ pub fn extract_imports(
                     }
                     match name.kind() {
                         "dotted_name" => {
-                            if let Some(first) =
-                                dotted_parts(name, source).into_iter().next()
-                            {
+                            if let Some(first) = dotted_parts(name, source).into_iter().next() {
                                 symbols.push(first);
                             }
                         }
@@ -143,11 +142,15 @@ mod tests {
 
     #[test]
     fn absolute_and_relative_imports() {
-        let src = b"import a.b.c\nfrom x.y import z\nfrom .base import Base\nfrom ..pkg import thing\n";
+        let src =
+            b"import a.b.c\nfrom x.y import z\nfrom .base import Base\nfrom ..pkg import thing\n";
         let imps = imports_of(src, "app/svc.py");
 
         // import a.b.c
-        assert_eq!(imps[0].candidate_paths, vec!["a/b/c.py", "a/b/c/__init__.py"]);
+        assert_eq!(
+            imps[0].candidate_paths,
+            vec!["a/b/c.py", "a/b/c/__init__.py"]
+        );
         assert!(imps[0].symbols.is_empty());
 
         // from x.y import z
@@ -155,7 +158,10 @@ mod tests {
         assert_eq!(imps[1].symbols, vec!["z"]);
 
         // from .base import Base  (level 1: package = app/)
-        assert_eq!(imps[2].candidate_paths, vec!["app/base.py", "app/base/__init__.py"]);
+        assert_eq!(
+            imps[2].candidate_paths,
+            vec!["app/base.py", "app/base/__init__.py"]
+        );
         assert_eq!(imps[2].symbols, vec!["Base"]);
 
         // from ..pkg import thing (level 2 from app/svc.py: drop "app", → pkg)

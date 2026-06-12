@@ -31,8 +31,7 @@ impl Extractor for PythonExtractor {
             return ExtractOutput::default();
         };
         let root = tree.root_node();
-        let imports =
-            imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
+        let imports = imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.file_id, ctx.source);
         w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
         ExtractOutput {
@@ -103,7 +102,9 @@ mod tests {
         let out = PythonExtractor.extract(&ctx);
         assert_eq!(out.imports.len(), 1);
         assert_eq!(out.imports[0].symbols, vec!["Base"]);
-        assert!(out.calls.iter().any(|c| c.callee_name == "helper"
-            && c.caller_id == "rs1:r:func:app/svc.py#run@0"));
+        assert!(out
+            .calls
+            .iter()
+            .any(|c| c.callee_name == "helper" && c.caller_id == "rs1:r:func:app/svc.py#run@0"));
     }
 }

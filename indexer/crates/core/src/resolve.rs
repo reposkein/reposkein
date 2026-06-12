@@ -67,10 +67,7 @@ fn resolve_imports(
         }
         edges.push(edge);
         for sym in &imp.symbols {
-            sym_map.insert(
-                (imp.importing_file_id.clone(), sym.clone()),
-                target.clone(),
-            );
+            sym_map.insert((imp.importing_file_id.clone(), sym.clone()), target.clone());
         }
     }
     (edges, sym_map)
@@ -83,9 +80,9 @@ fn round2(x: f64) -> f64 {
 /// Resolves one call into zero or more (target_id, resolution, confidence).
 fn resolve_one(
     c: &RawCall,
-    by_name: &BTreeMap<String, Vec<String>>,            // name -> sorted func ids
+    by_name: &BTreeMap<String, Vec<String>>, // name -> sorted func ids
     by_file_name: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> ids
-    by_file_qual: &BTreeMap<(String, String), String>,  // (path,qualified) -> id
+    by_file_qual: &BTreeMap<(String, String), String>, // (path,qualified) -> id
     import_targets: &HashMap<(String, String), String>, // (importing_file_id, sym) -> path
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
@@ -107,9 +104,7 @@ fn resolve_one(
         if let Some(target_path) =
             import_targets.get(&(caller_file_id.to_string(), c.callee_name.clone()))
         {
-            if let Some(ids) =
-                by_file_name.get(&(target_path.clone(), c.callee_name.clone()))
-            {
+            if let Some(ids) = by_file_name.get(&(target_path.clone(), c.callee_name.clone())) {
                 return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
             }
         }
@@ -119,7 +114,9 @@ fn resolve_one(
                 vec![(ids[0].clone(), "name_match", 0.7)]
             } else {
                 let conf = round2(1.0 / ids.len() as f64);
-                ids.iter().map(|id| (id.clone(), "ambiguous", conf)).collect()
+                ids.iter()
+                    .map(|id| (id.clone(), "ambiguous", conf))
+                    .collect()
             };
         }
         return Vec::new();
@@ -130,7 +127,9 @@ fn resolve_one(
             vec![(ids[0].clone(), "name_match", 0.5)]
         } else {
             let conf = round2(1.0 / ids.len() as f64);
-            ids.iter().map(|id| (id.clone(), "ambiguous", conf)).collect()
+            ids.iter()
+                .map(|id| (id.clone(), "ambiguous", conf))
+                .collect()
         };
     }
     Vec::new()
@@ -145,7 +144,10 @@ pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &
     let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
     for f in &funcs {
-        by_name.entry(f.name.clone()).or_default().push(f.id.clone());
+        by_name
+            .entry(f.name.clone())
+            .or_default()
+            .push(f.id.clone());
         by_file_name
             .entry((f.file_path.clone(), f.name.clone()))
             .or_default()
@@ -202,18 +204,21 @@ mod tests {
 
     #[test]
     fn resolves_import_to_existing_file_with_symbols() {
-        let nodes = vec![
-            file_node("r", "app/svc.py"),
-            file_node("r", "app/base.py"),
-        ];
+        let nodes = vec![file_node("r", "app/svc.py"), file_node("r", "app/base.py")];
         let imports = vec![RawImport {
             importing_file_id: id::file_id("r", "app/svc.py"),
             importing_path: "app/svc.py".to_string(),
             symbols: vec!["Base".to_string()],
-            candidate_paths: vec!["app/base.py".to_string(), "app/base/__init__.py".to_string()],
+            candidate_paths: vec![
+                "app/base.py".to_string(),
+                "app/base/__init__.py".to_string(),
+            ],
         }];
         let edges = resolve(&nodes, &imports, &[], "r");
-        let e = edges.iter().find(|e| e.typ == "IMPORTS").expect("IMPORTS edge");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "IMPORTS")
+            .expect("IMPORTS edge");
         assert_eq!(e.from, id::file_id("r", "app/svc.py"));
         assert_eq!(e.to, id::file_id("r", "app/base.py"));
         assert_eq!(e.props["symbols"], json!(["Base"]));
@@ -241,7 +246,13 @@ mod tests {
             .set("file_path", json!(path))
     }
 
-    fn call(caller_id: &str, caller_path: &str, caller_q: &str, callee: &str, recv: Option<&str>) -> RawCall {
+    fn call(
+        caller_id: &str,
+        caller_path: &str,
+        caller_q: &str,
+        callee: &str,
+        recv: Option<&str>,
+    ) -> RawCall {
         RawCall {
             caller_id: caller_id.to_string(),
             caller_path: caller_path.to_string(),
@@ -293,5 +304,20 @@ mod tests {
         let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
         assert_eq!(e.to, m_callee.id);
         assert_eq!(e.props["resolution"], json!("exact"));
+    }
+
+    #[test]
+    fn resolution_is_deterministic() {
+        let caller = func_node("r", "m.py", "a", 0);
+        let t1 = func_node("r", "x.py", "run", 0);
+        let t2 = func_node("r", "y.py", "run", 0);
+        let nodes = vec![caller.clone(), t1, t2];
+        let calls = vec![
+            call(&caller.id, "m.py", "a", "run", None),
+            call(&caller.id, "m.py", "a", "run", None),
+        ];
+        let a = resolve(&nodes, &[], &calls, "r");
+        let b = resolve(&nodes, &[], &calls, "r");
+        assert_eq!(a, b);
     }
 }
