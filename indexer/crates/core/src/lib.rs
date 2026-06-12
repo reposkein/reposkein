@@ -5,6 +5,7 @@ pub mod extractor;
 pub mod hash;
 pub mod id;
 pub mod jsonl;
+pub mod merge;
 pub mod model;
 pub mod resolve;
 pub mod walk;
