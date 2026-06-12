@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli", "crates/lang-python"]
+members = ["crates/core", "crates/cli", "crates/lang-python", "crates/neo4j-io"]
 
 [workspace.package]
 version = "0.0.0"
@@ -19,3 +19,5 @@ tempfile = "3"
 assert_cmd = "2"
 tree-sitter = "0.26"
 tree-sitter-python = "0.25"
+neo4rs = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread"] }
