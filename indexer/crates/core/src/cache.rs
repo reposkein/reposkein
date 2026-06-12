@@ -50,6 +50,12 @@ impl FsExtractCache {
         let name = blake3::hash(rel_path.as_bytes()).to_hex().to_string();
         self.root.join(format!("{name}.json"))
     }
+
+    /// Removes the cache entry for a file, forcing a fresh extract on the next
+    /// index even if its content_hash is unchanged. Best-effort.
+    pub fn invalidate(&self, rel_path: &str) {
+        let _ = std::fs::remove_file(self.entry_path(rel_path));
+    }
 }
 
 impl ExtractCache for FsExtractCache {
@@ -148,5 +154,15 @@ mod tests {
         cache.put("r", "a.py", "h2", &edited);
         assert!(cache.get("r", "a.py", "h1").is_none());
         assert_eq!(cache.get("r", "a.py", "h2"), Some(edited));
+    }
+
+    #[test]
+    fn invalidate_forces_a_miss() {
+        let dir = tempdir().unwrap();
+        let cache = FsExtractCache::open(dir.path()).unwrap();
+        cache.put("r", "a.py", "h1", &sample());
+        assert!(cache.get("r", "a.py", "h1").is_some());
+        cache.invalidate("a.py");
+        assert!(cache.get("r", "a.py", "h1").is_none(), "invalidated entry must miss");
     }
 }
