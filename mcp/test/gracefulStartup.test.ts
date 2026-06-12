@@ -11,9 +11,11 @@ describe("graceful startup without NEO4J_PASSWORD", () => {
     await expect(store.runRead("MATCH (n) RETURN n")).rejects.toThrow(/Neo4j/i);
   });
 
-  it("UnconfiguredStore.runWrite rejects with a Neo4j configuration message", async () => {
+  it("UnconfiguredStore.writeSummary rejects with a Neo4j configuration message", async () => {
     const store = new UnconfiguredStore();
-    await expect(store.runWrite("CREATE (n) RETURN n")).rejects.toThrow(/Neo4j/i);
+    await expect(
+      store.writeSummary("repo", "id", { summary: "x", model: "m", at: "2026-06-12", by: "agent" })
+    ).rejects.toThrow(/Neo4j/i);
   });
 
   it("read_cypher with UnconfiguredStore returns isError mentioning Neo4j", async () => {
