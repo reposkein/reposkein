@@ -8,6 +8,29 @@ use reposkein_lang_python::PythonExtractor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const PRE_COMMIT: &str = r#"#!/bin/sh
+# RepoSkein: keep .reposkein JSONL in sync with the working tree on commit.
+BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
+if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
+  echo "reposkein: indexer not found; skipping graph export (commit continues)" >&2
+  exit 0
+fi
+"$BIN" index . >/dev/null 2>&1 || { echo "reposkein: index failed; skipping export" >&2; exit 0; }
+git add .reposkein/nodes.jsonl .reposkein/edges.jsonl >/dev/null 2>&1 || true
+exit 0
+"#;
+
+const POST_MERGE: &str = r#"#!/bin/sh
+# RepoSkein: import the merged graph into the local database (async, best-effort).
+BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
+if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
+  echo "reposkein: indexer not found; skipping graph import" >&2
+  exit 0
+fi
+( "$BIN" load . >/dev/null 2>&1 || echo "reposkein: graph import skipped (database unavailable)" >&2 ) &
+exit 0
+"#;
+
 #[derive(Parser)]
 #[command(
     name = "reposkein-indexer",
@@ -55,6 +78,14 @@ enum Commands {
     Purge {
         #[arg(long)]
         repo: String,
+    },
+    /// Install git hooks, .gitattributes merge lines, and the JSONL merge driver.
+    Init {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Install git hooks + merge driver (currently the only init action).
+        #[arg(long)]
+        hooks: bool,
     },
     /// Git merge driver for canonical JSONL: <base> <ours> <theirs>; result
     /// is written back to the <ours> path.
@@ -199,6 +230,63 @@ fn main() -> Result<()> {
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
             let n = store.purge(&repo)?;
             println!("purged {n} nodes for repo_id={repo}");
+            Ok(())
+        }
+        Commands::Init { path, hooks } => {
+            if !hooks {
+                println!("nothing to do (pass --hooks to install git hooks)");
+                return Ok(());
+            }
+            let hooks_dir = path.join(".git").join("hooks");
+            std::fs::create_dir_all(&hooks_dir).context("create .git/hooks (is this a git repo?)")?;
+            let write_hook = |name: &str, body: &str| -> Result<()> {
+                let p = hooks_dir.join(name);
+                std::fs::write(&p, body).with_context(|| format!("write hook {name}"))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+                }
+                Ok(())
+            };
+            write_hook("pre-commit", PRE_COMMIT)?;
+            write_hook("post-merge", POST_MERGE)?;
+            write_hook("post-checkout", POST_MERGE)?; // same action as post-merge
+
+            // .gitattributes (append idempotently).
+            let attrs_path = path.join(".gitattributes");
+            let existing = std::fs::read_to_string(&attrs_path).unwrap_or_default();
+            let lines = [
+                ".reposkein/nodes.jsonl merge=reposkein-jsonl",
+                ".reposkein/edges.jsonl merge=reposkein-jsonl",
+            ];
+            let mut attrs = existing.clone();
+            if !attrs.is_empty() && !attrs.ends_with('\n') {
+                attrs.push('\n');
+            }
+            for l in lines {
+                if !existing.contains(l) {
+                    attrs.push_str(l);
+                    attrs.push('\n');
+                }
+            }
+            std::fs::write(&attrs_path, attrs).context("write .gitattributes")?;
+
+            // Register the merge driver (kind inferred from filename at merge time).
+            let run_cfg = |k: &str, v: &str| {
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["config", k, v])
+                    .status()
+            };
+            run_cfg("merge.reposkein-jsonl.name", "RepoSkein canonical JSONL merge")?;
+            run_cfg(
+                "merge.reposkein-jsonl.driver",
+                "reposkein-indexer merge-jsonl %O %A %B",
+            )?;
+
+            println!("installed reposkein git hooks + merge driver in {}", path.display());
             Ok(())
         }
         Commands::MergeJsonl {
