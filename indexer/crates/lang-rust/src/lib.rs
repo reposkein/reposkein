@@ -20,11 +20,7 @@ impl Extractor for RustExtractor {
         };
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
         w.walk(tree.root_node(), ctx.file_id);
-        ExtractOutput {
-            nodes: w.nodes,
-            edges: w.edges,
-            ..Default::default()
-        }
+        ExtractOutput { nodes: w.nodes, edges: w.edges, calls: w.calls, ..Default::default() }
     }
 }
 
@@ -49,6 +45,16 @@ mod tests {
             tree.root_node().named_child(0).unwrap().kind(),
             "function_item"
         );
+    }
+
+    #[test]
+    fn extractor_surfaces_calls() {
+        use reposkein_core::extractor::{Extractor, FileContext};
+        let src = b"fn helper() -> u32 { 1 }\nstruct S;\nimpl S { fn run(&self) -> u32 { self.go() } fn go(&self) -> u32 { helper() } }";
+        let ctx = FileContext { repo: "r", rel_path: "m.rs", file_id: "rs1:r:file:m.rs", source: src };
+        let out = RustExtractor.extract(&ctx);
+        assert!(out.calls.iter().any(|c| c.callee_name == "go" && c.receiver.as_deref() == Some("self")));
+        assert!(out.calls.iter().any(|c| c.callee_name == "helper"));
     }
 
     #[test]

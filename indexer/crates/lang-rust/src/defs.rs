@@ -13,6 +13,7 @@ pub struct Walk<'a> {
     source: &'a [u8],
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    pub calls: Vec<reposkein_core::extractor::RawCall>,
     used: HashMap<String, u32>,
 }
 
@@ -69,6 +70,7 @@ impl<'a> Walk<'a> {
             source,
             nodes: Vec::new(),
             edges: Vec::new(),
+            calls: Vec::new(),
             used: HashMap::new(),
         }
     }
@@ -126,7 +128,10 @@ impl<'a> Walk<'a> {
                 .set("content_hash", json!(content_hash(span))),
         );
         self.edges
-            .push(Edge::new(parent_id.to_string(), "DEFINES", id));
+            .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
+        if let Some(body) = node.child_by_field_name("body") {
+            crate::calls::collect_calls(body, self.source, &id, qualified, self.rel_path, &mut self.calls);
+        }
     }
 
     fn push_type(&mut self, id: String, label: &str, name: &str, node: TsNode, parent_id: &str) {
