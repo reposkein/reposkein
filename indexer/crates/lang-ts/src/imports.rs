@@ -12,7 +12,8 @@ fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
 /// Normalizes a relative module specifier against the importing file's dir.
 /// Returns the base path (no extension), or None for bare/external specifiers.
 fn resolve_relative(importing_path: &str, specifier: &str) -> Option<String> {
-    if !(specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')) {
+    if !(specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/'))
+    {
         return None; // external/bare specifier
     }
     let mut parts: Vec<&str> = importing_path.split('/').collect();
@@ -124,7 +125,9 @@ mod tests {
         // "./base" → src/base.*, "react" skipped, "../lib/util" → lib/util.*
         assert_eq!(imps.len(), 2);
         assert_eq!(imps[0].candidate_paths[0], "src/base.ts");
-        assert!(imps[0].candidate_paths.contains(&"src/base/index.ts".to_string()));
+        assert!(imps[0]
+            .candidate_paths
+            .contains(&"src/base/index.ts".to_string()));
         assert_eq!(imps[0].symbols, vec!["Base"]);
         assert_eq!(imps[1].candidate_paths[0], "lib/util.ts");
         assert_eq!(imps[1].symbols, vec!["x"]);

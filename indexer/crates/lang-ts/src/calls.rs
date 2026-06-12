@@ -67,7 +67,8 @@ mod tests {
 
     #[test]
     fn collects_bare_member_and_this_calls() {
-        let src = b"class C { m() { this.go(); helper(); obj.run(); function inner(){ skip(); } } }";
+        let src =
+            b"class C { m() { this.go(); helper(); obj.run(); function inner(){ skip(); } } }";
         let tree = parse(src, false).unwrap();
         // Navigate to method m's body.
         let class = tree.root_node().named_child(0).unwrap();
@@ -76,8 +77,10 @@ mod tests {
         let mbody = method.child_by_field_name("body").unwrap();
         let mut calls = Vec::new();
         collect_calls(mbody, src, "cid", "C.m", "m.ts", &mut calls);
-        let pairs: Vec<(&str, Option<&str>)> =
-            calls.iter().map(|c| (c.callee_name.as_str(), c.receiver.as_deref())).collect();
+        let pairs: Vec<(&str, Option<&str>)> = calls
+            .iter()
+            .map(|c| (c.callee_name.as_str(), c.receiver.as_deref()))
+            .collect();
         assert!(pairs.contains(&("go", Some("this"))));
         assert!(pairs.contains(&("helper", None)));
         assert!(pairs.contains(&("run", Some("obj"))));

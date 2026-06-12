@@ -87,7 +87,10 @@ fn resolve_one(
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
-    if matches!(c.receiver.as_deref(), Some("self") | Some("cls") | Some("this")) {
+    if matches!(
+        c.receiver.as_deref(),
+        Some("self") | Some("cls") | Some("this")
+    ) {
         if let Some((class, _)) = c.caller_qualified.rsplit_once('.') {
             let target_q = format!("{class}.{}", c.callee_name);
             if let Some(id) = by_file_qual.get(&(c.caller_path.clone(), target_q)) {

@@ -3,6 +3,40 @@ use std::fs;
 use tempfile::tempdir;
 
 #[test]
+fn index_resolves_typescript_imports_and_calls() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/util.ts"),
+        b"export function helper(): number { return 1; }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/svc.ts"),
+        b"import { helper } from \"./util\";\nclass Svc {\n  run(): number { return this.go(); }\n  go(): number { return helper(); }\n}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args(["index", "--repo-id", "r", "--name", "d"])
+        .arg(root)
+        .assert()
+        .success();
+
+    let edges = fs::read_to_string(root.join(".reposkein/edges.jsonl")).unwrap();
+    // IMPORTS src/svc.ts -> src/util.ts
+    assert!(edges.contains(
+        r#""from":"rs1:r:file:src/svc.ts","type":"IMPORTS","to":"rs1:r:file:src/util.ts""#
+    ));
+    // CALLS: Svc.run -> Svc.go (this → exact); Svc.go -> helper (import-followed → exact)
+    assert!(edges.contains(r#""to":"rs1:r:func:src/util.ts#helper@0""#));
+    assert!(edges.contains(r#""type":"CALLS""#));
+    assert!(edges.contains(r#""resolution":"exact""#));
+}
+
+#[test]
 fn index_extracts_python_definitions() {
     let dir = tempdir().unwrap();
     let root = dir.path();

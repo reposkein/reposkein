@@ -23,7 +23,12 @@ impl Extractor for TypeScriptExtractor {
         let imports = imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
         w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
-        ExtractOutput { nodes: w.nodes, edges: w.edges, imports, calls: w.calls }
+        ExtractOutput {
+            nodes: w.nodes,
+            edges: w.edges,
+            imports,
+            calls: w.calls,
+        }
     }
 }
 
@@ -78,7 +83,12 @@ mod tests {
     fn extractor_surfaces_imports_and_calls() {
         use reposkein_core::extractor::{Extractor, FileContext};
         let src = b"import { helper } from \"./util\";\nfunction run() { return helper(); }\n";
-        let ctx = FileContext { repo: "r", rel_path: "src/svc.ts", file_id: "rs1:r:file:src/svc.ts", source: src };
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "src/svc.ts",
+            file_id: "rs1:r:file:src/svc.ts",
+            source: src,
+        };
         let out = TypeScriptExtractor.extract(&ctx);
         assert_eq!(out.imports.len(), 1);
         assert_eq!(out.imports[0].symbols, vec!["helper"]);
