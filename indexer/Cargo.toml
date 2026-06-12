@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/cli"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/reposkein/reposkein"
+
+[workspace.dependencies]
+anyhow = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"            # NOTE: do NOT enable "preserve_order"
+tempfile = "3"
+assert_cmd = "2"
