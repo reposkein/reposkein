@@ -87,6 +87,59 @@ pub fn edges_to_jsonl(edges: &[Edge]) -> String {
     out
 }
 
+use anyhow::{anyhow, Result};
+
+fn take_string(obj: &mut Map<String, Value>, key: &str) -> Result<String> {
+    match obj.remove(key) {
+        Some(Value::String(s)) => Ok(s),
+        _ => Err(anyhow!("missing or non-string field `{key}`")),
+    }
+}
+
+fn take_labels(obj: &mut Map<String, Value>) -> Result<Vec<String>> {
+    match obj.remove("labels") {
+        Some(Value::Array(a)) => Ok(a
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s),
+                _ => None,
+            })
+            .collect()),
+        _ => Err(anyhow!("missing or non-array `labels`")),
+    }
+}
+
+/// Parse canonical node JSONL back into Node records. Remaining keys become props.
+pub fn read_nodes(text: &str) -> Result<Vec<Node>> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut obj: Map<String, Value> = serde_json::from_str(line)?;
+        let id = take_string(&mut obj, "id")?;
+        let labels = take_labels(&mut obj)?;
+        out.push(Node { id, labels, props: obj });
+    }
+    Ok(out)
+}
+
+/// Parse canonical edge JSONL back into Edge records. Remaining keys become props.
+pub fn read_edges(text: &str) -> Result<Vec<Edge>> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut obj: Map<String, Value> = serde_json::from_str(line)?;
+        let from = take_string(&mut obj, "from")?;
+        let typ = take_string(&mut obj, "type")?;
+        let to = take_string(&mut obj, "to")?;
+        out.push(Edge { from, typ, to, props: obj });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +176,40 @@ mod tests {
         assert!(lines[0].contains("a.py"));
         assert!(lines[1].contains("b.py"));
         assert!(out.ends_with('\n'));
+    }
+
+    #[test]
+    fn nodes_round_trip_byte_identical() {
+        let nodes = vec![
+            Node::new("rs1:r:file:a.py", "File")
+                .set("path", json!("a.py"))
+                .set("content_hash", json!("abc"))
+                .set("language", json!("python")),
+            Node::new("rs1:r:func:a.py#f@2", "Function")
+                .set("qualified_name", json!("f"))
+                .set("start_line", json!(3)),
+        ];
+        let text = nodes_to_jsonl(&nodes);
+        let parsed = read_nodes(&text).unwrap();
+        assert_eq!(parsed, nodes);
+        assert_eq!(nodes_to_jsonl(&parsed), text); // byte-identical
+    }
+
+    #[test]
+    fn edges_round_trip_byte_identical() {
+        let edges = vec![
+            Edge::new("rs1:r:dir:.", "CONTAINS", "rs1:r:file:a.py"),
+            {
+                let mut e = Edge::new("rs1:r:func:a.py#f@0", "CALLS", "rs1:r:func:b.py#g@0");
+                e.props.insert("resolution".into(), json!("name_match"));
+                e.props.insert("confidence".into(), json!(0.7));
+                e.props.insert("call_sites".into(), json!(2));
+                e
+            },
+        ];
+        let text = edges_to_jsonl(&edges);
+        let parsed = read_edges(&text).unwrap();
+        assert_eq!(parsed, edges);
+        assert_eq!(edges_to_jsonl(&parsed), text);
     }
 }
