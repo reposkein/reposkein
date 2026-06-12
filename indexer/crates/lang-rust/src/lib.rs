@@ -3,6 +3,7 @@
 
 use tree_sitter::{Parser, Tree};
 
+pub mod calls;
 pub mod defs;
 
 use reposkein_core::extractor::{ExtractOutput, Extractor, FileContext};
