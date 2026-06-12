@@ -20,41 +20,27 @@ export function makeWriteSemanticSummary(store: GraphStore, repoId: string) {
       return { content: [{ type: "text", text: v.error }], isError: true };
     }
     try {
-      const rows = await store.runRead(
-        "MATCH (n:Rs {id:$id, repo_id:$repo}) " +
-          "RETURN n.content_hash AS chash, n.semantic_summary AS old, n.summary_of_hash AS oldhash",
-        { id: args.node_id, repo: repoId }
-      );
-      if (rows.length === 0) {
+      const res = await store.writeSummary(repoId, args.node_id, {
+        summary: v.value,
+        model: args.model ?? "unknown",
+        at: today(),
+        by: process.env.REPOSKEIN_AGENT ?? "agent",
+      });
+      if (res.kind === "not_found") {
         return {
           content: [{ type: "text", text: JSON.stringify({ error: "node not found" }) }],
           isError: true,
         };
       }
-      const row = rows[0]!;
-      if (row.chash === null || row.chash === undefined) {
+      if (res.kind === "no_content_hash") {
         return {
           content: [{ type: "text", text: JSON.stringify({ error: "node has no content_hash; not summarizable" }) }],
           isError: true,
         };
       }
-      const stale_replaced =
-        row.old != null && (row.oldhash ?? null) !== (row.chash ?? null);
-
-      await store.runWrite(
-        "MATCH (n:Rs {id:$id, repo_id:$repo}) " +
-          "SET n.semantic_summary=$s, n.summary_of_hash=n.content_hash, " +
-          "n.summary_model=$m, n.summary_at=$at, n.summary_by=$by",
-        {
-          id: args.node_id,
-          repo: repoId,
-          s: v.value,
-          m: args.model ?? "unknown",
-          at: today(),
-          by: process.env.REPOSKEIN_AGENT ?? "agent",
-        }
-      );
-      return { content: [{ type: "text", text: JSON.stringify({ ok: true, stale_replaced }) }] };
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true, stale_replaced: res.stale_replaced }) }],
+      };
     } catch (e) {
       return { content: [{ type: "text", text: (e as Error).message }], isError: true };
     }
