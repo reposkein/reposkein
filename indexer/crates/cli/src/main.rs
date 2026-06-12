@@ -67,6 +67,9 @@ enum Commands {
         path: PathBuf,
         #[arg(long)]
         repo_id: Option<String>,
+        /// Skip federation: load only this repo's JSONL (no child repos).
+        #[arg(long)]
+        no_federation: bool,
     },
     /// Export the repo's graph from Neo4j to .reposkein JSONL.
     Export {
@@ -214,6 +217,61 @@ fn compute_repo_id(root: &Path) -> String {
     blake3::hash(basis.as_bytes()).to_hex().to_string()[..12].to_string()
 }
 
+/// Loads a repo's JSONL into the DB (purge-then-import), then recurses into its
+/// federated children (proxy Repository nodes carrying `federated_repo_id` +
+/// `root_path`). JSONL-driven so it reconstructs purely from committed files.
+/// Returns (repos_loaded, nodes_loaded, edges_loaded).
+fn load_federation(
+    store: &reposkein_neo4j_io::Neo4jStore,
+    path: &Path,
+    repo_id: &str,
+    seen: &mut std::collections::BTreeSet<String>,
+    skipped: &mut Vec<String>,
+) -> Result<(u64, u64, u64)> {
+    if !seen.insert(repo_id.to_string()) {
+        return Ok((0, 0, 0)); // already loaded (cycle/diamond guard)
+    }
+    let dir = path.join(".reposkein");
+    let (nodes_txt, edges_txt) = match (
+        std::fs::read_to_string(dir.join("nodes.jsonl")),
+        std::fs::read_to_string(dir.join("edges.jsonl")),
+    ) {
+        (Ok(n), Ok(e)) => (n, e),
+        _ => {
+            skipped.push(path.display().to_string());
+            return Ok((0, 0, 0));
+        }
+    };
+    let nodes = reposkein_core::jsonl::read_nodes(&nodes_txt)?;
+    let edges = reposkein_core::jsonl::read_edges(&edges_txt)?;
+    store.purge(repo_id)?;
+    store.import_graph(
+        repo_id,
+        &reposkein_core::Graph {
+            nodes: nodes.clone(),
+            edges: edges.clone(),
+        },
+    )?;
+    let mut repos = 1u64;
+    let mut n = nodes.len() as u64;
+    let mut e = edges.len() as u64;
+    for node in &nodes {
+        if node.labels == ["Repository"] {
+            if let (Some(fed), Some(rp)) = (
+                node.props.get("federated_repo_id").and_then(|v| v.as_str()),
+                node.props.get("root_path").and_then(|v| v.as_str()),
+            ) {
+                let (cr, cn, ce) =
+                    load_federation(store, &path.join(rp), fed, seen, skipped)?;
+                repos += cr;
+                n += cn;
+                e += ce;
+            }
+        }
+    }
+    Ok((repos, n, e))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -300,25 +358,39 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Commands::Load { path, repo_id } => {
+        Commands::Load {
+            path,
+            repo_id,
+            no_federation,
+        } => {
             let repo = resolve_repo_id(&path, repo_id);
-            let dir = path.join(".reposkein");
-            let nodes_txt =
-                std::fs::read_to_string(dir.join("nodes.jsonl")).context("read nodes.jsonl")?;
-            let edges_txt =
-                std::fs::read_to_string(dir.join("edges.jsonl")).context("read edges.jsonl")?;
-            let graph = reposkein_core::Graph {
-                nodes: reposkein_core::jsonl::read_nodes(&nodes_txt)?,
-                edges: reposkein_core::jsonl::read_edges(&edges_txt)?,
-            };
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
-            store.purge(&repo)?;
-            store.import_graph(&repo, &graph)?;
-            println!(
-                "loaded repo_id={repo}: {} nodes, {} edges into Neo4j (clean rebuild)",
-                graph.nodes.len(),
-                graph.edges.len()
-            );
+            if no_federation {
+                let dir = path.join(".reposkein");
+                let nodes = reposkein_core::jsonl::read_nodes(
+                    &std::fs::read_to_string(dir.join("nodes.jsonl"))
+                        .context("read nodes.jsonl")?,
+                )?;
+                let edges = reposkein_core::jsonl::read_edges(
+                    &std::fs::read_to_string(dir.join("edges.jsonl"))
+                        .context("read edges.jsonl")?,
+                )?;
+                store.purge(&repo)?;
+                store.import_graph(&repo, &reposkein_core::Graph { nodes, edges })?;
+                println!("loaded repo_id={repo} (no federation)");
+            } else {
+                let mut seen = std::collections::BTreeSet::new();
+                let mut skipped = Vec::new();
+                let (repos, n, e) =
+                    load_federation(&store, &path, &repo, &mut seen, &mut skipped)?;
+                let stitches = store.stitch_federation()?;
+                for s in &skipped {
+                    eprintln!("reposkein: skipped (no .reposkein JSONL): {s}");
+                }
+                println!(
+                    "loaded {repos} repo(s): {n} nodes, {e} edges; {stitches} federation stitch(es)"
+                );
+            }
             Ok(())
         }
         Commands::Export {
