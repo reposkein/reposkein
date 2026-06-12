@@ -67,6 +67,23 @@ enum Commands {
         #[arg(long)]
         no_cache: bool,
     },
+    /// Reindex a repository (cache-accelerated). With --file, force-reparses
+    /// that one file. Output matches `index`.
+    Reindex {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Repo-relative path of the edited file to force-reparse.
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        repo_id: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        no_federation: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Load committed .reposkein JSONL into Neo4j (reconstruct the DB).
     Load {
         #[arg(default_value = ".")]
@@ -199,6 +216,142 @@ uri = "neo4j://localhost:7687"
 # credentials come from env (NEO4J_USER / NEO4J_PASSWORD), never committed
 "#;
 
+struct IndexRun {
+    repo: String,
+    repo_name: String,
+    files: usize,
+    nodes: usize,
+    edges: usize,
+    children: usize,
+    warnings: Vec<String>,
+}
+
+/// Shared index routine used by both `index` and `reindex`. When
+/// `invalidate_file` is Some, that file's extract-cache entry is removed first
+/// (forcing a fresh parse). Writes nodes/edges JSONL + the .reposkein layout.
+fn run_index(
+    path: &Path,
+    repo_id: Option<String>,
+    name: Option<String>,
+    no_federation: bool,
+    no_cache: bool,
+    invalidate_file: Option<&str>,
+) -> Result<IndexRun> {
+    let repo = resolve_repo_id(path, repo_id);
+    let repo_name = name.unwrap_or_else(|| {
+        path.canonicalize()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "repo".to_string())
+    });
+
+    let python = PythonExtractor;
+    let typescript = TypeScriptExtractor;
+    let javascript = JavaScriptExtractor;
+    let rust = RustExtractor;
+    let extractors: &[&dyn reposkein_core::extractor::Extractor] =
+        &[&python, &typescript, &javascript, &rust];
+
+    // Per-file extract cache under the git-ignored local/ dir.
+    let cache = if no_cache {
+        None
+    } else {
+        reposkein_core::cache::FsExtractCache::open(
+            path.join(".reposkein").join("local").join("cache").join("extract"),
+        )
+    };
+    // Force a fresh parse of the named file (reindex --file).
+    if let (Some(c), Some(f)) = (cache.as_ref(), invalidate_file) {
+        c.invalidate(f);
+    }
+    let opts = reposkein_core::IndexOptions {
+        federation: !no_federation,
+        cache: cache.as_ref().map(|c| c as &dyn reposkein_core::cache::ExtractCache),
+    };
+    let out = index_tree_with(path, &repo, &repo_name, extractors, opts)
+        .context("failed to index repository tree")?;
+
+    // Collision guard: a child repo_id must not equal the root's or a sibling's.
+    let mut seen = std::collections::BTreeSet::new();
+    for c in &out.children {
+        if c.repo_id == repo {
+            anyhow::bail!(
+                "federation: child '{}' has the same repo_id as the root ({}); re-index it after deleting its .reposkein/meta.json",
+                c.rel_path,
+                repo
+            );
+        }
+        if !seen.insert(c.repo_id.clone()) {
+            anyhow::bail!(
+                "federation: duplicate child repo_id '{}' (e.g. a copied repo dir); re-index the duplicate to mint a fresh id",
+                c.repo_id
+            );
+        }
+    }
+    for w in &out.warnings {
+        eprintln!("reposkein: {w}");
+    }
+    let graph = out.graph;
+
+    let files = graph.nodes.iter().filter(|n| n.labels == ["File"]).count();
+
+    let out_dir = path.join(".reposkein");
+    std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
+    let nodes_path = out_dir.join("nodes.jsonl");
+    // 1) Preserve summaries already committed in JSONL (hash-validated).
+    let mut nodes = if nodes_path.exists() {
+        let prev = std::fs::read_to_string(&nodes_path).context("read existing nodes.jsonl")?;
+        let existing = reposkein_core::jsonl::read_nodes(&prev)?;
+        reposkein_core::merge::graft_summaries(&graph.nodes, &existing)
+    } else {
+        graph.nodes.clone()
+    };
+    // 2) Overlay the live DB's summaries (PRD §9 Phase 3).
+    if let Some(db_nodes) = db_summary_nodes(&repo) {
+        nodes = reposkein_core::merge::graft_summaries(&nodes, &db_nodes);
+    }
+    // 3) Overlay JSONL-mode sidecar summaries.
+    let sidecar_path = out_dir.join("local").join("summaries.jsonl");
+    let had_sidecar = sidecar_path.exists();
+    if had_sidecar {
+        if let Ok(text) = std::fs::read_to_string(&sidecar_path) {
+            let sidecar_nodes = reposkein_core::jsonl::read_sidecar_summaries(&text);
+            nodes = reposkein_core::merge::graft_summaries(&nodes, &sidecar_nodes);
+        }
+    }
+    std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
+        .context("failed to write nodes.jsonl")?;
+    if had_sidecar {
+        let _ = std::fs::write(&sidecar_path, "");
+    }
+    std::fs::write(out_dir.join("edges.jsonl"), jsonl::edges_to_jsonl(&graph.edges))
+        .context("failed to write edges.jsonl")?;
+
+    write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
+
+    Ok(IndexRun {
+        repo,
+        repo_name,
+        files,
+        nodes: graph.nodes.len(),
+        edges: graph.edges.len(),
+        children: out.children.len(),
+        warnings: out.warnings,
+    })
+}
+
+fn index_stats_json(r: &IndexRun) -> String {
+    let stats = serde_json::json!({
+        "repo_id": r.repo,
+        "files": r.files,
+        "nodes": r.nodes,
+        "edges": r.edges,
+        "children": r.children,
+        "warnings": r.warnings,
+    });
+    serde_json::to_string(&stats).unwrap()
+}
+
 /// Writes meta.json, .reposkein/.gitignore, default config.toml (if absent),
 /// and the git-ignored local/ dir.
 fn write_reposkein_layout(out_dir: &Path, repo_id: &str) -> Result<()> {
@@ -327,124 +480,32 @@ fn main() -> Result<()> {
             json,
             no_cache,
         } => {
-            let repo = resolve_repo_id(&path, repo_id);
-            let repo_name = name.unwrap_or_else(|| {
-                path.canonicalize()
-                    .ok()
-                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-                    .unwrap_or_else(|| "repo".to_string())
-            });
-
-            let python = PythonExtractor;
-            let typescript = TypeScriptExtractor;
-            let javascript = JavaScriptExtractor;
-            let rust = RustExtractor;
-            let extractors: &[&dyn reposkein_core::extractor::Extractor] =
-                &[&python, &typescript, &javascript, &rust];
-            // Per-file extract cache lives under the git-ignored local/ dir.
-            // FsExtractCache::open creates the dir (it does not yet exist here,
-            // since write_reposkein_layout runs after indexing).
-            let cache = if no_cache {
-                None
-            } else {
-                reposkein_core::cache::FsExtractCache::open(
-                    path.join(".reposkein")
-                        .join("local")
-                        .join("cache")
-                        .join("extract"),
-                )
-            };
-            let opts = reposkein_core::IndexOptions {
-                federation: !no_federation,
-                cache: cache
-                    .as_ref()
-                    .map(|c| c as &dyn reposkein_core::cache::ExtractCache),
-            };
-            let out = index_tree_with(&path, &repo, &repo_name, extractors, opts)
-                .context("failed to index repository tree")?;
-
-            // Collision guard: a child repo_id must not equal the root's or a sibling's.
-            let mut seen = std::collections::BTreeSet::new();
-            for c in &out.children {
-                if c.repo_id == repo {
-                    anyhow::bail!(
-                        "federation: child '{}' has the same repo_id as the root ({}); re-index it after deleting its .reposkein/meta.json",
-                        c.rel_path,
-                        repo
-                    );
-                }
-                if !seen.insert(c.repo_id.clone()) {
-                    anyhow::bail!(
-                        "federation: duplicate child repo_id '{}' (e.g. a copied repo dir); re-index the duplicate to mint a fresh id",
-                        c.repo_id
-                    );
-                }
-            }
-            for w in &out.warnings {
-                eprintln!("reposkein: {w}");
-            }
-            let graph = out.graph;
-
-            let out_dir = path.join(".reposkein");
-            std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
-            let nodes_path = out_dir.join("nodes.jsonl");
-            // 1) Preserve summaries already committed in JSONL (hash-validated).
-            let mut nodes = if nodes_path.exists() {
-                let prev =
-                    std::fs::read_to_string(&nodes_path).context("read existing nodes.jsonl")?;
-                let existing = reposkein_core::jsonl::read_nodes(&prev)?;
-                reposkein_core::merge::graft_summaries(&graph.nodes, &existing)
-            } else {
-                graph.nodes.clone()
-            };
-            // 2) Overlay the live DB's summaries (the agent's latest, hash-valid)
-            //    so MCP-written summaries reach committed JSONL (PRD §9 Phase 3).
-            if let Some(db_nodes) = db_summary_nodes(&repo) {
-                nodes = reposkein_core::merge::graft_summaries(&nodes, &db_nodes);
-            }
-            // 3) Overlay JSONL-mode sidecar summaries (.reposkein/local/summaries.jsonl)
-            //    so zero-infra (no-DB) agent summaries also reach committed JSONL.
-            let sidecar_path = out_dir.join("local").join("summaries.jsonl");
-            let had_sidecar = sidecar_path.exists();
-            if had_sidecar {
-                if let Ok(text) = std::fs::read_to_string(&sidecar_path) {
-                    let sidecar_nodes = reposkein_core::jsonl::read_sidecar_summaries(&text);
-                    nodes = reposkein_core::merge::graft_summaries(&nodes, &sidecar_nodes);
-                }
-            }
-            std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
-                .context("failed to write nodes.jsonl")?;
-            // 4) Truncate the sidecar: its valid summaries are now in committed
-            //    nodes.jsonl (stale ones were intentionally dropped by graft).
-            //    Best-effort — a failure here never fails the index.
-            if had_sidecar {
-                let _ = std::fs::write(&sidecar_path, "");
-            }
-            std::fs::write(
-                out_dir.join("edges.jsonl"),
-                jsonl::edges_to_jsonl(&graph.edges),
-            )
-            .context("failed to write edges.jsonl")?;
-
-            write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
-
-            let files = graph.nodes.iter().filter(|n| n.labels == ["File"]).count();
+            let r = run_index(&path, repo_id, name, no_federation, no_cache, None)?;
             if json {
-                let stats = serde_json::json!({
-                    "repo_id": repo,
-                    "files": files,
-                    "nodes": graph.nodes.len(),
-                    "edges": graph.edges.len(),
-                    "children": out.children.len(),
-                    "warnings": out.warnings,
-                });
-                println!("{}", serde_json::to_string(&stats).unwrap());
+                println!("{}", index_stats_json(&r));
             } else {
                 println!(
-                    "indexed repo_id={repo} name={repo_name}: {} nodes, {} edges, {} federated children",
-                    graph.nodes.len(),
-                    graph.edges.len(),
-                    out.children.len()
+                    "indexed repo_id={} name={}: {} nodes, {} edges, {} federated children",
+                    r.repo, r.repo_name, r.nodes, r.edges, r.children
+                );
+            }
+            Ok(())
+        }
+        Commands::Reindex {
+            path,
+            file,
+            repo_id,
+            name,
+            no_federation,
+            json,
+        } => {
+            let r = run_index(&path, repo_id, name, no_federation, false, file.as_deref())?;
+            if json {
+                println!("{}", index_stats_json(&r));
+            } else {
+                println!(
+                    "reindexed repo_id={} name={}: {} nodes, {} edges, {} federated children",
+                    r.repo, r.repo_name, r.nodes, r.edges, r.children
                 );
             }
             Ok(())
