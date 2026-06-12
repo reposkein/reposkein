@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  indexer:
+    name: indexer (test + fmt + clippy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indexer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: indexer
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy (warnings = errors)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests (incl. determinism + JSONL round-trip invariants)
+        run: cargo test
+
+  indexer-neo4j-roundtrip:
+    name: indexer Neo4j round-trip (gated DB tests)
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/reposkeintest
+          NEO4J_server_memory_pagecache_size: 256M
+        ports:
+          - 7687:7687
+          - 7474:7474
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p reposkeintest 'RETURN 1'"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 12
+          --health-start-period 40s
+    defaults:
+      run:
+        working-directory: indexer
+    env:
+      NEO4J_URI: neo4j://localhost:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: reposkeintest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: indexer
+      - name: load -> export byte-identical round-trip (PRD §6.2.7)
+        run: cargo test -p reposkein-neo4j-io -- --ignored
+
+  mcp:
+    name: mcp (typecheck + build + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Tests (DB-gated suites skip without NEO4J_PASSWORD)
+        run: npm test
