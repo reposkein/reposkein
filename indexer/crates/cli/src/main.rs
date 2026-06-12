@@ -63,6 +63,9 @@ enum Commands {
         /// Emit a single JSON object with machine-readable stats instead of human text.
         #[arg(long)]
         json: bool,
+        /// Disable the per-file extract cache (always re-parse every file).
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Load committed .reposkein JSONL into Neo4j (reconstruct the DB).
     Load {
@@ -322,6 +325,7 @@ fn main() -> Result<()> {
             name,
             no_federation,
             json,
+            no_cache,
         } => {
             let repo = resolve_repo_id(&path, repo_id);
             let repo_name = name.unwrap_or_else(|| {
@@ -337,8 +341,19 @@ fn main() -> Result<()> {
             let rust = RustExtractor;
             let extractors: &[&dyn reposkein_core::extractor::Extractor] =
                 &[&python, &typescript, &javascript, &rust];
+            // Per-file extract cache lives under the git-ignored local/ dir.
+            // FsExtractCache::open creates the dir (it does not yet exist here,
+            // since write_reposkein_layout runs after indexing).
+            let cache = if no_cache {
+                None
+            } else {
+                reposkein_core::cache::FsExtractCache::open(
+                    path.join(".reposkein").join("local").join("cache").join("extract"),
+                )
+            };
             let opts = reposkein_core::IndexOptions {
                 federation: !no_federation,
+                cache: cache.as_ref().map(|c| c as &dyn reposkein_core::cache::ExtractCache),
             };
             let out = index_tree_with(&path, &repo, &repo_name, extractors, opts)
                 .context("failed to index repository tree")?;
