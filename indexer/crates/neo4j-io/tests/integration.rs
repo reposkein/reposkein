@@ -116,3 +116,53 @@ fn db_summary_grafts_onto_fresh_structure() {
 
     s.purge(repo).unwrap();
 }
+
+#[test]
+#[ignore]
+fn stitch_links_proxy_to_child_root() {
+    use reposkein_core::model::Node;
+    use serde_json::json;
+    let s = reposkein_neo4j_io::Neo4jStore::from_env().unwrap();
+    s.purge("fedroot").unwrap();
+    s.purge("fedchild").unwrap();
+
+    // Root graph: root repo node + a proxy pointing at the child.
+    let root_graph = reposkein_core::Graph {
+        nodes: vec![
+            Node::new("rs1:fedroot:repo:.", "Repository")
+                .set("root_path", json!("."))
+                .set("is_nested", json!(false)),
+            Node::new("rs1:fedroot:repo:vendor/c", "Repository")
+                .set("root_path", json!("vendor/c"))
+                .set("is_nested", json!(true))
+                .set("federated_repo_id", json!("fedchild")),
+        ],
+        edges: vec![],
+    };
+    s.import_graph("fedroot", &root_graph).unwrap();
+
+    // Child graph: its own root repo node.
+    let child_graph = reposkein_core::Graph {
+        nodes: vec![Node::new("rs1:fedchild:repo:.", "Repository")
+            .set("root_path", json!("."))
+            .set("is_nested", json!(false))],
+        edges: vec![],
+    };
+    s.import_graph("fedchild", &child_graph).unwrap();
+
+    let n = s.stitch_federation().unwrap();
+    assert!(n >= 1, "at least one stitch created");
+
+    // Verify the proxy -> child-root stitch exists via run_count.
+    let c = s
+        .run_count(
+            "MATCH (:Rs:Repository {id:'rs1:fedroot:repo:vendor/c'})\
+             -[r:FEDERATES_TO {stitched:true}]->\
+             (:Rs:Repository {id:'rs1:fedchild:repo:.'}) RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(c, 1, "exactly one stitch edge proxy->child-root");
+
+    s.purge("fedroot").unwrap();
+    s.purge("fedchild").unwrap();
+}

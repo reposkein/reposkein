@@ -83,4 +83,44 @@ impl Neo4jStore {
             }
         })
     }
+
+    /// Runs a Cypher query that returns a single `c` (count) column. Used in
+    /// tests and diagnostics; the query must RETURN an integer named `c`.
+    pub fn run_count(&self, cypher: &str) -> Result<i64> {
+        self.rt.block_on(async {
+            let mut r = self.graph.execute(query(cypher)).await?;
+            if let Ok(Some(row)) = r.next().await {
+                let c: i64 = row.get("c")?;
+                Ok(c)
+            } else {
+                Ok(0)
+            }
+        })
+    }
+
+    /// Creates DB-only `FEDERATES_TO {stitched:true}` edges from each proxy
+    /// Repository (carrying `federated_repo_id`) to the matching child-root
+    /// Repository (`root_path:'.'` with that repo_id). Idempotent (MERGE).
+    /// These cross repo_id boundaries, so export (both-endpoint scoping)
+    /// ignores them — the committed round-trip is unaffected. Returns the
+    /// number of stitch edges present after the call.
+    pub fn stitch_federation(&self) -> Result<u64> {
+        self.rt.block_on(async {
+            let mut r = self
+                .graph
+                .execute(query(
+                    "MATCH (p:Rs:Repository) WHERE p.federated_repo_id IS NOT NULL \
+                     MATCH (c:Rs:Repository {root_path: '.'}) WHERE c.repo_id = p.federated_repo_id \
+                     MERGE (p)-[s:FEDERATES_TO {stitched: true}]->(c) \
+                     RETURN count(s) AS c",
+                ))
+                .await?;
+            if let Ok(Some(row)) = r.next().await {
+                let c: i64 = row.get("c")?;
+                Ok(c as u64)
+            } else {
+                Ok(0)
+            }
+        })
+    }
 }
