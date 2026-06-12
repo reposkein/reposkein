@@ -37,6 +37,7 @@ export interface ContextProfile {
   downstream: NeighborEntry[];
   inlined_context: string;
   enrichment_needed: string[];
+  truncated?: { upstream: boolean; downstream: boolean };
 }
 
 export type ResolveResult =
