@@ -5,6 +5,7 @@ import { Neo4jGraphStore } from "./store/Neo4jGraphStore.js";
 import { makeReadCypher } from "./tools/readCypher.js";
 import { makeGetContextProfile } from "./tools/getContextProfile.js";
 import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
+import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
 
 export async function main(): Promise<void> {
   const store = Neo4jGraphStore.fromEnv();
@@ -59,6 +60,33 @@ export async function main(): Promise<void> {
         },
       },
       async (args) => writeSummary(args)
+    );
+
+    const initSkeleton = makeInitCpgSkeleton(repoId);
+    server.registerTool(
+      "init_cpg_skeleton",
+      {
+        title: "Build the code graph",
+        description:
+          "Index the repository with the native indexer and load it into the graph database. Run once on a fresh repo (or to rebuild). Returns node/edge counts.",
+        inputSchema: {
+          path: z.string().optional(),
+          full: z.boolean().optional(),
+        },
+      },
+      async (args) => initSkeleton(args)
+    );
+
+    const reindexFile = makeReindexFile(repoId);
+    server.registerTool(
+      "reindex_file",
+      {
+        title: "Reindex after editing",
+        description:
+          "Refresh the graph after editing a source file (pass its path). v1 performs a full reindex.",
+        inputSchema: { path: z.string() },
+      },
+      async (args) => reindexFile(args)
     );
   } else {
     console.error("[reposkein-mcp] REPOSKEIN_REPO_ID not set; get_context_profile disabled");
