@@ -1,1 +1,8 @@
 docs/prd.md
+
+# Generated indexer output — kept out of git during M0 until the schema and
+# merge driver stabilize (PRD §3, §6; revisit in the M3 plan).
+.reposkein/
+
+# Local-only working docs (plans, skill scratch) — never commit.
+docs/superpowers/

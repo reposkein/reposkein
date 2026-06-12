@@ -39,11 +39,7 @@ impl Node {
 }
 
 impl Edge {
-    pub fn new(
-        from: impl Into<String>,
-        typ: impl Into<String>,
-        to: impl Into<String>,
-    ) -> Self {
+    pub fn new(from: impl Into<String>, typ: impl Into<String>, to: impl Into<String>) -> Self {
         Edge {
             from: from.into(),
             typ: typ.into(),

@@ -73,8 +73,11 @@ pub fn nodes_to_jsonl(nodes: &[Node]) -> String {
 pub fn edges_to_jsonl(edges: &[Edge]) -> String {
     let mut sorted: Vec<&Edge> = edges.iter().collect();
     sorted.sort_by(|a, b| {
-        (a.from.as_str(), a.typ.as_str(), a.to.as_str())
-            .cmp(&(b.from.as_str(), b.typ.as_str(), b.to.as_str()))
+        (a.from.as_str(), a.typ.as_str(), a.to.as_str()).cmp(&(
+            b.from.as_str(),
+            b.typ.as_str(),
+            b.to.as_str(),
+        ))
     });
     let mut out = String::new();
     for e in sorted {

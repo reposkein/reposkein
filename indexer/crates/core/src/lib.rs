@@ -71,7 +71,11 @@ pub fn index_tree(root: &Path, repo: &str, repo_name: &str) -> Result<Graph> {
         }
     }
     for d in &dir_paths {
-        let name = if d == "." { ".".to_string() } else { basename_of(d) };
+        let name = if d == "." {
+            ".".to_string()
+        } else {
+            basename_of(d)
+        };
         nodes.push(
             Node::new(id::dir_id(repo, d), "Directory")
                 .set("path", json!(d))
@@ -162,7 +166,13 @@ mod tests {
         let dir = fixture();
         let g1 = index_tree(dir.path(), "r", "demo").unwrap();
         let g2 = index_tree(dir.path(), "r", "demo").unwrap();
-        assert_eq!(jsonl::nodes_to_jsonl(&g1.nodes), jsonl::nodes_to_jsonl(&g2.nodes));
-        assert_eq!(jsonl::edges_to_jsonl(&g1.edges), jsonl::edges_to_jsonl(&g2.edges));
+        assert_eq!(
+            jsonl::nodes_to_jsonl(&g1.nodes),
+            jsonl::nodes_to_jsonl(&g2.nodes)
+        );
+        assert_eq!(
+            jsonl::edges_to_jsonl(&g1.edges),
+            jsonl::edges_to_jsonl(&g2.edges)
+        );
     }
 }
