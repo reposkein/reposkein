@@ -432,7 +432,13 @@ fn main() -> Result<()> {
                         .context("read edges.jsonl")?,
                 )?;
                 store.purge(&repo)?;
-                store.import_graph(&repo, &reposkein_core::Graph { nodes: nodes.clone(), edges: edges.clone() })?;
+                store.import_graph(
+                    &repo,
+                    &reposkein_core::Graph {
+                        nodes: nodes.clone(),
+                        edges: edges.clone(),
+                    },
+                )?;
                 if json {
                     let stats = serde_json::json!({
                         "repo_id": repo,

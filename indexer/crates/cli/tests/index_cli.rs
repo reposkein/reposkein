@@ -303,8 +303,8 @@ fn index_json_flag_emits_parseable_stats() {
         .clone();
 
     let stdout = String::from_utf8(output).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim())
-        .expect("--json should emit parseable JSON");
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json should emit parseable JSON");
 
     assert_eq!(v["repo_id"], "jsontest", "repo_id in JSON");
     assert!(v["nodes"].as_u64().unwrap_or(0) > 0, "nodes > 0");
