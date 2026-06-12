@@ -19,7 +19,7 @@ export async function main(): Promise<void> {
     {
       title: "Read-only Cypher query",
       description:
-        "Run a read-only Cypher query against the RepoSkein graph. Writes are rejected. Filter by $repo_id to scope to the current repository. Results are capped (200 rows / 64KB).",
+        "Run a read-only Cypher query against the RepoSkein graph. Writes are rejected. Filter by `n.repo_id = $repo_id` (or `n.repo_id IN $repo_ids`); pass `federated: true` to span this repo and its nested repos via `$repo_ids`. Results are capped (200 rows / 64KB).",
       inputSchema: {
         query: z.string(),
         params: z.record(z.string(), z.unknown()).optional(),

@@ -53,4 +53,32 @@ describe("makeReadCypher", () => {
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toMatch(/SyntaxError/);
   });
+
+  it("injects singleton repo_ids by default", async () => {
+    const store = mockStore([]);
+    const handler = makeReadCypher(store, "repoA");
+    await handler({ query: "MATCH (n) RETURN n" });
+    expect(store.runRead).toHaveBeenCalledWith(
+      "MATCH (n) RETURN n",
+      expect.objectContaining({ repo_id: "repoA", repo_ids: ["repoA"] }),
+      expect.anything()
+    );
+  });
+
+  it("injects the federation set when federated:true", async () => {
+    // First runRead call is the federation enumeration; return a child id.
+    const calls: any[] = [];
+    const store: GraphStore = {
+      runRead: vi.fn(async (q: string, p: any) => {
+        calls.push({ q, p });
+        return q.includes("FEDERATES_TO") ? [{ id: "childB" }] : [];
+      }),
+      runWrite: vi.fn(async () => []),
+      close: vi.fn(async () => {}),
+    };
+    const handler = makeReadCypher(store, "repoA");
+    await handler({ query: "MATCH (n) RETURN n", federated: true });
+    const dataCall = calls.find((c) => !c.q.includes("FEDERATES_TO"));
+    expect(dataCall.p.repo_ids.sort()).toEqual(["childB", "repoA"]);
+  });
 });

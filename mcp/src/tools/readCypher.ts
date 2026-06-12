@@ -1,6 +1,7 @@
 import { assertReadOnly } from "../guard/readonly.js";
 import { applyCaps } from "../guard/caps.js";
 import type { GraphStore } from "../store/GraphStore.js";
+import { federationIds } from "../store/federation.js";
 
 export interface ReadCypherArgs {
   query: string;
@@ -27,7 +28,10 @@ export function makeReadCypher(store: GraphStore, repoId?: string) {
       };
     }
     const merged: Record<string, unknown> = { ...(params ?? {}) };
-    if (repoId !== undefined) merged.repo_id = repoId;
+    if (repoId !== undefined) {
+      merged.repo_id = repoId;
+      merged.repo_ids = args.federated ? await federationIds(store, repoId) : [repoId];
+    }
     try {
       const rows = await store.runRead(query, merged, { timeoutMs: 10_000 });
       const { rows: capped, truncated } = applyCaps(rows);
