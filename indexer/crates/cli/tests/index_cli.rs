@@ -3,6 +3,32 @@ use std::fs;
 use tempfile::tempdir;
 
 #[test]
+fn index_emits_meta_and_layout_and_reuses_repo_id() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("a.py"), b"def f():\n    return 1\n").unwrap();
+
+    // First index with an explicit repo id → meta.json records it.
+    Command::cargo_bin("reposkein-indexer").unwrap()
+        .args(["index", "--repo-id", "fixed123", "--name", "d"]).arg(root)
+        .assert().success();
+    let meta = fs::read_to_string(root.join(".reposkein/meta.json")).unwrap();
+    assert!(meta.contains(r#""repo_id":"fixed123""#));
+    assert!(meta.contains(r#""id_scheme":"rs1""#));
+    assert!(root.join(".reposkein/.gitignore").exists());
+    assert!(root.join(".reposkein/config.toml").exists());
+    assert!(root.join(".reposkein/local").is_dir());
+
+    // Re-index WITHOUT --repo-id → repo_id is read from meta.json (stable),
+    // so the file node id keeps the same repo segment.
+    Command::cargo_bin("reposkein-indexer").unwrap()
+        .args(["index", "--name", "d"]).arg(root)
+        .assert().success();
+    let nodes = fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap();
+    assert!(nodes.contains("rs1:fixed123:file:a.py"), "repo_id reused from meta.json");
+}
+
+#[test]
 fn index_extracts_rust_definitions() {
     let dir = tempdir().unwrap();
     let root = dir.path();

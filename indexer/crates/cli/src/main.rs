@@ -133,6 +133,44 @@ pub(crate) fn normalize_remote(raw: &str) -> String {
     s
 }
 
+/// repo_id resolution order: explicit flag → committed meta.json → computed.
+fn resolve_repo_id(path: &Path, flag: Option<String>) -> String {
+    if let Some(id) = flag {
+        return id;
+    }
+    let meta = path.join(".reposkein").join("meta.json");
+    if let Ok(text) = std::fs::read_to_string(&meta) {
+        if let Some(id) = reposkein_core::meta::repo_id_from_meta(&text) {
+            return id;
+        }
+    }
+    compute_repo_id(path)
+}
+
+const DEFAULT_CONFIG_TOML: &str = r#"# RepoSkein configuration (committed; no secrets).
+schema_version = 1
+
+[languages]
+enabled = ["python", "typescript", "rust"]
+
+[neo4j]
+uri = "neo4j://localhost:7687"
+# credentials come from env (NEO4J_USER / NEO4J_PASSWORD), never committed
+"#;
+
+/// Writes meta.json, .reposkein/.gitignore, default config.toml (if absent),
+/// and the git-ignored local/ dir.
+fn write_reposkein_layout(out_dir: &Path, repo_id: &str) -> Result<()> {
+    std::fs::write(out_dir.join("meta.json"), reposkein_core::meta::meta_json(repo_id))?;
+    std::fs::write(out_dir.join(".gitignore"), "local/\n")?;
+    std::fs::create_dir_all(out_dir.join("local"))?;
+    let cfg = out_dir.join("config.toml");
+    if !cfg.exists() {
+        std::fs::write(cfg, DEFAULT_CONFIG_TOML)?;
+    }
+    Ok(())
+}
+
 /// repo_id = BLAKE3(first_commit_hash + "\n" + normalized_origin_url), 12 hex chars.
 /// Falls back to a hash of the absolute root path when git is unavailable.
 fn compute_repo_id(root: &Path) -> String {
@@ -163,7 +201,7 @@ fn main() -> Result<()> {
             repo_id,
             name,
         } => {
-            let repo = repo_id.unwrap_or_else(|| compute_repo_id(&path));
+            let repo = resolve_repo_id(&path, repo_id);
             let repo_name = name.unwrap_or_else(|| {
                 path.canonicalize()
                     .ok()
@@ -198,6 +236,8 @@ fn main() -> Result<()> {
             )
             .context("failed to write edges.jsonl")?;
 
+            write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
+
             println!(
                 "indexed repo_id={repo} name={repo_name}: {} nodes, {} edges",
                 graph.nodes.len(),
@@ -206,7 +246,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Commands::Load { path, repo_id } => {
-            let repo = repo_id.unwrap_or_else(|| compute_repo_id(&path));
+            let repo = resolve_repo_id(&path, repo_id);
             let dir = path.join(".reposkein");
             let nodes_txt =
                 std::fs::read_to_string(dir.join("nodes.jsonl")).context("read nodes.jsonl")?;
@@ -230,7 +270,7 @@ fn main() -> Result<()> {
             repo_id,
             full: _,
         } => {
-            let repo = repo_id.unwrap_or_else(|| compute_repo_id(&path));
+            let repo = resolve_repo_id(&path, repo_id);
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
             let graph = store.export_graph(&repo)?;
             let dir = path.join(".reposkein");
