@@ -130,10 +130,10 @@ fn main() -> Result<()> {
         Commands::Load { path, repo_id } => {
             let repo = repo_id.unwrap_or_else(|| compute_repo_id(&path));
             let dir = path.join(".reposkein");
-            let nodes_txt = std::fs::read_to_string(dir.join("nodes.jsonl"))
-                .context("read nodes.jsonl")?;
-            let edges_txt = std::fs::read_to_string(dir.join("edges.jsonl"))
-                .context("read edges.jsonl")?;
+            let nodes_txt =
+                std::fs::read_to_string(dir.join("nodes.jsonl")).context("read nodes.jsonl")?;
+            let edges_txt =
+                std::fs::read_to_string(dir.join("edges.jsonl")).context("read edges.jsonl")?;
             let graph = reposkein_core::Graph {
                 nodes: reposkein_core::jsonl::read_nodes(&nodes_txt)?,
                 edges: reposkein_core::jsonl::read_edges(&edges_txt)?,
@@ -147,14 +147,24 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Commands::Export { path, repo_id, full: _ } => {
+        Commands::Export {
+            path,
+            repo_id,
+            full: _,
+        } => {
             let repo = repo_id.unwrap_or_else(|| compute_repo_id(&path));
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
             let graph = store.export_graph(&repo)?;
             let dir = path.join(".reposkein");
             std::fs::create_dir_all(&dir)?;
-            std::fs::write(dir.join("nodes.jsonl"), reposkein_core::jsonl::nodes_to_jsonl(&graph.nodes))?;
-            std::fs::write(dir.join("edges.jsonl"), reposkein_core::jsonl::edges_to_jsonl(&graph.edges))?;
+            std::fs::write(
+                dir.join("nodes.jsonl"),
+                reposkein_core::jsonl::nodes_to_jsonl(&graph.nodes),
+            )?;
+            std::fs::write(
+                dir.join("edges.jsonl"),
+                reposkein_core::jsonl::edges_to_jsonl(&graph.edges),
+            )?;
             println!(
                 "exported repo_id={repo}: {} nodes, {} edges",
                 graph.nodes.len(),
@@ -165,7 +175,10 @@ fn main() -> Result<()> {
         Commands::Doctor => {
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
             let r = store.doctor()?;
-            println!("neo4j reachable={} version={} edition={}", r.reachable, r.version, r.edition);
+            println!(
+                "neo4j reachable={} version={} edition={}",
+                r.reachable, r.version, r.edition
+            );
             Ok(())
         }
         Commands::Purge { repo } => {

@@ -60,7 +60,11 @@ impl Neo4jStore {
                     rows.push(BoltType::Map(row));
                 }
                 self.graph
-                    .run(query(&q).param("rows", BoltType::List(rows)).param("repo", repo))
+                    .run(
+                        query(&q)
+                            .param("rows", BoltType::List(rows))
+                            .param("repo", repo),
+                    )
                     .await?;
             }
 

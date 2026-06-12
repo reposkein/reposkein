@@ -50,9 +50,17 @@ impl Neo4jStore {
             if let Ok(Some(row)) = r.next().await {
                 let version: String = row.get("version")?;
                 let edition: String = row.get("edition")?;
-                Ok(DoctorReport { reachable: true, version, edition })
+                Ok(DoctorReport {
+                    reachable: true,
+                    version,
+                    edition,
+                })
             } else {
-                Ok(DoctorReport { reachable: false, version: String::new(), edition: String::new() })
+                Ok(DoctorReport {
+                    reachable: false,
+                    version: String::new(),
+                    edition: String::new(),
+                })
             }
         })
     }

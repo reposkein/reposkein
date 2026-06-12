@@ -119,7 +119,11 @@ pub fn read_nodes(text: &str) -> Result<Vec<Node>> {
         let mut obj: Map<String, Value> = serde_json::from_str(line)?;
         let id = take_string(&mut obj, "id")?;
         let labels = take_labels(&mut obj)?;
-        out.push(Node { id, labels, props: obj });
+        out.push(Node {
+            id,
+            labels,
+            props: obj,
+        });
     }
     Ok(out)
 }
@@ -135,7 +139,12 @@ pub fn read_edges(text: &str) -> Result<Vec<Edge>> {
         let from = take_string(&mut obj, "from")?;
         let typ = take_string(&mut obj, "type")?;
         let to = take_string(&mut obj, "to")?;
-        out.push(Edge { from, typ, to, props: obj });
+        out.push(Edge {
+            from,
+            typ,
+            to,
+            props: obj,
+        });
     }
     Ok(out)
 }
@@ -197,16 +206,13 @@ mod tests {
 
     #[test]
     fn edges_round_trip_byte_identical() {
-        let edges = vec![
-            Edge::new("rs1:r:dir:.", "CONTAINS", "rs1:r:file:a.py"),
-            {
-                let mut e = Edge::new("rs1:r:func:a.py#f@0", "CALLS", "rs1:r:func:b.py#g@0");
-                e.props.insert("resolution".into(), json!("name_match"));
-                e.props.insert("confidence".into(), json!(0.7));
-                e.props.insert("call_sites".into(), json!(2));
-                e
-            },
-        ];
+        let edges = vec![Edge::new("rs1:r:dir:.", "CONTAINS", "rs1:r:file:a.py"), {
+            let mut e = Edge::new("rs1:r:func:a.py#f@0", "CALLS", "rs1:r:func:b.py#g@0");
+            e.props.insert("resolution".into(), json!("name_match"));
+            e.props.insert("confidence".into(), json!(0.7));
+            e.props.insert("call_sites".into(), json!(2));
+            e
+        }];
         let text = edges_to_jsonl(&edges);
         let parsed = read_edges(&text).unwrap();
         assert_eq!(parsed, edges);

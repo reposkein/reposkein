@@ -29,7 +29,11 @@ fn db_round_trip_is_byte_identical() {
     // Build a small graph from a temp Python tree.
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("app")).unwrap();
-    fs::write(dir.path().join("app/base.py"), b"def helper():\n    return 1\n").unwrap();
+    fs::write(
+        dir.path().join("app/base.py"),
+        b"def helper():\n    return 1\n",
+    )
+    .unwrap();
     fs::write(
         dir.path().join("app/svc.py"),
         b"from app.base import helper\n\ndef run():\n    return helper()\n",
@@ -45,8 +49,16 @@ fn db_round_trip_is_byte_identical() {
     s.import_graph(repo, &g).unwrap();
     let g2 = s.export_graph(repo).unwrap();
 
-    assert_eq!(jsonl::nodes_to_jsonl(&g2.nodes), nodes_before, "nodes round-trip");
-    assert_eq!(jsonl::edges_to_jsonl(&g2.edges), edges_before, "edges round-trip");
+    assert_eq!(
+        jsonl::nodes_to_jsonl(&g2.nodes),
+        nodes_before,
+        "nodes round-trip"
+    );
+    assert_eq!(
+        jsonl::edges_to_jsonl(&g2.edges),
+        edges_before,
+        "edges round-trip"
+    );
 
     s.purge(repo).unwrap();
 }

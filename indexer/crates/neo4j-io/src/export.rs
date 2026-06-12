@@ -65,7 +65,12 @@ impl Neo4jStore {
                 let to: String = row.get("to")?;
                 let props_bolt: BoltType = row.get("props")?;
                 let props = bolt_map_to_props(&props_bolt, &[]);
-                edges.push(Edge { from, typ, to, props });
+                edges.push(Edge {
+                    from,
+                    typ,
+                    to,
+                    props,
+                });
             }
 
             Ok(Graph { nodes, edges })
