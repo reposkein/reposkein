@@ -3,6 +3,26 @@ use std::fs;
 use tempfile::tempdir;
 
 #[test]
+fn merge_jsonl_infers_kind_from_filename() {
+    let dir = tempdir().unwrap();
+    let p = |name: &str| dir.path().join(name);
+    let e = r#"{"from":"a","type":"CALLS","to":"b"}"#;
+    fs::write(p("edges.base"), format!("{e}\n")).unwrap();
+    fs::write(p("edges.jsonl"), format!("{e}\n")).unwrap(); // "ours" path contains "edges"
+    fs::write(p("edges.theirs"), format!("{e}\n")).unwrap();
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .arg("merge-jsonl") // no --kind
+        .arg(p("edges.base"))
+        .arg(p("edges.jsonl"))
+        .arg(p("edges.theirs"))
+        .assert()
+        .success();
+    let merged = fs::read_to_string(p("edges.jsonl")).unwrap();
+    assert!(merged.contains(r#""type":"CALLS""#));
+}
+
+#[test]
 fn merge_jsonl_unions_independent_summaries() {
     let dir = tempdir().unwrap();
     let p = |name: &str| dir.path().join(name);

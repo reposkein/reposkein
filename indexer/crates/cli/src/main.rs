@@ -60,7 +60,7 @@ enum Commands {
     /// is written back to the <ours> path.
     MergeJsonl {
         #[arg(long, value_parser = ["nodes", "edges"])]
-        kind: String,
+        kind: Option<String>,
         base: PathBuf,
         ours: PathBuf,
         theirs: PathBuf,
@@ -211,6 +211,13 @@ fn main() -> Result<()> {
                 std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))
             };
             let (b, o, t) = (read(&base)?, read(&ours)?, read(&theirs)?);
+            let kind = kind.unwrap_or_else(|| {
+                if ours.to_string_lossy().contains("edges") {
+                    "edges".to_string()
+                } else {
+                    "nodes".to_string()
+                }
+            });
             let merged = match kind.as_str() {
                 "nodes" => {
                     let m = reposkein_core::merge::merge_nodes(
