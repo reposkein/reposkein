@@ -56,6 +56,15 @@ enum Commands {
         #[arg(long)]
         repo: String,
     },
+    /// Git merge driver for canonical JSONL: <base> <ours> <theirs>; result
+    /// is written back to the <ours> path.
+    MergeJsonl {
+        #[arg(long, value_parser = ["nodes", "edges"])]
+        kind: String,
+        base: PathBuf,
+        ours: PathBuf,
+        theirs: PathBuf,
+    },
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
@@ -185,6 +194,33 @@ fn main() -> Result<()> {
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
             let n = store.purge(&repo)?;
             println!("purged {n} nodes for repo_id={repo}");
+            Ok(())
+        }
+        Commands::MergeJsonl { kind, base, ours, theirs } => {
+            let read = |p: &PathBuf| -> Result<String> {
+                std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))
+            };
+            let (b, o, t) = (read(&base)?, read(&ours)?, read(&theirs)?);
+            let merged = match kind.as_str() {
+                "nodes" => {
+                    let m = reposkein_core::merge::merge_nodes(
+                        &reposkein_core::jsonl::read_nodes(&b)?,
+                        &reposkein_core::jsonl::read_nodes(&o)?,
+                        &reposkein_core::jsonl::read_nodes(&t)?,
+                    );
+                    reposkein_core::jsonl::nodes_to_jsonl(&m)
+                }
+                "edges" => {
+                    let m = reposkein_core::merge::merge_edges(
+                        &reposkein_core::jsonl::read_edges(&b)?,
+                        &reposkein_core::jsonl::read_edges(&o)?,
+                        &reposkein_core::jsonl::read_edges(&t)?,
+                    );
+                    reposkein_core::jsonl::edges_to_jsonl(&m)
+                }
+                _ => unreachable!("clap restricts kind"),
+            };
+            std::fs::write(&ours, merged).with_context(|| format!("write {}", ours.display()))?;
             Ok(())
         }
     }
