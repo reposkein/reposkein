@@ -18,7 +18,7 @@ pub enum ScopeKind {
 pub struct Walk<'a> {
     repo: &'a str,
     rel_path: &'a str,
-    file_id: &'a str,
+    _file_id: &'a str,
     source: &'a [u8],
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -45,7 +45,7 @@ impl<'a> Walk<'a> {
         Walk {
             repo,
             rel_path,
-            file_id,
+            _file_id: file_id,
             source,
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -143,11 +143,7 @@ impl<'a> Walk<'a> {
                             if base.kind() == "identifier" {
                                 let base_name = text(base, self.source);
                                 let base_id = self.class_id(base_name);
-                                self.edges.push(Edge::new(
-                                    id.clone(),
-                                    "INHERITS",
-                                    base_id,
-                                ));
+                                self.edges.push(Edge::new(id.clone(), "INHERITS", base_id));
                             }
                         }
                     }
@@ -171,7 +167,9 @@ impl<'a> Walk<'a> {
                                     let qualified = qual.join(".");
                                     let kind = if scope_kind == ScopeKind::Class {
                                         "class"
-                                    } else if name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+                                    } else if name
+                                        .chars()
+                                        .all(|c| c.is_ascii_uppercase() || c == '_')
                                         && name.chars().any(|c| c.is_ascii_uppercase())
                                     {
                                         "const"
@@ -239,7 +237,8 @@ mod tests {
 
     #[test]
     fn extracts_class_methods_and_inherits() {
-        let src = b"class Base:\n    pass\n\nclass Foo(Base):\n    def m(self, x):\n        return x\n";
+        let src =
+            b"class Base:\n    pass\n\nclass Foo(Base):\n    def m(self, x):\n        return x\n";
         let w = run(src);
 
         let class_ids: Vec<&str> = w
@@ -258,9 +257,10 @@ mod tests {
             .find(|n| n.labels == ["Function"] && n.props["qualified_name"] == json!("Foo.m"))
             .unwrap();
         assert_eq!(m.id, "rs1:r:func:m.py#Foo.m@2");
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.py#Foo"
-            && e.typ == "DEFINES"
-            && e.to == m.id));
+        assert!(w
+            .edges
+            .iter()
+            .any(|e| e.from == "rs1:r:class:m.py#Foo" && e.typ == "DEFINES" && e.to == m.id));
 
         // Foo INHERITS Base (resolved intra-file).
         assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.py#Foo"

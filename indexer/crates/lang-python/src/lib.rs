@@ -3,7 +3,7 @@
 
 pub mod defs;
 
-use tree_sitter::{Node as TsNode, Parser, Tree};
+use tree_sitter::{Parser, Tree};
 
 /// Parses Python source into a Tree-sitter CST. Returns None on parser-setup
 /// failure (should not happen with a pinned grammar).
@@ -13,11 +13,6 @@ pub fn parse(source: &[u8]) -> Option<Tree> {
         .set_language(&tree_sitter_python::LANGUAGE.into())
         .ok()?;
     parser.parse(source, None)
-}
-
-/// Returns the text of a node as a string slice of `source`.
-fn node_text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
-    node.utf8_text(source).unwrap_or("")
 }
 
 use reposkein_core::extractor::{ExtractOutput, Extractor, FileContext};
@@ -34,12 +29,7 @@ impl Extractor for PythonExtractor {
             return ExtractOutput::default();
         };
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.file_id, ctx.source);
-        w.walk(
-            tree.root_node(),
-            &[],
-            ctx.file_id,
-            defs::ScopeKind::Module,
-        );
+        w.walk(tree.root_node(), &[], ctx.file_id, defs::ScopeKind::Module);
         ExtractOutput {
             nodes: w.nodes,
             edges: w.edges,
@@ -58,10 +48,24 @@ mod tests {
         assert_eq!(tree.root_node().kind(), "module");
         let func = tree.root_node().named_child(0).unwrap();
         assert_eq!(func.kind(), "function_definition");
-        assert_eq!(
-            node_text(func.child_by_field_name("name").unwrap(), src),
-            "foo"
-        );
+        let name_node = func.child_by_field_name("name").unwrap();
+        assert_eq!(name_node.utf8_text(src).unwrap(), "foo");
+    }
+
+    #[test]
+    fn extraction_is_deterministic() {
+        use reposkein_core::extractor::{Extractor, FileContext};
+        let src = b"class A:\n    def m(self):\n        pass\ndef f():\n    pass\n";
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "m.py",
+            file_id: "rs1:r:file:m.py",
+            source: src,
+        };
+        let a = PythonExtractor.extract(&ctx);
+        let b = PythonExtractor.extract(&ctx);
+        assert_eq!(a.nodes, b.nodes);
+        assert_eq!(a.edges, b.edges);
     }
 
     #[test]

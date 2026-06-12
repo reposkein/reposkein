@@ -121,11 +121,7 @@ pub fn index_tree(
             }
             nodes.push(file);
 
-            edges.push(Edge::new(
-                parent_node,
-                "CONTAINS",
-                file_id.clone(),
-            ));
+            edges.push(Edge::new(parent_node, "CONTAINS", file_id.clone()));
 
             if let Some(ext_impl) = extractors.iter().find(|x| x.language() == language) {
                 let ctx = FileContext {
