@@ -27,15 +27,26 @@ fn resolve_relative(importing_path: &str, specifier: &str) -> Option<String> {
             s => parts.push(s),
         }
     }
-    Some(parts.join("/"))
+    let base = parts.join("/");
+    // Strip an explicit module extension from the specifier (NodeNext: "./x.js").
+    for ext in [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] {
+        if let Some(stripped) = base.strip_suffix(ext) {
+            return Some(stripped.to_string());
+        }
+    }
+    Some(base)
 }
 
 fn candidates(base: &str) -> Vec<String> {
     vec![
         format!("{base}.ts"),
         format!("{base}.tsx"),
+        format!("{base}.js"),
+        format!("{base}.jsx"),
         format!("{base}/index.ts"),
         format!("{base}/index.tsx"),
+        format!("{base}/index.js"),
+        format!("{base}/index.jsx"),
     ]
 }
 
@@ -131,5 +142,18 @@ mod tests {
         assert_eq!(imps[0].symbols, vec!["Base"]);
         assert_eq!(imps[1].candidate_paths[0], "lib/util.ts");
         assert_eq!(imps[1].symbols, vec!["x"]);
+    }
+
+    #[test]
+    fn resolves_js_candidates_and_strips_explicit_extension() {
+        // NodeNext-style explicit .js specifier + a plain relative import.
+        let src = b"import { a } from \"./util.js\";\nimport { b } from \"./helpers\";\n";
+        let imps = imports_of(src, "src/app.ts");
+        // "./util.js" → base src/util → candidates include src/util.ts AND src/util.js
+        assert!(imps[0].candidate_paths.contains(&"src/util.ts".to_string()));
+        assert!(imps[0].candidate_paths.contains(&"src/util.js".to_string()));
+        // "./helpers" → src/helpers.* incl. .js and index variants
+        assert!(imps[1].candidate_paths.contains(&"src/helpers.js".to_string()));
+        assert!(imps[1].candidate_paths.contains(&"src/helpers/index.ts".to_string()));
     }
 }
