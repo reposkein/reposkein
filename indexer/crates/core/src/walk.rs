@@ -17,13 +17,13 @@ pub struct Entry {
 pub fn walk(root: &Path) -> Result<Vec<Entry>> {
     let mut out: Vec<Entry> = Vec::new();
     for result in WalkBuilder::new(root)
-        .hidden(true)        // skip dotfiles/dotdirs (incl. .git)
-        .git_ignore(true)    // honor in-repo .gitignore
-        .git_global(false)   // ignore the user's global gitignore
-        .git_exclude(false)  // ignore .git/info/exclude
-        .parents(false)      // ignore .gitignore in parent dirs above root
-        .ignore(false)       // ignore ripgrep .ignore files
-        .require_git(false)  // apply .gitignore rules even when root isn't a git repo
+        .hidden(true) // skip dotfiles/dotdirs (incl. .git)
+        .git_ignore(true) // honor in-repo .gitignore
+        .git_global(false) // ignore the user's global gitignore
+        .git_exclude(false) // ignore .git/info/exclude
+        .parents(false) // ignore .gitignore in parent dirs above root
+        .ignore(false) // ignore ripgrep .ignore files
+        .require_git(false) // apply .gitignore rules even when root isn't a git repo
         .build()
     {
         let dent = result?;
@@ -87,9 +87,18 @@ mod tests {
         fs::write(root.join(".gitignore"), b"dropped.py\n").unwrap();
         fs::write(root.join("dropped.py"), b"d").unwrap();
 
-        let paths: Vec<String> =
-            walk(root).unwrap().into_iter().map(|e| e.rel_path).collect();
-        assert!(paths.contains(&"keep.py".to_string()), ".ignore must not exclude keep.py");
-        assert!(!paths.contains(&"dropped.py".to_string()), ".gitignore must still exclude dropped.py");
+        let paths: Vec<String> = walk(root)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.rel_path)
+            .collect();
+        assert!(
+            paths.contains(&"keep.py".to_string()),
+            ".ignore must not exclude keep.py"
+        );
+        assert!(
+            !paths.contains(&"dropped.py".to_string()),
+            ".gitignore must still exclude dropped.py"
+        );
     }
 }

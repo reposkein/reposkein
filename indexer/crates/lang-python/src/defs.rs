@@ -285,7 +285,11 @@ mod tests {
         let src = b"class Foo:\n    x = 1\n";
         let w = run(src);
         let c = w.nodes.iter().find(|n| n.labels == ["Class"]).unwrap();
-        assert!(c.props.get("content_hash").and_then(|v| v.as_str()).is_some());
+        assert!(c
+            .props
+            .get("content_hash")
+            .and_then(|v| v.as_str())
+            .is_some());
     }
 
     #[test]

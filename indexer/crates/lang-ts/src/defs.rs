@@ -302,7 +302,11 @@ mod tests {
     fn class_has_content_hash() {
         let w = run(b"class Svc { m() {} }\n");
         let c = w.nodes.iter().find(|n| n.labels == ["Class"]).unwrap();
-        assert!(c.props.get("content_hash").and_then(|v| v.as_str()).is_some());
+        assert!(c
+            .props
+            .get("content_hash")
+            .and_then(|v| v.as_str())
+            .is_some());
     }
 
     #[test]
