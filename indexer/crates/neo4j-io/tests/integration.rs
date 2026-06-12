@@ -81,7 +81,10 @@ fn db_summary_grafts_onto_fresh_structure() {
         .set("content_hash", json!("H"))
         .set("semantic_summary", json!("does the thing"))
         .set("summary_of_hash", json!("H"));
-    let g = reposkein_core::Graph { nodes: vec![node], edges: vec![] };
+    let g = reposkein_core::Graph {
+        nodes: vec![node],
+        edges: vec![],
+    };
     s.import_graph(repo, &g).unwrap();
 
     // Fresh re-extraction would produce the same structure (content_hash "H")
@@ -93,14 +96,23 @@ fn db_summary_grafts_onto_fresh_structure() {
         .set("content_hash", json!("H"))];
     let db_nodes = s.export_graph(repo).unwrap().nodes;
     let grafted = reposkein_core::merge::graft_summaries(&fresh, &db_nodes);
-    let f = grafted.iter().find(|n| n.id == "rs1:graftdb:func:m.py#f@0").unwrap();
-    assert_eq!(f.props.get("semantic_summary"), Some(&json!("does the thing")));
+    let f = grafted
+        .iter()
+        .find(|n| n.id == "rs1:graftdb:func:m.py#f@0")
+        .unwrap();
+    assert_eq!(
+        f.props.get("semantic_summary"),
+        Some(&json!("does the thing"))
+    );
 
     // If the source changed (content_hash differs) the DB summary must NOT graft.
-    let changed = vec![Node::new("rs1:graftdb:func:m.py#f@0", "Function")
-        .set("content_hash", json!("H2"))];
+    let changed =
+        vec![Node::new("rs1:graftdb:func:m.py#f@0", "Function").set("content_hash", json!("H2"))];
     let g2 = reposkein_core::merge::graft_summaries(&changed, &db_nodes);
-    assert!(g2[0].props.get("semantic_summary").is_none(), "stale DB summary not grafted");
+    assert!(
+        g2[0].props.get("semantic_summary").is_none(),
+        "stale DB summary not grafted"
+    );
 
     s.purge(repo).unwrap();
 }
