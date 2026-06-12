@@ -1,0 +1,132 @@
+//! TypeScript import extraction → RawImport with candidate target file paths.
+//! Only relative specifiers are resolved; bare specifiers (e.g. "react") are
+//! external and skipped.
+
+use reposkein_core::extractor::RawImport;
+use tree_sitter::Node as TsNode;
+
+fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
+    node.utf8_text(source).unwrap_or("")
+}
+
+/// Normalizes a relative module specifier against the importing file's dir.
+/// Returns the base path (no extension), or None for bare/external specifiers.
+fn resolve_relative(importing_path: &str, specifier: &str) -> Option<String> {
+    if !(specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')) {
+        return None; // external/bare specifier
+    }
+    let mut parts: Vec<&str> = importing_path.split('/').collect();
+    parts.pop(); // drop filename → dir parts
+    for seg in specifier.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+fn candidates(base: &str) -> Vec<String> {
+    vec![
+        format!("{base}.ts"),
+        format!("{base}.tsx"),
+        format!("{base}/index.ts"),
+        format!("{base}/index.tsx"),
+    ]
+}
+
+/// Imported symbol names from an import_clause (named + default + namespace).
+fn clause_symbols(clause: TsNode, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut c = clause.walk();
+    for child in clause.named_children(&mut c) {
+        match child.kind() {
+            "identifier" => out.push(text(child, source).to_string()), // default import
+            "namespace_import" => {
+                let mut nc = child.walk();
+                for n in child.named_children(&mut nc) {
+                    if n.kind() == "identifier" {
+                        out.push(text(n, source).to_string());
+                    }
+                }
+            }
+            "named_imports" => {
+                let mut nc = child.walk();
+                for spec in child.named_children(&mut nc) {
+                    if spec.kind() == "import_specifier" {
+                        if let Some(name) = spec.child_by_field_name("name") {
+                            out.push(text(name, source).to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+pub fn extract_imports(
+    root: TsNode,
+    source: &[u8],
+    importing_file_id: &str,
+    importing_path: &str,
+) -> Vec<RawImport> {
+    let mut out = Vec::new();
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if child.kind() != "import_statement" {
+            continue;
+        }
+        let Some(src_node) = child.child_by_field_name("source") else {
+            continue;
+        };
+        // source is a string; its named child is the string_fragment.
+        let specifier = src_node
+            .named_child(0)
+            .map(|f| text(f, source).to_string())
+            .unwrap_or_default();
+        let Some(base) = resolve_relative(importing_path, &specifier) else {
+            continue; // external — no edge
+        };
+        let symbols = child
+            .named_children(&mut child.walk())
+            .find(|n| n.kind() == "import_clause")
+            .map(|clause| clause_symbols(clause, source))
+            .unwrap_or_default();
+        out.push(RawImport {
+            importing_file_id: importing_file_id.to_string(),
+            importing_path: importing_path.to_string(),
+            symbols,
+            candidate_paths: candidates(&base),
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse;
+
+    fn imports_of(src: &[u8], path: &str) -> Vec<RawImport> {
+        let tree = parse(src, false).unwrap();
+        extract_imports(tree.root_node(), src, "fid", path)
+    }
+
+    #[test]
+    fn resolves_relative_named_and_skips_external() {
+        let src = b"import { Base } from \"./base\";\nimport React from \"react\";\nimport { x } from \"../lib/util\";\n";
+        let imps = imports_of(src, "src/svc.ts");
+        // "./base" → src/base.*, "react" skipped, "../lib/util" → lib/util.*
+        assert_eq!(imps.len(), 2);
+        assert_eq!(imps[0].candidate_paths[0], "src/base.ts");
+        assert!(imps[0].candidate_paths.contains(&"src/base/index.ts".to_string()));
+        assert_eq!(imps[0].symbols, vec!["Base"]);
+        assert_eq!(imps[1].candidate_paths[0], "lib/util.ts");
+        assert_eq!(imps[1].symbols, vec!["x"]);
+    }
+}
