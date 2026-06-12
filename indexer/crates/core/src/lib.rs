@@ -1,6 +1,7 @@
 //! reposkein-core: deterministic repository indexing primitives.
 
 pub mod classify;
+pub mod extractor;
 pub mod hash;
 pub mod id;
 pub mod jsonl;
@@ -8,6 +9,7 @@ pub mod model;
 pub mod walk;
 
 use anyhow::Result;
+use extractor::{Extractor, FileContext};
 use model::{Edge, Node};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -46,7 +48,12 @@ fn basename_of(rel_path: &str) -> String {
 
 /// Builds the structural graph for `root`. Deterministic given (tree, repo).
 /// `repo` is the repo_id; `repo_name` labels the Repository node.
-pub fn index_tree(root: &Path, repo: &str, repo_name: &str) -> Result<Graph> {
+pub fn index_tree(
+    root: &Path,
+    repo: &str,
+    repo_name: &str,
+    extractors: &[&dyn Extractor],
+) -> Result<Graph> {
     let entries = walk::walk(root)?;
 
     let mut nodes: Vec<Node> = Vec::new();
@@ -101,7 +108,9 @@ pub fn index_tree(root: &Path, repo: &str, repo_name: &str) -> Result<Graph> {
             let language = classify::language_for(&ext);
             let role = classify::role_for(&e.rel_path, &ext);
 
-            let mut file = Node::new(id::file_id(repo, &e.rel_path), "File")
+            let file_id = id::file_id(repo, &e.rel_path);
+
+            let mut file = Node::new(file_id.clone(), "File")
                 .set("path", json!(e.rel_path))
                 .set("name", json!(basename_of(&e.rel_path)))
                 .set("language", json!(language))
@@ -115,8 +124,20 @@ pub fn index_tree(root: &Path, repo: &str, repo_name: &str) -> Result<Graph> {
             edges.push(Edge::new(
                 parent_node,
                 "CONTAINS",
-                id::file_id(repo, &e.rel_path),
+                file_id.clone(),
             ));
+
+            if let Some(ext_impl) = extractors.iter().find(|x| x.language() == language) {
+                let ctx = FileContext {
+                    repo,
+                    rel_path: &e.rel_path,
+                    file_id: &file_id,
+                    source: &bytes,
+                };
+                let mut out = ext_impl.extract(&ctx);
+                nodes.append(&mut out.nodes);
+                edges.append(&mut out.edges);
+            }
         }
     }
 
@@ -141,7 +162,7 @@ mod tests {
     #[test]
     fn builds_repo_dir_file_nodes_and_contains_edges() {
         let dir = fixture();
-        let g = index_tree(dir.path(), "r", "demo").unwrap();
+        let g = index_tree(dir.path(), "r", "demo", &[]).unwrap();
 
         let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains(&"rs1:r:repo:."));
@@ -164,8 +185,8 @@ mod tests {
     #[test]
     fn determinism_two_runs_byte_identical() {
         let dir = fixture();
-        let g1 = index_tree(dir.path(), "r", "demo").unwrap();
-        let g2 = index_tree(dir.path(), "r", "demo").unwrap();
+        let g1 = index_tree(dir.path(), "r", "demo", &[]).unwrap();
+        let g2 = index_tree(dir.path(), "r", "demo", &[]).unwrap();
         assert_eq!(
             jsonl::nodes_to_jsonl(&g1.nodes),
             jsonl::nodes_to_jsonl(&g2.nodes)
