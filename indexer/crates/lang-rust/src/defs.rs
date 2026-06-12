@@ -4,6 +4,7 @@
 use reposkein_core::hash::content_hash;
 use reposkein_core::model::{Edge, Node};
 use serde_json::json;
+use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
 pub struct Walk<'a> {
@@ -12,6 +13,7 @@ pub struct Walk<'a> {
     source: &'a [u8],
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    used: HashMap<String, u32>,
 }
 
 fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
@@ -67,7 +69,17 @@ impl<'a> Walk<'a> {
             source,
             nodes: Vec::new(),
             edges: Vec::new(),
+            used: HashMap::new(),
         }
+    }
+
+    /// Returns a per-file-unique id: base for the first occurrence, then
+    /// base.1, base.2, … for collisions (PRD §5.3 ordinal disambiguation).
+    fn unique(&mut self, base: String) -> String {
+        let n = self.used.entry(base.clone()).or_insert(0);
+        let id = if *n == 0 { base.clone() } else { format!("{base}.{n}") };
+        *n += 1;
+        id
     }
 
     fn func_id(&self, qualified: &str, arity: usize) -> String {
@@ -92,6 +104,7 @@ impl<'a> Walk<'a> {
     fn push_function(&mut self, node: TsNode, qualified: &str, parent_id: &str) {
         let a = arity(node);
         let id = self.func_id(qualified, a);
+        let id = self.unique(id);
         let span = &self.source[node.byte_range()];
         let name = qualified
             .rsplit('.')
@@ -113,6 +126,7 @@ impl<'a> Walk<'a> {
     }
 
     fn push_type(&mut self, id: String, label: &str, name: &str, node: TsNode, parent_id: &str) {
+        let id = self.unique(id);
         let span = &self.source[node.byte_range()];
         self.nodes.push(
             Node::new(id.clone(), label)
@@ -254,6 +268,15 @@ mod tests {
         assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.rs#Service"
             && e.typ == "IMPLEMENTS"
             && e.to == "rs1:r:iface:m.rs#Greeter"));
+    }
+
+    #[test]
+    fn duplicate_name_arity_gets_ordinal() {
+        // Two free fns same name+arity (e.g. behind cfg) — rare but must not collide.
+        let w = run(b"fn f(x: u32) {}\nfn f(y: u32) {}\n");
+        let ids: Vec<&str> = w.nodes.iter().filter(|n| n.labels == ["Function"]).map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"rs1:r:func:m.rs#f@1"));
+        assert!(ids.iter().any(|id| id.starts_with("rs1:r:func:m.rs#f@1.")));
     }
 
     #[test]

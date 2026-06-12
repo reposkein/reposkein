@@ -4,6 +4,7 @@
 use reposkein_core::hash::content_hash;
 use reposkein_core::model::{Edge, Node};
 use serde_json::json;
+use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -23,6 +24,7 @@ pub struct Walk<'a> {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub calls: Vec<reposkein_core::extractor::RawCall>,
+    used: HashMap<String, u32>,
 }
 
 fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
@@ -51,7 +53,17 @@ impl<'a> Walk<'a> {
             nodes: Vec::new(),
             edges: Vec::new(),
             calls: Vec::new(),
+            used: HashMap::new(),
         }
+    }
+
+    /// Returns a per-file-unique id: base for the first occurrence, then
+    /// base.1, base.2, … for collisions (PRD §5.3 ordinal disambiguation).
+    fn unique(&mut self, base: String) -> String {
+        let n = self.used.entry(base.clone()).or_insert(0);
+        let id = if *n == 0 { base.clone() } else { format!("{base}.{n}") };
+        *n += 1;
+        id
     }
 
     /// Builds the rs1 id for a function given its qualified name and arity.
@@ -87,6 +99,7 @@ impl<'a> Walk<'a> {
                     let qualified = qual.join(".");
                     let arity = param_arity(child);
                     let id = self.func_id(&qualified, arity);
+                    let id = self.unique(id);
 
                     let span = &self.source[child.byte_range()];
                     let signature = text(child, self.source)
@@ -132,6 +145,7 @@ impl<'a> Walk<'a> {
                     qual.push(name.clone());
                     let qualified = qual.join(".");
                     let id = self.class_id(&qualified);
+                    let id = self.unique(id);
 
                     let span = &self.source[child.byte_range()];
                     self.nodes.push(
@@ -304,5 +318,19 @@ mod tests {
             .edges
             .iter()
             .any(|e| e.from == "rs1:r:file:m.py" && e.typ == "DEFINES" && e.to == f.id));
+    }
+
+    #[test]
+    fn duplicate_name_arity_gets_ordinal() {
+        // Two top-level same-name, same-arity functions (conditional redef via two top-level defs).
+        // Using top-level defs because compound-statement recursion (if/else) is tracked in A6.
+        let src = b"def f(x):\n    return 1\ndef f(x):\n    return 2\n";
+        let w = run(src);
+        let func_ids: Vec<&str> = w.nodes.iter()
+            .filter(|n| n.labels == ["Function"]).map(|n| n.id.as_str()).collect();
+        // Both must be present with distinct ids (no collision).
+        assert!(func_ids.contains(&"rs1:r:func:m.py#f@1"));
+        assert!(func_ids.iter().any(|id| id.starts_with("rs1:r:func:m.py#f@1.")));
+        assert_eq!(func_ids.len(), func_ids.iter().collect::<std::collections::HashSet<_>>().len(), "ids unique");
     }
 }
