@@ -107,6 +107,14 @@ impl<'a> Walk<'a> {
         format!("rs1:{}:var:{}#{}", self.repo, self.rel_path, name)
     }
 
+    fn qualified(scope: &[String], name: &str) -> String {
+        if scope.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}.{name}", scope.join("."))
+        }
+    }
+
     fn push_function(&mut self, node: TsNode, qualified: &str, parent_id: &str) {
         let a = arity(node);
         let id = self.func_id(qualified, a);
@@ -158,32 +166,41 @@ impl<'a> Walk<'a> {
     }
 
     pub fn walk(&mut self, node: TsNode, parent_id: &str) {
+        self.walk_scoped(node, parent_id, &[]);
+    }
+
+    fn walk_scoped(&mut self, node: TsNode, parent_id: &str, scope: &[String]) {
         let mut cursor = node.walk();
         let children: Vec<TsNode> = node.named_children(&mut cursor).collect();
         for child in children {
             match child.kind() {
                 "function_item" => {
                     let name = name_of(child, self.source);
-                    self.push_function(child, &name, parent_id);
+                    let qualified = Self::qualified(scope, &name);
+                    self.push_function(child, &qualified, parent_id);
                 }
                 "struct_item" => {
                     let name = name_of(child, self.source);
-                    let id = self.class_id(&name);
-                    self.push_type(id, "Class", &name, child, parent_id);
+                    let qualified = Self::qualified(scope, &name);
+                    let id = self.class_id(&qualified);
+                    self.push_type(id, "Class", &qualified, child, parent_id);
                 }
                 "trait_item" => {
                     let name = name_of(child, self.source);
-                    let id = self.iface_id(&name);
-                    self.push_type(id, "Interface", &name, child, parent_id);
+                    let qualified = Self::qualified(scope, &name);
+                    let id = self.iface_id(&qualified);
+                    self.push_type(id, "Interface", &qualified, child, parent_id);
                 }
                 "enum_item" => {
                     let name = name_of(child, self.source);
-                    let id = self.enum_id(&name);
-                    self.push_type(id, "Enum", &name, child, parent_id);
+                    let qualified = Self::qualified(scope, &name);
+                    let id = self.enum_id(&qualified);
+                    self.push_type(id, "Enum", &qualified, child, parent_id);
                 }
                 "const_item" | "static_item" => {
                     let name = name_of(child, self.source);
-                    let id = self.var_id(&name);
+                    let qualified = Self::qualified(scope, &name);
+                    let id = self.var_id(&qualified);
                     let kind = if child.kind() == "static_item" {
                         "static"
                     } else {
@@ -206,15 +223,17 @@ impl<'a> Walk<'a> {
                     if ty.is_empty() {
                         continue;
                     }
-                    let class_id = self.class_id(&ty);
+                    let qualified_ty = Self::qualified(scope, &ty);
+                    let class_id = self.class_id(&qualified_ty);
                     // Trait impl → IMPLEMENTS.
                     if let Some(tr) = child.child_by_field_name("trait") {
                         let trait_name = type_name(tr, self.source);
                         if !trait_name.is_empty() {
+                            let qualified_trait = Self::qualified(scope, &trait_name);
                             self.edges.push(Edge::new(
                                 class_id.clone(),
                                 "IMPLEMENTS",
-                                self.iface_id(&trait_name),
+                                self.iface_id(&qualified_trait),
                             ));
                         }
                     }
@@ -225,10 +244,18 @@ impl<'a> Walk<'a> {
                         for m in methods {
                             if m.kind() == "function_item" {
                                 let mname = name_of(m, self.source);
-                                let qualified = format!("{ty}.{mname}");
+                                let qualified = format!("{qualified_ty}.{mname}");
                                 self.push_function(m, &qualified, &class_id);
                             }
                         }
+                    }
+                }
+                "mod_item" => {
+                    let name = name_of(child, self.source);
+                    if let Some(body) = child.child_by_field_name("body") {
+                        let mut s = scope.to_vec();
+                        s.push(name);
+                        self.walk_scoped(body, parent_id, &s);
                     }
                 }
                 _ => {}
@@ -322,5 +349,18 @@ mod tests {
         assert!(w.edges.iter().any(|e| e.from == "rs1:r:file:m.rs"
             && e.typ == "DEFINES"
             && e.to == "rs1:r:class:m.rs#Service"));
+    }
+
+    #[test]
+    fn descends_into_inline_modules() {
+        let src = b"mod util {\n    pub fn helper() {}\n    struct Inner;\n}\n#[cfg(test)]\nmod tests {\n    fn it_works() {}\n}\n";
+        let w = run(src);
+        let ids: Vec<&str> = w.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"rs1:r:func:m.rs#util.helper@0"), "fn in mod");
+        assert!(ids.contains(&"rs1:r:class:m.rs#util.Inner"), "struct in mod");
+        assert!(
+            ids.contains(&"rs1:r:func:m.rs#tests.it_works@0"),
+            "fn in #[cfg(test)] mod"
+        );
     }
 }
