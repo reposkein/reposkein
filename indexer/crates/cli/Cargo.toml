@@ -14,6 +14,7 @@ blake3.workspace = true
 clap.workspace = true
 reposkein-core = { path = "../core" }
 reposkein-lang-python = { path = "../lang-python" }
+reposkein-lang-ts = { path = "../lang-ts" }
 reposkein-neo4j-io = { path = "../neo4j-io" }
 
 [dev-dependencies]

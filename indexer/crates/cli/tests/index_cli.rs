@@ -107,3 +107,30 @@ fn index_is_idempotent_byte_identical() {
 
     assert_eq!(run(), run());
 }
+
+#[test]
+fn index_extracts_typescript_definitions() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join("svc.ts"),
+        b"interface Greeter { greet(): string; }\nclass Service implements Greeter {\n  greet(): string { return 'hi'; }\n}\nfunction main(): void {}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args(["index", "--repo-id", "r", "--name", "d"])
+        .arg(root)
+        .assert()
+        .success();
+
+    let nodes = fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap();
+    assert!(nodes.contains(r#""id":"rs1:r:iface:svc.ts#Greeter""#));
+    assert!(nodes.contains(r#""id":"rs1:r:class:svc.ts#Service""#));
+    assert!(nodes.contains(r#""id":"rs1:r:func:svc.ts#Service.greet@0""#));
+    assert!(nodes.contains(r#""id":"rs1:r:func:svc.ts#main@0""#));
+
+    let edges = fs::read_to_string(root.join(".reposkein/edges.jsonl")).unwrap();
+    assert!(edges.contains("IMPLEMENTS"));
+}

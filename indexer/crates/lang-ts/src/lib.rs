@@ -5,6 +5,24 @@ use tree_sitter::{Parser, Tree};
 
 pub mod defs;
 
+use reposkein_core::extractor::{ExtractOutput, Extractor, FileContext};
+
+pub struct TypeScriptExtractor;
+
+impl Extractor for TypeScriptExtractor {
+    fn language(&self) -> &'static str {
+        "typescript"
+    }
+    fn extract(&self, ctx: &FileContext) -> ExtractOutput {
+        let Some(tree) = parse(ctx.source, is_tsx_path(ctx.rel_path)) else {
+            return ExtractOutput::default();
+        };
+        let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
+        w.walk(tree.root_node(), &[], ctx.file_id, defs::ScopeKind::Module);
+        ExtractOutput { nodes: w.nodes, edges: w.edges, ..Default::default() }
+    }
+}
+
 /// Returns true when the path should be parsed with the TSX (JSX-aware) grammar.
 pub fn is_tsx_path(rel_path: &str) -> bool {
     rel_path.ends_with(".tsx") || rel_path.ends_with(".jsx")

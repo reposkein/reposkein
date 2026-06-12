@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use reposkein_core::{index_tree, jsonl};
 use reposkein_lang_python::PythonExtractor;
+use reposkein_lang_ts::TypeScriptExtractor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -143,7 +144,8 @@ fn main() -> Result<()> {
             });
 
             let python = PythonExtractor;
-            let extractors: &[&dyn reposkein_core::extractor::Extractor] = &[&python];
+            let typescript = TypeScriptExtractor;
+            let extractors: &[&dyn reposkein_core::extractor::Extractor] = &[&python, &typescript];
             let graph = index_tree(&path, &repo, &repo_name, extractors)
                 .context("failed to index repository tree")?;
 
