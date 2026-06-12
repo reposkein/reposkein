@@ -70,7 +70,8 @@ mod tests {
     fn decorator_calls_not_attributed_to_enclosing() {
         // A function whose body contains a decorated nested def; the decorator
         // call (register(...)) must NOT be attributed to `outer`.
-        let src = b"def outer():\n    helper()\n    @register(\"x\")\n    def inner():\n        pass\n";
+        let src =
+            b"def outer():\n    helper()\n    @register(\"x\")\n    def inner():\n        pass\n";
         let tree = parse(src).unwrap();
         let func = tree.root_node().named_child(0).unwrap();
         let body = func.child_by_field_name("body").unwrap();
@@ -78,7 +79,10 @@ mod tests {
         collect_calls(body, src, "cid", "outer", "m.py", &mut calls);
         let names: Vec<&str> = calls.iter().map(|c| c.callee_name.as_str()).collect();
         assert!(names.contains(&"helper"));
-        assert!(!names.contains(&"register"), "decorator call must not attribute to outer");
+        assert!(
+            !names.contains(&"register"),
+            "decorator call must not attribute to outer"
+        );
         assert!(!names.contains(&"inner"));
     }
 

@@ -347,12 +347,22 @@ mod tests {
     fn extracts_decorated_and_compound_nested_defs() {
         let src = b"@app.route(\"/x\")\ndef handler():\n    pass\n\nif TYPE_CHECKING:\n    def helper():\n        pass\n\ntry:\n    def maybe():\n        pass\nexcept Exception:\n    pass\n\nclass C:\n    @property\n    def name(self):\n        return self._n\n";
         let w = run(src);
-        let fids: Vec<&str> = w.nodes.iter()
-            .filter(|n| n.labels == ["Function"]).map(|n| n.id.as_str()).collect();
-        assert!(fids.contains(&"rs1:r:func:m.py#handler@0"), "decorated module fn");
+        let fids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .map(|n| n.id.as_str())
+            .collect();
+        assert!(
+            fids.contains(&"rs1:r:func:m.py#handler@0"),
+            "decorated module fn"
+        );
         assert!(fids.contains(&"rs1:r:func:m.py#helper@0"), "fn in if-block");
         assert!(fids.contains(&"rs1:r:func:m.py#maybe@0"), "fn in try-block");
-        assert!(fids.contains(&"rs1:r:func:m.py#C.name@1"), "decorated method");
+        assert!(
+            fids.contains(&"rs1:r:func:m.py#C.name@1"),
+            "decorated method"
+        );
     }
 
     #[test]

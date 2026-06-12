@@ -91,8 +91,7 @@ fn push_import(
                     for part in m.named_children(&mut mc) {
                         match part.kind() {
                             "import_prefix" => {
-                                level =
-                                    text(part, source).chars().filter(|c| *c == '.').count();
+                                level = text(part, source).chars().filter(|c| *c == '.').count();
                             }
                             "dotted_name" => mod_parts = dotted_parts(part, source),
                             _ => {}
@@ -188,7 +187,10 @@ mod tests {
     fn finds_imports_in_try_and_if_blocks() {
         let src = b"try:\n    from app.fast import go\nexcept ImportError:\n    from app.slow import go\n\nif TYPE_CHECKING:\n    from app.types import T\n";
         let imps = imports_of(src, "app/svc.py");
-        let symbols: Vec<&str> = imps.iter().flat_map(|i| i.symbols.iter().map(|s| s.as_str())).collect();
+        let symbols: Vec<&str> = imps
+            .iter()
+            .flat_map(|i| i.symbols.iter().map(|s| s.as_str()))
+            .collect();
         assert!(symbols.contains(&"go"), "import in try-block found");
         assert!(symbols.contains(&"T"), "import in if-block found");
     }
