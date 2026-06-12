@@ -51,9 +51,11 @@ fn basename_of(rel_path: &str) -> String {
 }
 
 /// Options for `index_tree_with`.
-#[derive(Debug, Clone, Default)]
-pub struct IndexOptions {
+#[derive(Clone, Copy, Default)]
+pub struct IndexOptions<'a> {
     pub federation: bool,
+    /// Optional per-file extraction cache (skips re-parsing unchanged files).
+    pub cache: Option<&'a dyn cache::ExtractCache>,
 }
 
 /// Information about a federated child repository detected during indexing.
@@ -92,7 +94,7 @@ pub fn index_tree_with(
     repo: &str,
     repo_name: &str,
     extractors: &[&dyn Extractor],
-    opts: IndexOptions,
+    opts: IndexOptions<'_>,
 ) -> Result<IndexOutput> {
     let walk_out = walk::walk_federated(root, opts.federation)?;
     let entries = walk_out.entries;
@@ -173,7 +175,17 @@ pub fn index_tree_with(
                     file_id: &file_id,
                     source: &bytes,
                 };
-                let mut extracted = ext_impl.extract(&ctx);
+                let mut extracted = match opts.cache {
+                    Some(c) => match c.get(repo, &e.rel_path, &content_hash) {
+                        Some(hit) => hit,
+                        None => {
+                            let fresh = ext_impl.extract(&ctx);
+                            c.put(repo, &e.rel_path, &content_hash, &fresh);
+                            fresh
+                        }
+                    },
+                    None => ext_impl.extract(&ctx),
+                };
                 nodes.append(&mut extracted.nodes);
                 edges.append(&mut extracted.edges);
                 all_imports.append(&mut extracted.imports);
@@ -277,7 +289,7 @@ mod tests {
             "rootid",
             "root",
             &[],
-            IndexOptions { federation: true },
+            IndexOptions { federation: true, cache: None },
         )
         .unwrap();
 
