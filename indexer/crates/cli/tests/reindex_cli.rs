@@ -17,10 +17,23 @@ fn reindex_reflects_an_edited_file_and_emits_json() {
         .success();
 
     // Edit the file, then reindex --file.
-    fs::write(root.join("m.py"), b"def f():\n    return 2\n\ndef g():\n    return 3\n").unwrap();
+    fs::write(
+        root.join("m.py"),
+        b"def f():\n    return 2\n\ndef g():\n    return 3\n",
+    )
+    .unwrap();
     let out = Command::cargo_bin("reposkein-indexer")
         .unwrap()
-        .args(["reindex", "--repo-id", "r", "--name", "d", "--file", "m.py", "--json"])
+        .args([
+            "reindex",
+            "--repo-id",
+            "r",
+            "--name",
+            "d",
+            "--file",
+            "m.py",
+            "--json",
+        ])
         .arg(root)
         .assert()
         .success()
@@ -35,7 +48,10 @@ fn reindex_reflects_an_edited_file_and_emits_json() {
 
     // The committed graph reflects the new function g.
     let nodes = fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap();
-    assert!(nodes.contains(":func:m.py#g@0"), "reindex picked up the new function g");
+    assert!(
+        nodes.contains(":func:m.py#g@0"),
+        "reindex picked up the new function g"
+    );
 }
 
 #[test]

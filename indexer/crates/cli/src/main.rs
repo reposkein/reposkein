@@ -257,7 +257,10 @@ fn run_index(
         None
     } else {
         reposkein_core::cache::FsExtractCache::open(
-            path.join(".reposkein").join("local").join("cache").join("extract"),
+            path.join(".reposkein")
+                .join("local")
+                .join("cache")
+                .join("extract"),
         )
     };
     // Force a fresh parse of the named file (reindex --file).
@@ -266,7 +269,9 @@ fn run_index(
     }
     let opts = reposkein_core::IndexOptions {
         federation: !no_federation,
-        cache: cache.as_ref().map(|c| c as &dyn reposkein_core::cache::ExtractCache),
+        cache: cache
+            .as_ref()
+            .map(|c| c as &dyn reposkein_core::cache::ExtractCache),
     };
     let out = index_tree_with(path, &repo, &repo_name, extractors, opts)
         .context("failed to index repository tree")?;
@@ -324,8 +329,11 @@ fn run_index(
     if had_sidecar {
         let _ = std::fs::write(&sidecar_path, "");
     }
-    std::fs::write(out_dir.join("edges.jsonl"), jsonl::edges_to_jsonl(&graph.edges))
-        .context("failed to write edges.jsonl")?;
+    std::fs::write(
+        out_dir.join("edges.jsonl"),
+        jsonl::edges_to_jsonl(&graph.edges),
+    )
+    .context("failed to write edges.jsonl")?;
 
     write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
 

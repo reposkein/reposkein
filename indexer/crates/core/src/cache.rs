@@ -163,6 +163,9 @@ mod tests {
         cache.put("r", "a.py", "h1", &sample());
         assert!(cache.get("r", "a.py", "h1").is_some());
         cache.invalidate("a.py");
-        assert!(cache.get("r", "a.py", "h1").is_none(), "invalidated entry must miss");
+        assert!(
+            cache.get("r", "a.py", "h1").is_none(),
+            "invalidated entry must miss"
+        );
     }
 }
