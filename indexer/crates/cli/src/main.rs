@@ -118,11 +118,16 @@ fn main() -> Result<()> {
 
             let out_dir = path.join(".reposkein");
             std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
-            std::fs::write(
-                out_dir.join("nodes.jsonl"),
-                jsonl::nodes_to_jsonl(&graph.nodes),
-            )
-            .context("failed to write nodes.jsonl")?;
+            let nodes_path = out_dir.join("nodes.jsonl");
+            let nodes = if nodes_path.exists() {
+                let prev = std::fs::read_to_string(&nodes_path).context("read existing nodes.jsonl")?;
+                let existing = reposkein_core::jsonl::read_nodes(&prev)?;
+                reposkein_core::merge::graft_summaries(&graph.nodes, &existing)
+            } else {
+                graph.nodes.clone()
+            };
+            std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
+                .context("failed to write nodes.jsonl")?;
             std::fs::write(
                 out_dir.join("edges.jsonl"),
                 jsonl::edges_to_jsonl(&graph.edges),
