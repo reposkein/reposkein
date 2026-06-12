@@ -49,15 +49,52 @@ fn basename_of(rel_path: &str) -> String {
     rel_path.rsplit('/').next().unwrap_or(rel_path).to_string()
 }
 
+/// Options for `index_tree_with`.
+#[derive(Debug, Clone, Default)]
+pub struct IndexOptions {
+    pub federation: bool,
+}
+
+/// Information about a federated child repository detected during indexing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChildRepoInfo {
+    pub rel_path: String,
+    pub repo_id: String,
+    pub name: String,
+}
+
+/// Output of `index_tree_with`.
+#[derive(Debug, Clone)]
+pub struct IndexOutput {
+    pub graph: Graph,
+    pub children: Vec<ChildRepoInfo>,
+    pub warnings: Vec<String>,
+}
+
 /// Builds the structural graph for `root`. Deterministic given (tree, repo).
 /// `repo` is the repo_id; `repo_name` labels the Repository node.
+/// Thin wrapper around `index_tree_with` with federation disabled.
 pub fn index_tree(
     root: &Path,
     repo: &str,
     repo_name: &str,
     extractors: &[&dyn Extractor],
 ) -> Result<Graph> {
-    let entries = walk::walk(root)?;
+    Ok(index_tree_with(root, repo, repo_name, extractors, IndexOptions::default())?.graph)
+}
+
+/// Federation-aware indexing. When `opts.federation` is true, nested-repo
+/// boundaries are detected, pruned from the walk, and emitted as proxy
+/// `Repository` nodes + `FEDERATES_TO` edges in the root's graph.
+pub fn index_tree_with(
+    root: &Path,
+    repo: &str,
+    repo_name: &str,
+    extractors: &[&dyn Extractor],
+    opts: IndexOptions,
+) -> Result<IndexOutput> {
+    let walk_out = walk::walk_federated(root, opts.federation)?;
+    let entries = walk_out.entries;
 
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
@@ -135,11 +172,11 @@ pub fn index_tree(
                     file_id: &file_id,
                     source: &bytes,
                 };
-                let mut out = ext_impl.extract(&ctx);
-                nodes.append(&mut out.nodes);
-                edges.append(&mut out.edges);
-                all_imports.append(&mut out.imports);
-                all_calls.append(&mut out.calls);
+                let mut extracted = ext_impl.extract(&ctx);
+                nodes.append(&mut extracted.nodes);
+                edges.append(&mut extracted.edges);
+                all_imports.append(&mut extracted.imports);
+                all_calls.append(&mut extracted.calls);
             }
         }
     }
@@ -147,14 +184,95 @@ pub fn index_tree(
     let mut resolved = resolve::resolve(&nodes, &all_imports, &all_calls, repo);
     edges.append(&mut resolved);
 
-    Ok(Graph { nodes, edges })
+    // --- Federation records for ReposkeinChild boundaries ---
+    let mut children: Vec<ChildRepoInfo> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    for b in &walk_out.boundaries {
+        match b.kind {
+            walk::BoundaryKind::ReposkeinChild => {
+                let meta_path = b.abs_path.join(".reposkein").join("meta.json");
+                let child_repo_id = std::fs::read_to_string(&meta_path)
+                    .ok()
+                    .and_then(|t| meta::repo_id_from_meta(&t));
+                match child_repo_id {
+                    Some(cid) => {
+                        let name = basename_of(&b.rel_path);
+                        let proxy_id = id::repo_id(repo, &b.rel_path);
+                        nodes.push(
+                            Node::new(proxy_id.clone(), "Repository")
+                                .set("name", json!(name))
+                                .set("root_path", json!(b.rel_path))
+                                .set("is_nested", json!(true))
+                                .set("federated_repo_id", json!(cid.clone())),
+                        );
+                        edges.push(Edge::new(
+                            id::repo_id(repo, "."),
+                            "FEDERATES_TO",
+                            proxy_id,
+                        ));
+                        children.push(ChildRepoInfo {
+                            rel_path: b.rel_path.clone(),
+                            repo_id: cid,
+                            name,
+                        });
+                    }
+                    None => warnings.push(format!(
+                        "nested RepoSkein dir at '{}' has unreadable meta.json; not federated",
+                        b.rel_path
+                    )),
+                }
+            }
+            walk::BoundaryKind::GitOnly => warnings.push(format!(
+                "nested git repo without RepoSkein index at '{}'; run `reposkein-indexer index` inside it to federate",
+                b.rel_path
+            )),
+        }
+    }
+    children.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+    Ok(IndexOutput {
+        graph: Graph { nodes, edges },
+        children,
+        warnings,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn federated_index_emits_proxy_and_federates_to() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("top.py"), b"x = 1\n").unwrap();
+        fs::create_dir_all(root.join("vendor/childA/.reposkein")).unwrap();
+        fs::write(root.join("vendor/childA/.reposkein/meta.json"), b"{\"repo_id\":\"childa\"}").unwrap();
+        fs::write(root.join("vendor/childA/inner.py"), b"y = 2\n").unwrap();
+
+        let out = index_tree_with(root, "rootid", "root", &[], IndexOptions { federation: true }).unwrap();
+
+        // Proxy Repository node owned by the root, pointing at the child.
+        let proxy = out.graph.nodes.iter()
+            .find(|n| n.id == "rs1:rootid:repo:vendor/childA").expect("proxy node");
+        assert_eq!(proxy.labels, ["Repository"]);
+        assert_eq!(proxy.props["federated_repo_id"], json!("childa"));
+        assert_eq!(proxy.props["is_nested"], json!(true));
+        assert_eq!(proxy.props["root_path"], json!("vendor/childA"));
+        // FEDERATES_TO root -> proxy.
+        assert!(out.graph.edges.iter().any(|e|
+            e.from == "rs1:rootid:repo:." && e.typ == "FEDERATES_TO" && e.to == "rs1:rootid:repo:vendor/childA"));
+        // Child source NOT indexed under the root.
+        assert!(!out.graph.nodes.iter().any(|n| n.id.contains("inner.py")));
+        // The boundary dir still has a Directory node.
+        assert!(out.graph.nodes.iter().any(|n| n.id == "rs1:rootid:dir:vendor/childA"));
+        // children reported.
+        assert_eq!(out.children.len(), 1);
+        assert_eq!(out.children[0].repo_id, "childa");
+    }
 
     fn fixture() -> tempfile::TempDir {
         let dir = tempdir().unwrap();
