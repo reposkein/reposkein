@@ -6,6 +6,7 @@ pub mod hash;
 pub mod id;
 pub mod jsonl;
 pub mod model;
+pub mod resolve;
 pub mod walk;
 
 use anyhow::Result;
