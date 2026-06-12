@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseIndexStats, parseJsonStats } from "../src/indexer/runIndexer.js";
+import { describe, it, expect, afterEach } from "vitest";
+import { parseIndexStats, parseJsonStats, shouldLoadNeo4j } from "../src/indexer/runIndexer.js";
 
 describe("parseIndexStats (legacy)", () => {
   it("extracts node and edge counts from indexer stdout", () => {
@@ -48,5 +48,39 @@ describe("parseJsonStats", () => {
   it("returns null for non-JSON output", () => {
     expect(parseJsonStats("not json at all")).toBeNull();
     expect(parseJsonStats("")).toBeNull();
+  });
+});
+
+describe("shouldLoadNeo4j", () => {
+  const saved = { store: process.env.REPOSKEIN_STORE, pw: process.env.NEO4J_PASSWORD };
+  afterEach(() => {
+    if (saved.store === undefined) delete process.env.REPOSKEIN_STORE;
+    else process.env.REPOSKEIN_STORE = saved.store;
+    if (saved.pw === undefined) delete process.env.NEO4J_PASSWORD;
+    else process.env.NEO4J_PASSWORD = saved.pw;
+  });
+
+  it("is false in explicit jsonl mode even with a password", () => {
+    process.env.REPOSKEIN_STORE = "jsonl";
+    process.env.NEO4J_PASSWORD = "x";
+    expect(shouldLoadNeo4j()).toBe(false);
+  });
+
+  it("is false in auto mode without a password (zero-infra)", () => {
+    delete process.env.REPOSKEIN_STORE;
+    delete process.env.NEO4J_PASSWORD;
+    expect(shouldLoadNeo4j()).toBe(false);
+  });
+
+  it("is true in auto mode with a password", () => {
+    delete process.env.REPOSKEIN_STORE;
+    process.env.NEO4J_PASSWORD = "x";
+    expect(shouldLoadNeo4j()).toBe(true);
+  });
+
+  it("is true in neo4j mode with a password", () => {
+    process.env.REPOSKEIN_STORE = "neo4j";
+    process.env.NEO4J_PASSWORD = "x";
+    expect(shouldLoadNeo4j()).toBe(true);
   });
 });

@@ -1,24 +1,43 @@
 import type { ToolResult } from "./readCypher.js";
-import { spawnIndexer, parseJsonStats, indexerBinPath, repoPath } from "../indexer/runIndexer.js";
+import {
+  spawnIndexer,
+  parseJsonStats,
+  indexerBinPath,
+  repoPath,
+  shouldLoadNeo4j,
+} from "../indexer/runIndexer.js";
 
 export type RunResult =
   | { ok: true; nodes: number; edges: number; files: number; warnings: string[] }
   | { ok: false; error: string };
 
-export interface IndexerDeps {
-  run: (repoId: string, path: string) => Promise<RunResult>;
+export interface RunOpts {
+  verb?: "index" | "reindex";
+  file?: string;
 }
 
-/** Default runner: index the repo with --json, then load it into Neo4j. */
-function defaultRun(repoId: string, indexPath: string): Promise<RunResult> {
+export interface IndexerDeps {
+  run: (repoId: string, path: string, opts?: RunOpts) => Promise<RunResult>;
+}
+
+/** Default runner: run the index/reindex verb with --json, then load into Neo4j
+ *  unless we're in JSONL mode (shouldLoadNeo4j() === false). */
+function defaultRun(repoId: string, indexPath: string, opts?: RunOpts): Promise<RunResult> {
   const bin = indexerBinPath();
+  const verb = opts?.verb ?? "index";
   return (async (): Promise<RunResult> => {
-    const idx = await spawnIndexer(bin, ["index", "--json", "--repo-id", repoId, indexPath]);
-    if (idx.code !== 0) return { ok: false, error: `index failed: ${idx.stderr || idx.stdout}` };
+    const verbArgs =
+      verb === "reindex"
+        ? ["reindex", "--json", "--repo-id", repoId, indexPath, ...(opts?.file ? ["--file", opts.file] : [])]
+        : ["index", "--json", "--repo-id", repoId, indexPath];
+    const idx = await spawnIndexer(bin, verbArgs);
+    if (idx.code !== 0) return { ok: false, error: `${verb} failed: ${idx.stderr || idx.stdout}` };
     const stats = parseJsonStats(idx.stdout);
-    if (!stats) return { ok: false, error: `index --json returned unparseable output: ${idx.stdout}` };
-    const load = await spawnIndexer(bin, ["load", "--repo-id", repoId, indexPath]);
-    if (load.code !== 0) return { ok: false, error: `load failed: ${load.stderr || load.stdout}` };
+    if (!stats) return { ok: false, error: `${verb} --json returned unparseable output: ${idx.stdout}` };
+    if (shouldLoadNeo4j()) {
+      const load = await spawnIndexer(bin, ["load", "--repo-id", repoId, indexPath]);
+      if (load.code !== 0) return { ok: false, error: `load failed: ${load.stderr || load.stdout}` };
+    }
     return {
       ok: true,
       nodes: stats.nodes,
@@ -30,7 +49,7 @@ function defaultRun(repoId: string, indexPath: string): Promise<RunResult> {
 }
 
 function makeRunner(repoId: string, deps?: Partial<IndexerDeps>) {
-  const run = deps?.run ?? ((id: string, path: string) => defaultRun(id, path));
+  const run = deps?.run ?? ((id: string, path: string, opts?: RunOpts) => defaultRun(id, path, opts));
   return run;
 }
 
@@ -74,10 +93,9 @@ export function makeReindexFile(repoId: string, deps?: Partial<IndexerDeps>) {
     if (!args || !args.path) {
       return { content: [{ type: "text", text: "reindex_file requires a 'path'" }], isError: true };
     }
-    // v1: full reindex (single-file incremental reindex is deferred).
     const indexPath = repoPath();
     const start = Date.now();
-    const r = await run(repoId, indexPath);
+    const r = await run(repoId, indexPath, { verb: "reindex", file: args.path });
     if (!r.ok) {
       return { content: [{ type: "text", text: r.error }], isError: true };
     }
@@ -91,7 +109,7 @@ export function makeReindexFile(repoId: string, deps?: Partial<IndexerDeps>) {
           edges: r.edges,
           files: r.files,
           duration_ms: Date.now() - start,
-          full_reindex: true,
+          loaded: shouldLoadNeo4j(),
           warnings: r.warnings,
         }),
       }],

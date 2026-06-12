@@ -53,3 +53,12 @@ export function parseJsonStats(stdout: string): IndexJsonStats | null {
     return null;
   }
 }
+
+/** Whether to load the indexed graph into Neo4j after (re)indexing.
+ *  False in explicit jsonl mode, or in auto mode without NEO4J_PASSWORD
+ *  (zero-infra). True for neo4j mode or auto-with-DB. */
+export function shouldLoadNeo4j(): boolean {
+  const mode = (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase();
+  if (mode === "jsonl") return false;
+  return !!process.env.NEO4J_PASSWORD;
+}
