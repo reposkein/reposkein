@@ -58,7 +58,9 @@ fn resolve_imports(
             continue;
         };
         let to_id = id::file_id(repo, target);
-        let entry = agg.entry((imp.importing_file_id.clone(), to_id)).or_default();
+        let entry = agg
+            .entry((imp.importing_file_id.clone(), to_id))
+            .or_default();
         for s in &imp.symbols {
             entry.insert(s.clone());
         }
@@ -225,7 +227,10 @@ mod tests {
         let import_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "IMPORTS").collect();
         assert_eq!(import_edges.len(), 1, "one aggregated IMPORTS edge");
         // Symbols are the sorted union.
-        assert_eq!(import_edges[0].props["symbols"], serde_json::json!(["Base", "helper"]));
+        assert_eq!(
+            import_edges[0].props["symbols"],
+            serde_json::json!(["Base", "helper"])
+        );
     }
 
     #[test]

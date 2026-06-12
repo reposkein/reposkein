@@ -80,8 +80,10 @@ pub fn edges_to_jsonl(edges: &[Edge]) -> String {
             b.to.as_str(),
         ))
     });
-    sorted.dedup_by(|a, b| (a.from.as_str(), a.typ.as_str(), a.to.as_str())
-        == (b.from.as_str(), b.typ.as_str(), b.to.as_str()));
+    sorted.dedup_by(|a, b| {
+        (a.from.as_str(), a.typ.as_str(), a.to.as_str())
+            == (b.from.as_str(), b.typ.as_str(), b.to.as_str())
+    });
     let mut out = String::new();
     for e in sorted {
         out.push_str(&edge_line(e));
@@ -170,7 +172,11 @@ mod tests {
         let e1 = Edge::new("a", "CONTAINS", "b");
         let e2 = Edge::new("a", "CONTAINS", "b");
         let out = edges_to_jsonl(&[e1, e2]);
-        assert_eq!(out.lines().count(), 1, "duplicate edge keys collapse to one line");
+        assert_eq!(
+            out.lines().count(),
+            1,
+            "duplicate edge keys collapse to one line"
+        );
     }
 
     #[test]

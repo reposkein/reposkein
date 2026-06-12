@@ -70,7 +70,11 @@ impl<'a> Walk<'a> {
     /// base.1, base.2, … for collisions (PRD §5.3 ordinal disambiguation).
     fn unique(&mut self, base: String) -> String {
         let n = self.used.entry(base.clone()).or_insert(0);
-        let id = if *n == 0 { base.clone() } else { format!("{base}.{n}") };
+        let id = if *n == 0 {
+            base.clone()
+        } else {
+            format!("{base}.{n}")
+        };
         *n += 1;
         id
     }
@@ -353,7 +357,12 @@ mod tests {
     #[test]
     fn duplicate_name_arity_gets_ordinal() {
         let w = run(b"function f(x) {}\nfunction f(y) {}\n");
-        let ids: Vec<&str> = w.nodes.iter().filter(|n| n.labels == ["Function"]).map(|n| n.id.as_str()).collect();
+        let ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .map(|n| n.id.as_str())
+            .collect();
         assert!(ids.contains(&"rs1:r:func:m.ts#f@1"));
         assert!(ids.iter().any(|id| id.starts_with("rs1:r:func:m.ts#f@1.")));
     }

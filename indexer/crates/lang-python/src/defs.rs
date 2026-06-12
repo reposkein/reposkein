@@ -61,7 +61,11 @@ impl<'a> Walk<'a> {
     /// base.1, base.2, … for collisions (PRD §5.3 ordinal disambiguation).
     fn unique(&mut self, base: String) -> String {
         let n = self.used.entry(base.clone()).or_insert(0);
-        let id = if *n == 0 { base.clone() } else { format!("{base}.{n}") };
+        let id = if *n == 0 {
+            base.clone()
+        } else {
+            format!("{base}.{n}")
+        };
         *n += 1;
         id
     }
@@ -326,11 +330,24 @@ mod tests {
         // Using top-level defs because compound-statement recursion (if/else) is tracked in A6.
         let src = b"def f(x):\n    return 1\ndef f(x):\n    return 2\n";
         let w = run(src);
-        let func_ids: Vec<&str> = w.nodes.iter()
-            .filter(|n| n.labels == ["Function"]).map(|n| n.id.as_str()).collect();
+        let func_ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .map(|n| n.id.as_str())
+            .collect();
         // Both must be present with distinct ids (no collision).
         assert!(func_ids.contains(&"rs1:r:func:m.py#f@1"));
-        assert!(func_ids.iter().any(|id| id.starts_with("rs1:r:func:m.py#f@1.")));
-        assert_eq!(func_ids.len(), func_ids.iter().collect::<std::collections::HashSet<_>>().len(), "ids unique");
+        assert!(func_ids
+            .iter()
+            .any(|id| id.starts_with("rs1:r:func:m.py#f@1.")));
+        assert_eq!(
+            func_ids.len(),
+            func_ids
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            "ids unique"
+        );
     }
 }

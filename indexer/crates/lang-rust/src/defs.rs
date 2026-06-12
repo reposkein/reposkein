@@ -77,7 +77,11 @@ impl<'a> Walk<'a> {
     /// base.1, base.2, … for collisions (PRD §5.3 ordinal disambiguation).
     fn unique(&mut self, base: String) -> String {
         let n = self.used.entry(base.clone()).or_insert(0);
-        let id = if *n == 0 { base.clone() } else { format!("{base}.{n}") };
+        let id = if *n == 0 {
+            base.clone()
+        } else {
+            format!("{base}.{n}")
+        };
         *n += 1;
         id
     }
@@ -274,7 +278,12 @@ mod tests {
     fn duplicate_name_arity_gets_ordinal() {
         // Two free fns same name+arity (e.g. behind cfg) — rare but must not collide.
         let w = run(b"fn f(x: u32) {}\nfn f(y: u32) {}\n");
-        let ids: Vec<&str> = w.nodes.iter().filter(|n| n.labels == ["Function"]).map(|n| n.id.as_str()).collect();
+        let ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .map(|n| n.id.as_str())
+            .collect();
         assert!(ids.contains(&"rs1:r:func:m.rs#f@1"));
         assert!(ids.iter().any(|id| id.starts_with("rs1:r:func:m.rs#f@1.")));
     }
