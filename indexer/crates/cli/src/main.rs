@@ -105,6 +105,10 @@ enum Commands {
     /// Git merge driver for canonical JSONL: <base> <ours> <theirs>; result
     /// is written back to the <ours> path.
     MergeJsonl {
+        /// The real (post-merge) pathname git provides via %P, used to infer
+        /// nodes-vs-edges (the positional base/ours/theirs are temp files).
+        #[arg(long)]
+        path: Option<PathBuf>,
         #[arg(long, value_parser = ["nodes", "edges"])]
         kind: Option<String>,
         base: PathBuf,
@@ -539,7 +543,7 @@ fn main() -> Result<()> {
             )?;
             run_cfg(
                 "merge.reposkein-jsonl.driver",
-                "reposkein-indexer merge-jsonl %O %A %B",
+                "reposkein-indexer merge-jsonl --path %P %O %A %B",
             )?;
 
             println!(
@@ -549,6 +553,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Commands::MergeJsonl {
+            path,
             kind,
             base,
             ours,
@@ -559,7 +564,11 @@ fn main() -> Result<()> {
             };
             let (b, o, t) = (read(&base)?, read(&ours)?, read(&theirs)?);
             let kind = kind.unwrap_or_else(|| {
-                if ours.to_string_lossy().contains("edges") {
+                let hint = path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| ours.to_string_lossy().to_string());
+                if hint.contains("edges") {
                     "edges".to_string()
                 } else {
                     "nodes".to_string()

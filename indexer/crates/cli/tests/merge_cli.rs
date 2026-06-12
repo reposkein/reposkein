@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use std::fs;
+use std::process::Command as Proc;
 use tempfile::tempdir;
 
 #[test]
@@ -52,4 +53,79 @@ fn merge_jsonl_unions_independent_summaries() {
     // canonical: sorted, LF-terminated
     assert!(merged.ends_with('\n'));
     assert!(merged.find("a#f").unwrap() < merged.find("b#g").unwrap());
+}
+
+#[test]
+fn real_git_merge_of_edges_jsonl_via_driver() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        Proc::new("git")
+            .args(args)
+            .current_dir(root)
+            .status()
+            .unwrap();
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@t.co"]);
+    git(&["config", "user.name", "t"]);
+    let bin = assert_cmd::cargo::cargo_bin("reposkein-indexer");
+    // Register the driver exactly as `init --hooks` does, using %P.
+    Proc::new("git")
+        .args(["config", "merge.reposkein-jsonl.driver"])
+        .arg(format!("{} merge-jsonl --path %P %O %A %B", bin.display()))
+        .current_dir(root)
+        .status()
+        .unwrap();
+    fs::create_dir_all(root.join(".reposkein")).unwrap();
+    fs::write(
+        root.join(".gitattributes"),
+        ".reposkein/edges.jsonl merge=reposkein-jsonl\n",
+    )
+    .unwrap();
+
+    let e = |from: &str| format!("{{\"from\":\"{from}\",\"type\":\"CONTAINS\",\"to\":\"b\"}}\n");
+    fs::write(root.join(".reposkein/edges.jsonl"), e("base")).unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "base"]);
+
+    // Detect the initial branch name (may be "master" or "main")
+    let initial_branch = {
+        let out = Proc::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    git(&["checkout", "-q", "-b", "feat"]);
+    fs::write(
+        root.join(".reposkein/edges.jsonl"),
+        format!("{}{}", e("base"), e("feat")),
+    )
+    .unwrap();
+    git(&["commit", "-qam", "feat"]);
+    git(&["checkout", "-q", &initial_branch]);
+    fs::write(
+        root.join(".reposkein/edges.jsonl"),
+        format!("{}{}", e("base"), e("main")),
+    )
+    .unwrap();
+    git(&["commit", "-qam", "main"]);
+    let status = Proc::new("git")
+        .args(["merge", "feat", "-m", "m"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+
+    assert!(
+        status.success(),
+        "driver-backed merge of edges.jsonl must succeed"
+    );
+    let merged = fs::read_to_string(root.join(".reposkein/edges.jsonl")).unwrap();
+    assert!(!merged.contains("<<<<<<<"), "no conflict markers");
+    // Both concurrent edges survive (union by key; the driver ran on edges, not as nodes).
+    assert!(merged.contains("\"from\":\"feat\""));
+    assert!(merged.contains("\"from\":\"main\""));
 }
