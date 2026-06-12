@@ -60,6 +60,9 @@ enum Commands {
         /// Disable nested-repo federation (index child repos' sources under this repo).
         #[arg(long)]
         no_federation: bool,
+        /// Emit a single JSON object with machine-readable stats instead of human text.
+        #[arg(long)]
+        json: bool,
     },
     /// Load committed .reposkein JSONL into Neo4j (reconstruct the DB).
     Load {
@@ -70,6 +73,9 @@ enum Commands {
         /// Skip federation: load only this repo's JSONL (no child repos).
         #[arg(long)]
         no_federation: bool,
+        /// Emit a single JSON object with machine-readable stats instead of human text.
+        #[arg(long)]
+        json: bool,
     },
     /// Export the repo's graph from Neo4j to .reposkein JSONL.
     Export {
@@ -315,6 +321,7 @@ fn main() -> Result<()> {
             repo_id,
             name,
             no_federation,
+            json,
         } => {
             let repo = resolve_repo_id(&path, repo_id);
             let repo_name = name.unwrap_or_else(|| {
@@ -385,18 +392,32 @@ fn main() -> Result<()> {
 
             write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
 
-            println!(
-                "indexed repo_id={repo} name={repo_name}: {} nodes, {} edges, {} federated children",
-                graph.nodes.len(),
-                graph.edges.len(),
-                out.children.len()
-            );
+            let files = graph.nodes.iter().filter(|n| n.labels == ["File"]).count();
+            if json {
+                let stats = serde_json::json!({
+                    "repo_id": repo,
+                    "files": files,
+                    "nodes": graph.nodes.len(),
+                    "edges": graph.edges.len(),
+                    "children": out.children.len(),
+                    "warnings": out.warnings,
+                });
+                println!("{}", serde_json::to_string(&stats).unwrap());
+            } else {
+                println!(
+                    "indexed repo_id={repo} name={repo_name}: {} nodes, {} edges, {} federated children",
+                    graph.nodes.len(),
+                    graph.edges.len(),
+                    out.children.len()
+                );
+            }
             Ok(())
         }
         Commands::Load {
             path,
             repo_id,
             no_federation,
+            json,
         } => {
             let repo = resolve_repo_id(&path, repo_id);
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
@@ -411,8 +432,18 @@ fn main() -> Result<()> {
                         .context("read edges.jsonl")?,
                 )?;
                 store.purge(&repo)?;
-                store.import_graph(&repo, &reposkein_core::Graph { nodes, edges })?;
-                println!("loaded repo_id={repo} (no federation)");
+                store.import_graph(&repo, &reposkein_core::Graph { nodes: nodes.clone(), edges: edges.clone() })?;
+                if json {
+                    let stats = serde_json::json!({
+                        "repo_id": repo,
+                        "repos": 1,
+                        "nodes": nodes.len(),
+                        "edges": edges.len(),
+                    });
+                    println!("{}", serde_json::to_string(&stats).unwrap());
+                } else {
+                    println!("loaded repo_id={repo} (no federation)");
+                }
             } else {
                 let mut seen = std::collections::BTreeSet::new();
                 let mut skipped = Vec::new();
@@ -421,9 +452,19 @@ fn main() -> Result<()> {
                 for s in &skipped {
                     eprintln!("reposkein: skipped (no .reposkein JSONL): {s}");
                 }
-                println!(
-                    "loaded {repos} repo(s): {n} nodes, {e} edges; {stitches} federation stitch(es)"
-                );
+                if json {
+                    let stats = serde_json::json!({
+                        "repo_id": repo,
+                        "repos": repos,
+                        "nodes": n,
+                        "edges": e,
+                    });
+                    println!("{}", serde_json::to_string(&stats).unwrap());
+                } else {
+                    println!(
+                        "loaded {repos} repo(s): {n} nodes, {e} edges; {stitches} federation stitch(es)"
+                    );
+                }
             }
             Ok(())
         }

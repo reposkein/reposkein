@@ -285,3 +285,31 @@ fn index_extracts_typescript_definitions() {
     let edges = fs::read_to_string(root.join(".reposkein/edges.jsonl")).unwrap();
     assert!(edges.contains("IMPLEMENTS"));
 }
+
+#[test]
+fn index_json_flag_emits_parseable_stats() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("a.py"), b"def f():\n    return 1\n").unwrap();
+
+    let output = Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args(["index", "--json", "--repo-id", "jsontest", "--name", "d"])
+        .arg(root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .expect("--json should emit parseable JSON");
+
+    assert_eq!(v["repo_id"], "jsontest", "repo_id in JSON");
+    assert!(v["nodes"].as_u64().unwrap_or(0) > 0, "nodes > 0");
+    assert!(v["edges"].as_u64().unwrap_or(0) > 0, "edges > 0");
+    assert!(v["files"].as_u64().is_some(), "files key present");
+    assert!(v["warnings"].is_array(), "warnings is array");
+    assert!(v["children"].as_u64().is_some(), "children key present");
+}
