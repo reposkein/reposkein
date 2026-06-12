@@ -82,10 +82,17 @@ enum Commands {
     },
     /// Check Neo4j connectivity and version.
     Doctor,
-    /// Delete all graph data for a repo_id from Neo4j.
+    /// Delete all graph data for a repo_id (or a whole federation) from Neo4j.
     Purge {
+        /// Delete only this repo_id's nodes.
         #[arg(long)]
-        repo: String,
+        repo: Option<String>,
+        /// Delete all repos in the federation rooted at `path`.
+        #[arg(long)]
+        federation: bool,
+        /// Repository root (used with --federation to locate JSONL).
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
     /// Install git hooks, .gitattributes merge lines, and the JSONL merge driver.
     Init {
@@ -272,6 +279,35 @@ fn load_federation(
     Ok((repos, n, e))
 }
 
+/// Collects a federation's repo_ids from committed JSONL (no DB), starting at
+/// `repo_id`/`path` and following proxy `federated_repo_id`/`root_path`.
+fn federation_repo_ids(
+    path: &Path,
+    repo_id: &str,
+    seen: &mut std::collections::BTreeSet<String>,
+) {
+    if !seen.insert(repo_id.to_string()) {
+        return;
+    }
+    let nodes_path = path.join(".reposkein").join("nodes.jsonl");
+    let Ok(txt) = std::fs::read_to_string(&nodes_path) else {
+        return;
+    };
+    let Ok(nodes) = reposkein_core::jsonl::read_nodes(&txt) else {
+        return;
+    };
+    for node in &nodes {
+        if node.labels == ["Repository"] {
+            if let (Some(fed), Some(rp)) = (
+                node.props.get("federated_repo_id").and_then(|v| v.as_str()),
+                node.props.get("root_path").and_then(|v| v.as_str()),
+            ) {
+                federation_repo_ids(&path.join(rp), fed, seen);
+            }
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -427,10 +463,31 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Commands::Purge { repo } => {
+        Commands::Purge {
+            repo,
+            federation,
+            path,
+        } => {
             let store = reposkein_neo4j_io::Neo4jStore::from_env()?;
-            let n = store.purge(&repo)?;
-            println!("purged {n} nodes for repo_id={repo}");
+            if federation {
+                let root = resolve_repo_id(&path, repo);
+                let mut ids = std::collections::BTreeSet::new();
+                federation_repo_ids(&path, &root, &mut ids);
+                let mut total = 0u64;
+                for id in &ids {
+                    total += store.purge(id)?;
+                }
+                println!(
+                    "purged federation ({} repos, {total} nodes): {:?}",
+                    ids.len(),
+                    ids
+                );
+            } else if let Some(id) = repo {
+                let n = store.purge(&id)?;
+                println!("purged {n} nodes for repo_id={id}");
+            } else {
+                anyhow::bail!("purge requires --repo <id> or --federation");
+            }
             Ok(())
         }
         Commands::Init { path, hooks } => {
