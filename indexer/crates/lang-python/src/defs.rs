@@ -25,6 +25,8 @@ pub struct Walk<'a> {
     pub edges: Vec<Edge>,
     pub calls: Vec<reposkein_core::extractor::RawCall>,
     used: HashMap<String, u32>,
+    declared: std::collections::HashMap<String, String>,
+    pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
 }
 
 fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
@@ -54,6 +56,8 @@ impl<'a> Walk<'a> {
             edges: Vec::new(),
             calls: Vec::new(),
             used: HashMap::new(),
+            declared: std::collections::HashMap::new(),
+            pending_heritage: Vec::new(),
         }
     }
 
@@ -163,17 +167,22 @@ impl<'a> Walk<'a> {
                     );
                     self.edges
                         .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
+                    self.declared.insert(qualified.clone(), id.clone());
 
-                    // INHERITS: base classes named in the superclass list,
-                    // resolved intra-file only (exact). The `superclasses`
-                    // field is an `argument_list`.
+                    // INHERITS: defer to the shared resolver (intra-file,
+                    // scope-aware). `superclasses` is an `argument_list`.
                     if let Some(supers) = child.child_by_field_name("superclasses") {
                         let mut sc = supers.walk();
                         for base in supers.named_children(&mut sc) {
                             if base.kind() == "identifier" {
-                                let base_name = text(base, self.source);
-                                let base_id = self.class_id(base_name);
-                                self.edges.push(Edge::new(id.clone(), "INHERITS", base_id));
+                                self.pending_heritage.push(
+                                    reposkein_core::heritage::PendingHeritage {
+                                        decl_scope: scope.to_vec(),
+                                        from_name: name.clone(),
+                                        edge_type: "INHERITS".to_string(),
+                                        base_name: text(base, self.source).to_string(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -246,6 +255,12 @@ impl<'a> Walk<'a> {
             }
         }
     }
+
+    /// Resolves deferred heritage edges (call once after the top-level walk).
+    pub fn finalize_heritage(&mut self) {
+        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
+        self.edges.extend(e);
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +273,7 @@ mod tests {
         // Leak nothing: build a Walk borrowing the inputs, walk the root.
         let mut w = Walk::new("r", "m.py", "rs1:r:file:m.py", src);
         w.walk(tree.root_node(), &[], "rs1:r:file:m.py", ScopeKind::Module);
+        w.finalize_heritage();
         w
     }
 
@@ -407,6 +423,17 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
             "ids unique"
+        );
+    }
+
+    #[test]
+    fn nested_class_inherits_sibling_resolves() {
+        let w = run(b"class Outer:\n    class A:\n        pass\n    class B(A):\n        pass\n");
+        let b = w.nodes.iter().find(|n| n.props.get("qualified_name") == Some(&json!("Outer.B"))).unwrap();
+        let a = w.nodes.iter().find(|n| n.props.get("qualified_name") == Some(&json!("Outer.A"))).unwrap();
+        assert!(
+            w.edges.iter().any(|e| e.from == b.id && e.typ == "INHERITS" && e.to == a.id),
+            "nested B(A) should INHERITS the sibling Outer.A (was previously dropped)"
         );
     }
 }
