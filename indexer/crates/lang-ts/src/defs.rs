@@ -27,6 +27,9 @@ fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
     node.utf8_text(source).unwrap_or("")
 }
 
+/// TS/JS `@arity`: named children of `parameters` whose kind ends in
+/// `parameter` (required/optional/rest); type-only nodes don't count. FROZEN
+/// part of the rs1: scheme — see `reposkein_core::id` and the test below.
 fn arity(node: TsNode) -> usize {
     let Some(params) = node.child_by_field_name("parameters") else {
         return 0;
@@ -168,15 +171,27 @@ impl<'a> Walk<'a> {
         let mut cursor = node.walk();
         let children: Vec<TsNode> = node.named_children(&mut cursor).collect();
         for raw in children {
-            // Unwrap `export <decl>`.
+            // Unwrap `export <decl>` and `export default <value>`.
             let child = if raw.kind() == "export_statement" {
-                raw.child_by_field_name("declaration").unwrap_or(raw)
+                raw.child_by_field_name("declaration")
+                    .or_else(|| raw.child_by_field_name("value"))
+                    .unwrap_or(raw)
             } else {
                 raw
             };
             match child.kind() {
-                "function_declaration" => {
-                    let name = name_of(child, self.source);
+                "function_declaration"
+                | "generator_function_declaration"
+                | "function_expression" => {
+                    // Handles `export default function f(){}` (value field) and
+                    // anonymous `export default function(){}` — the latter has
+                    // an empty name, so fall back to "default" for a usable id.
+                    let n = name_of(child, self.source);
+                    let name = if n.is_empty() {
+                        "default".to_string()
+                    } else {
+                        n
+                    };
                     self.push_function(child, &name, scope, parent_id);
                 }
                 "method_definition" => {
@@ -365,6 +380,32 @@ mod tests {
             .collect();
         assert!(ids.contains(&"rs1:r:func:m.ts#f@1"));
         assert!(ids.iter().any(|id| id.starts_with("rs1:r:func:m.ts#f@1.")));
+    }
+
+    #[test]
+    fn arity_counts_typed_optional_params_frozen() {
+        // FROZEN @arity contract (PRD §5.3): named children ending in
+        // `parameter` (required/optional/rest); types don't count.
+        let w = run(b"function freeze2(a: number, b?: string) { return a; }\n");
+        let ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .map(|n| n.id.as_str())
+            .collect();
+        assert!(ids.contains(&"rs1:r:func:m.ts#freeze2@2"));
+    }
+
+    #[test]
+    fn anonymous_default_export_gets_default_name() {
+        let w = run(b"export default function () { return 1; }\n");
+        let f = w
+            .nodes
+            .iter()
+            .find(|n| n.labels == ["Function"])
+            .expect("anonymous default export → a Function node");
+        assert_eq!(f.props["qualified_name"].as_str(), Some("default"));
+        assert_eq!(f.id, "rs1:r:func:m.ts#default@0");
     }
 
     #[test]

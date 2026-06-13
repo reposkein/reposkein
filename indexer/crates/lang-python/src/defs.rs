@@ -344,6 +344,24 @@ mod tests {
     }
 
     #[test]
+    fn arity_counts_all_params_incl_self_and_splat_frozen() {
+        // FROZEN @arity contract (PRD §5.3): every named param counts —
+        // self/cls, *args, **kw, defaults included.
+        let w = run(b"class C:\n    def m(self, a, b=1):\n        pass\n\ndef free(x, *args, **kw):\n    pass\n");
+        let ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .map(|n| n.id.as_str())
+            .collect();
+        assert!(ids.contains(&"rs1:r:func:m.py#C.m@3"), "self + a + b=1 → 3");
+        assert!(
+            ids.contains(&"rs1:r:func:m.py#free@3"),
+            "x + *args + **kw → 3"
+        );
+    }
+
+    #[test]
     fn extracts_decorated_and_compound_nested_defs() {
         let src = b"@app.route(\"/x\")\ndef handler():\n    pass\n\nif TYPE_CHECKING:\n    def helper():\n        pass\n\ntry:\n    def maybe():\n        pass\nexcept Exception:\n    pass\n\nclass C:\n    @property\n    def name(self):\n        return self._n\n";
         let w = run(src);

@@ -27,6 +27,9 @@ fn name_of(node: TsNode, source: &[u8]) -> String {
         .unwrap_or_default()
 }
 
+/// Rust `@arity`: named children of `parameters` of kind `parameter` or
+/// `self_parameter`. FROZEN part of the rs1: scheme — see
+/// `reposkein_core::id` and the test below.
 fn arity(node: TsNode) -> usize {
     let Some(params) = node.child_by_field_name("parameters") else {
         return 0;
@@ -325,6 +328,22 @@ mod tests {
             .collect();
         assert!(ids.contains(&"rs1:r:func:m.rs#f@1"));
         assert!(ids.iter().any(|id| id.starts_with("rs1:r:func:m.rs#f@1.")));
+    }
+
+    #[test]
+    fn arity_counts_self_and_params_frozen() {
+        // FROZEN @arity contract (PRD §5.3): self_parameter + parameter count.
+        let w = run(
+            b"struct S {}\nimpl S {\n    fn m(&self, a: i32, b: i32) {}\n}\nfn free(x: u32) {}\n",
+        );
+        let ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .map(|n| n.id.as_str())
+            .collect();
+        assert!(ids.contains(&"rs1:r:func:m.rs#S.m@3"), "&self + a + b → 3");
+        assert!(ids.contains(&"rs1:r:func:m.rs#free@1"));
     }
 
     #[test]
