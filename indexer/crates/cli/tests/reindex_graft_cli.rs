@@ -94,12 +94,13 @@ fn sidecar_summaries_graft_into_committed_jsonl_and_truncate() {
         "sidecar summary should graft into committed nodes.jsonl"
     );
     // The sidecar is consumed (renamed aside + removed); no leftover summaries.
-    let consumed = !sidecar.exists()
-        || fs::read_to_string(&sidecar).unwrap().trim().is_empty();
+    let consumed = !sidecar.exists() || fs::read_to_string(&sidecar).unwrap().trim().is_empty();
     assert!(consumed, "sidecar should be consumed after grafting");
     // The temp claim file must not be left behind.
     assert!(
-        !root.join(".reposkein/local/summaries.consuming.jsonl").exists(),
+        !root
+            .join(".reposkein/local/summaries.consuming.jsonl")
+            .exists(),
         "claim temp file must be cleaned up"
     );
 }
@@ -126,21 +127,30 @@ fn sidecar_written_after_consumption_survives_next_index() {
     // First sidecar summary, consumed by an index.
     fs::write(
         &sidecar,
-        format!("{{\"id\":\"{id}\",\"semantic_summary\":\"first\",\"summary_of_hash\":\"{hash}\"}}\n"),
+        format!(
+            "{{\"id\":\"{id}\",\"semantic_summary\":\"first\",\"summary_of_hash\":\"{hash}\"}}\n"
+        ),
     )
     .unwrap();
     index(root);
-    assert!(fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap().contains("\"first\""));
+    assert!(fs::read_to_string(root.join(".reposkein/nodes.jsonl"))
+        .unwrap()
+        .contains("\"first\""));
 
     // A NEW sidecar summary written after consumption must graft on the next index.
     fs::write(
         &sidecar,
-        format!("{{\"id\":\"{id}\",\"semantic_summary\":\"second\",\"summary_of_hash\":\"{hash}\"}}\n"),
+        format!(
+            "{{\"id\":\"{id}\",\"semantic_summary\":\"second\",\"summary_of_hash\":\"{hash}\"}}\n"
+        ),
     )
     .unwrap();
     index(root);
     let after = fs::read_to_string(root.join(".reposkein/nodes.jsonl")).unwrap();
-    assert!(after.contains("\"second\""), "post-consumption sidecar write must survive");
+    assert!(
+        after.contains("\"second\""),
+        "post-consumption sidecar write must survive"
+    );
 }
 
 #[test]
