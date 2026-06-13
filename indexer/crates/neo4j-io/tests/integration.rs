@@ -169,6 +169,82 @@ fn stitch_links_proxy_to_child_root() {
 
 #[test]
 #[ignore]
+fn cross_repo_call_stitches_to_unique_child_function() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    s.purge("xrA").unwrap();
+    s.purge("xrB").unwrap();
+
+    // A.run records an external call to "helper"; B defines helper.
+    let a_run = Node::new("rs1:xrA:func:svc.py#run@0", "Function")
+        .set("name", json!("run"))
+        .set("qualified_name", json!("run"))
+        .set("external_calls", json!(["helper"]));
+    let b_helper = Node::new("rs1:xrB:func:base.py#helper@0", "Function")
+        .set("name", json!("helper"))
+        .set("qualified_name", json!("helper"));
+    s.import_graph("xrA", &Graph { nodes: vec![a_run], edges: vec![] }).unwrap();
+    s.import_graph("xrB", &Graph { nodes: vec![b_helper], edges: vec![] }).unwrap();
+
+    let n = s
+        .stitch_cross_repo_calls(&["xrA".to_string(), "xrB".to_string()])
+        .unwrap();
+    assert!(n >= 1, "one cross-repo CALLS edge created");
+
+    let c = s
+        .run_count(
+            "MATCH (:Rs:Function {id:'rs1:xrA:func:svc.py#run@0'})\
+             -[r:CALLS {cross_repo:true}]->\
+             (:Rs:Function {id:'rs1:xrB:func:base.py#helper@0'}) RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(c, 1, "exactly one cross-repo CALLS A.run -> B.helper");
+
+    s.purge("xrA").unwrap();
+    s.purge("xrB").unwrap();
+}
+
+#[test]
+#[ignore]
+fn ambiguous_cross_repo_call_is_skipped() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    s.purge("xrA").unwrap();
+    s.purge("xrB").unwrap();
+    s.purge("xrC").unwrap();
+
+    let a_run = Node::new("rs1:xrA:func:svc.py#run@0", "Function")
+        .set("name", json!("run"))
+        .set("qualified_name", json!("run"))
+        .set("external_calls", json!(["helper"]));
+    let b_helper = Node::new("rs1:xrB:func:base.py#helper@0", "Function")
+        .set("name", json!("helper"))
+        .set("qualified_name", json!("helper"));
+    let c_helper = Node::new("rs1:xrC:func:other.py#helper@0", "Function")
+        .set("name", json!("helper"))
+        .set("qualified_name", json!("helper"));
+    s.import_graph("xrA", &Graph { nodes: vec![a_run], edges: vec![] }).unwrap();
+    s.import_graph("xrB", &Graph { nodes: vec![b_helper], edges: vec![] }).unwrap();
+    s.import_graph("xrC", &Graph { nodes: vec![c_helper], edges: vec![] }).unwrap();
+
+    s.stitch_cross_repo_calls(&["xrA".into(), "xrB".into(), "xrC".into()])
+        .unwrap();
+    let c = s
+        .run_count(
+            "MATCH (:Rs:Function {id:'rs1:xrA:func:svc.py#run@0'})-[r:CALLS {cross_repo:true}]->() RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(c, 0, "ambiguous name (helper in 2 repos) creates no edge");
+
+    s.purge("xrA").unwrap();
+    s.purge("xrB").unwrap();
+    s.purge("xrC").unwrap();
+}
+
+#[test]
+#[ignore]
 fn confidence_floats_round_trip_byte_identical() {
     // PRD §6.2.4 fixes confidence to 2 decimals; §6.2.7 guarantees load->export
     // byte-identical. Exercise the exact values the resolver emits (0.5/0.7 and

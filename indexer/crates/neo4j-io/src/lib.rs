@@ -123,4 +123,45 @@ impl Neo4jStore {
             }
         })
     }
+
+    /// Creates DB-only cross-repo `CALLS` edges from each caller's committed
+    /// `external_calls` (imported-but-unresolved names) to the matching function
+    /// in another federated repo. Only an UNAMBIGUOUS match (exactly one
+    /// federated function with that name, in a different repo) produces an edge;
+    /// ambiguous/absent names are skipped. Edges are `cross_repo:true,
+    /// stitched:true` and cross repo_id boundaries, so per-repo export ignores
+    /// them. Idempotent (MERGE). Returns the number of such edges after the call.
+    pub fn stitch_cross_repo_calls(&self, repo_ids: &[String]) -> Result<u64> {
+        let ids: Vec<String> = repo_ids.to_vec();
+        self.rt.block_on(async {
+            // For each (caller f, external name), collect the federated
+            // functions named `name` in OTHER repos; link only when exactly one.
+            let mut r = self
+                .graph
+                .execute(
+                    query(
+                        "MATCH (f:Rs:Function) \
+                         WHERE f.repo_id IN $ids AND f.external_calls IS NOT NULL \
+                         UNWIND f.external_calls AS name \
+                         MATCH (m:Rs:Function {name: name}) \
+                         WHERE m.repo_id IN $ids AND m.repo_id <> f.repo_id \
+                         WITH f, collect(DISTINCT m) AS matches \
+                         WHERE size(matches) = 1 \
+                         WITH f, matches[0] AS m \
+                         MERGE (f)-[s:CALLS {cross_repo: true}]->(m) \
+                         ON CREATE SET s.resolution = 'name_match', s.confidence = 0.5, \
+                                       s.stitched = true, s.call_sites = 1 \
+                         RETURN count(s) AS c",
+                    )
+                    .param("ids", ids),
+                )
+                .await?;
+            if let Ok(Some(row)) = r.next().await {
+                let c: i64 = row.get("c")?;
+                Ok(c as u64)
+            } else {
+                Ok(0)
+            }
+        })
+    }
 }
