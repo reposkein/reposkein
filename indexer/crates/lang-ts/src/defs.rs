@@ -21,6 +21,8 @@ pub struct Walk<'a> {
     pub edges: Vec<Edge>,
     pub calls: Vec<reposkein_core::extractor::RawCall>,
     used: HashMap<String, u32>,
+    declared: std::collections::HashMap<String, String>,
+    pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
 }
 
 fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
@@ -66,6 +68,8 @@ impl<'a> Walk<'a> {
             edges: Vec::new(),
             calls: Vec::new(),
             used: HashMap::new(),
+            declared: std::collections::HashMap::new(),
+            pending_heritage: Vec::new(),
         }
     }
 
@@ -238,8 +242,9 @@ impl<'a> Walk<'a> {
                     );
                     self.edges
                         .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
+                    self.declared.insert(qualified.clone(), id.clone());
 
-                    // Heritage: extends → INHERITS, implements → IMPLEMENTS (intra-file).
+                    // Heritage: extends → INHERITS, implements → IMPLEMENTS (deferred).
                     let mut hc = child.walk();
                     for h in child.named_children(&mut hc) {
                         if h.kind() == "class_heritage" {
@@ -248,27 +253,28 @@ impl<'a> Walk<'a> {
                                 match clause.kind() {
                                     "extends_clause" => {
                                         if let Some(base) = clause.child_by_field_name("value") {
-                                            let base_name = text(base, self.source);
-                                            self.edges.push(Edge::new(
-                                                id.clone(),
-                                                "INHERITS",
-                                                self.class_id(base_name),
-                                            ));
+                                            self.pending_heritage.push(
+                                                reposkein_core::heritage::PendingHeritage {
+                                                    decl_scope: scope.to_vec(),
+                                                    from_name: name.clone(),
+                                                    edge_type: "INHERITS".to_string(),
+                                                    base_name: text(base, self.source).to_string(),
+                                                },
+                                            );
                                         }
                                     }
                                     "implements_clause" => {
                                         let mut ic = clause.walk();
                                         for ty in clause.named_children(&mut ic) {
                                             if ty.kind() == "type_identifier" {
-                                                let iname = text(ty, self.source);
-                                                self.edges.push(Edge::new(
-                                                    id.clone(),
-                                                    "IMPLEMENTS",
-                                                    format!(
-                                                        "rs1:{}:iface:{}#{}",
-                                                        self.repo, self.rel_path, iname
-                                                    ),
-                                                ));
+                                                self.pending_heritage.push(
+                                                    reposkein_core::heritage::PendingHeritage {
+                                                        decl_scope: scope.to_vec(),
+                                                        from_name: name.clone(),
+                                                        edge_type: "IMPLEMENTS".to_string(),
+                                                        base_name: text(ty, self.source).to_string(),
+                                                    },
+                                                );
                                             }
                                         }
                                     }
@@ -292,6 +298,7 @@ impl<'a> Walk<'a> {
                             .set("start_line", json!(child.start_position().row + 1))
                             .set("end_line", json!(child.end_position().row + 1)),
                     );
+                    self.declared.insert(name.clone(), id.clone());
                     self.edges
                         .push(Edge::new(parent_id.to_string(), "DEFINES", id));
                 }
@@ -306,6 +313,7 @@ impl<'a> Walk<'a> {
                             .set("start_line", json!(child.start_position().row + 1))
                             .set("end_line", json!(child.end_position().row + 1)),
                     );
+                    self.declared.insert(name.clone(), id.clone());
                     self.edges
                         .push(Edge::new(parent_id.to_string(), "DEFINES", id));
                 }
@@ -316,6 +324,12 @@ impl<'a> Walk<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// Resolves deferred heritage edges (call once after the top-level walk).
+    pub fn finalize_heritage(&mut self) {
+        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
+        self.edges.extend(e);
     }
 }
 
@@ -328,6 +342,7 @@ mod tests {
         let tree = parse(src, false).unwrap(); // .ts grammar
         let mut w = Walk::new("r", "m.ts", src);
         w.walk(tree.root_node(), &[], "rs1:r:file:m.ts", ScopeKind::Module);
+        w.finalize_heritage();
         w
     }
 
@@ -406,6 +421,16 @@ mod tests {
             .expect("anonymous default export → a Function node");
         assert_eq!(f.props["qualified_name"].as_str(), Some("default"));
         assert_eq!(f.id, "rs1:r:func:m.ts#default@0");
+    }
+
+    #[test]
+    fn nested_namespace_class_inherits_resolves() {
+        // A class extending an in-file sibling under a namespace scope.
+        let w = run(b"class Base {}\nclass Mid extends Base {}\nclass Leaf extends Mid {}\n");
+        let id = |q: &str| w.nodes.iter().find(|n| n.props.get("qualified_name").and_then(|v| v.as_str()) == Some(q)).map(|n| n.id.clone());
+        let leaf = id("Leaf").unwrap();
+        let mid = id("Mid").unwrap();
+        assert!(w.edges.iter().any(|e| e.from == leaf && e.typ == "INHERITS" && e.to == mid));
     }
 
     #[test]
