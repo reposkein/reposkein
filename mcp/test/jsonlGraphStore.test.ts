@@ -37,8 +37,8 @@ describe("JsonlGraphStore", () => {
 
   it("returns empty/null for a different repo_id", async () => {
     const store = new JsonlGraphStore(root, CONFORMANCE_REPO);
-    expect(await store.getNode("otherrepo", "rs1:proftest:func:base.py#helper@0")).toBeNull();
-    expect(await store.resolveByName("otherrepo", "helper")).toEqual([]);
+    expect(await store.getNode(["otherrepo"], "rs1:proftest:func:base.py#helper@0")).toBeNull();
+    expect(await store.resolveByName(["otherrepo"], "helper")).toEqual([]);
   });
 
   it("runRead throws CypherUnsupportedError", async () => {
@@ -64,7 +64,7 @@ describe("JsonlGraphStore", () => {
     expect(ok.kind).toBe("ok");
     if (ok.kind === "ok") expect(ok.stale_replaced).toBe(false);
     // The in-memory write is visible to a subsequent read.
-    const node = await store.getNode(CONFORMANCE_REPO, "rs1:proftest:func:base.py#helper@0");
+    const node = await store.getNode([CONFORMANCE_REPO], "rs1:proftest:func:base.py#helper@0");
     expect(node?.semantic_summary).toBe("Helper does X.");
   });
 
@@ -81,7 +81,7 @@ describe("JsonlGraphStore", () => {
 
     // A brand-new store instance (cold load) must see the persisted summary.
     const fresh = new JsonlGraphStore(root, CONFORMANCE_REPO);
-    const node = await fresh.getNode(CONFORMANCE_REPO, id);
+    const node = await fresh.getNode([CONFORMANCE_REPO], id);
     expect(node?.semantic_summary).toBe("Helper does X.");
     expect(node?.summary_of_hash).toBe("hh"); // helper's content_hash in the fixture
   });
@@ -101,5 +101,15 @@ describe("JsonlGraphStore", () => {
     utimesSync(join(dir, "nodes.jsonl"), future, future);
     const after = await store.resolveByName(CONFORMANCE_REPO, "added");
     expect(after).toHaveLength(1);
+  });
+
+  it("tags resolved targets and neighbors with repo_id", async () => {
+    const store = new JsonlGraphStore(root, CONFORMANCE_REPO);
+    const helper = await store.resolveByName([CONFORMANCE_REPO], "helper");
+    expect(helper[0]?.repo_id).toBe(CONFORMANCE_REPO);
+    const callers = await store.callers([CONFORMANCE_REPO], "rs1:proftest:func:base.py#helper@0", 10);
+    expect(callers.every((c) => c.repo_id === CONFORMANCE_REPO)).toBe(true);
+    // A repo not in the set yields nothing.
+    expect(await store.callers(["otherrepo"], "rs1:proftest:func:base.py#helper@0", 10)).toEqual([]);
   });
 });
