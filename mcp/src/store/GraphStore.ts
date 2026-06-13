@@ -15,6 +15,7 @@ export class CypherUnsupportedError extends Error {
  *  direct (1-hop) CALLS edges; absent for 2-hop callees. */
 export interface NeighborRow {
   id: string;
+  repo_id?: string;
   name: string; // qualified_name
   semantic_summary: string | null;
   summary_of_hash: string | null;
@@ -40,28 +41,28 @@ export type WriteSummaryResult =
  *  semantic methods so the backend (Neo4j or JSONL) is swappable. Raw Cypher
  *  is exposed only via runRead, used by the read_cypher tool. */
 export interface GraphStore {
-  /** Exact node by id within a repo. null if not found. */
-  getNode(repoId: string, id: string): Promise<TargetRow | null>;
+  /** Exact node by id within the given repos. null if not found. */
+  getNode(repoIds: string[], id: string): Promise<TargetRow | null>;
 
-  /** Function/Class nodes in a file matching name OR qualified_name. */
+  /** Function/Class nodes in a file matching name OR qualified_name, within the given repos. */
   resolveByPathAndName(
-    repoId: string,
+    repoIds: string[],
     filePath: string,
     name: string
   ): Promise<TargetRow[]>;
 
-  /** Function nodes anywhere in the repo matching name. */
-  resolveByName(repoId: string, name: string): Promise<TargetRow[]>;
+  /** Function nodes anywhere in the given repos matching name. */
+  resolveByName(repoIds: string[], name: string): Promise<TargetRow[]>;
 
-  /** Direct callers of id, ordered by id, capped at limit. */
-  callers(repoId: string, id: string, limit: number): Promise<NeighborRow[]>;
+  /** Direct callers of id whose repo_id is in repoIds, ordered by id, capped at limit. */
+  callers(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]>;
 
-  /** Direct callees of id, ordered by id, capped at limit. */
-  callees(repoId: string, id: string, limit: number): Promise<NeighborRow[]>;
+  /** Direct callees of id whose repo_id is in repoIds, ordered by id, capped at limit. */
+  callees(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]>;
 
-  /** Callees exactly 2 hops out, distinct, ordered by id, capped at limit. */
+  /** Callees exactly 2 hops out whose repo_id is in repoIds, distinct, ordered by id, capped at limit. */
   calleesAt2Hops(
-    repoId: string,
+    repoIds: string[],
     id: string,
     limit: number
   ): Promise<NeighborRow[]>;

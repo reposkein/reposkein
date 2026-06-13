@@ -30,17 +30,18 @@ export class Neo4jGraphStore implements GraphStore {
     "t.id AS id, t.name AS name, t.qualified_name AS qualified_name, t.file_path AS file_path, " +
     "t.start_line AS start_line, t.end_line AS end_line, t.semantic_summary AS semantic_summary, " +
     "t.summary_of_hash AS summary_of_hash, t.content_hash AS content_hash, " +
-    "[l IN labels(t) WHERE l <> 'Rs'] AS labels";
+    "[l IN labels(t) WHERE l <> 'Rs'] AS labels, t.repo_id AS repo_id";
 
   // Projection for a neighbor node (was assemble.ts NEIGHBOR_RETURN). Caller
   // prefixes `x.id ` and may append edge props.
   private static NEIGHBOR_RETURN =
     "AS id, x.qualified_name AS name, x.semantic_summary AS semantic_summary, " +
-    "x.summary_of_hash AS summary_of_hash, x.content_hash AS content_hash";
+    "x.summary_of_hash AS summary_of_hash, x.content_hash AS content_hash, x.repo_id AS repo_id";
 
   private static toTargetRow(r: Record<string, unknown>): TargetRow {
     return {
       id: r.id as string,
+      repo_id: (r.repo_id as string) ?? "",
       name: r.name as string,
       qualified_name: (r.qualified_name as string) ?? (r.name as string),
       file_path: (r.file_path as string) ?? "",
@@ -65,65 +66,66 @@ export class Neo4jGraphStore implements GraphStore {
       row.resolution = r.resolution as string;
     if (r.confidence !== undefined && r.confidence !== null)
       row.confidence = r.confidence as number;
+    if (typeof r.repo_id === "string") row.repo_id = r.repo_id;
     return row;
   }
 
-  async getNode(repoId: string, id: string): Promise<TargetRow | null> {
+  async getNode(repoIds: string[], id: string): Promise<TargetRow | null> {
     const rows = await this.runRead(
-      `MATCH (t:Rs {id:$id, repo_id:$repo}) RETURN ${Neo4jGraphStore.TARGET_RETURN}`,
-      { id, repo: repoId }
+      `MATCH (t:Rs {id:$id}) WHERE t.repo_id IN $repo_ids RETURN ${Neo4jGraphStore.TARGET_RETURN}`,
+      { id, repo_ids: repoIds }
     );
     return rows.length === 1 ? Neo4jGraphStore.toTargetRow(rows[0]!) : null;
   }
 
   async resolveByPathAndName(
-    repoId: string,
+    repoIds: string[],
     filePath: string,
     name: string
   ): Promise<TargetRow[]> {
     const rows = await this.runRead(
-      `MATCH (t:Rs {repo_id:$repo, file_path:$path}) ` +
-        `WHERE (t.name = $name OR t.qualified_name = $name) AND (t:Function OR t:Class) ` +
+      `MATCH (t:Rs {file_path:$path}) ` +
+        `WHERE t.repo_id IN $repo_ids AND (t.name = $name OR t.qualified_name = $name) AND (t:Function OR t:Class) ` +
         `RETURN ${Neo4jGraphStore.TARGET_RETURN}`,
-      { repo: repoId, path: filePath, name }
+      { repo_ids: repoIds, path: filePath, name }
     );
     return rows.map(Neo4jGraphStore.toTargetRow);
   }
 
-  async resolveByName(repoId: string, name: string): Promise<TargetRow[]> {
+  async resolveByName(repoIds: string[], name: string): Promise<TargetRow[]> {
     const rows = await this.runRead(
-      `MATCH (t:Function {repo_id:$repo, name:$name}) RETURN ${Neo4jGraphStore.TARGET_RETURN}`,
-      { repo: repoId, name }
+      `MATCH (t:Function {name:$name}) WHERE t.repo_id IN $repo_ids RETURN ${Neo4jGraphStore.TARGET_RETURN}`,
+      { repo_ids: repoIds, name }
     );
     return rows.map(Neo4jGraphStore.toTargetRow);
   }
 
-  async callers(repoId: string, id: string, limit: number): Promise<NeighborRow[]> {
+  async callers(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     const rows = await this.runRead(
-      `MATCH (x:Function {repo_id:$repo})-[r:CALLS]->(t:Rs {id:$id}) ` +
+      `MATCH (x:Function)-[r:CALLS]->(t:Rs {id:$id}) WHERE x.repo_id IN $repo_ids ` +
         `RETURN x.id ${Neo4jGraphStore.NEIGHBOR_RETURN}, r.resolution AS resolution, r.confidence AS confidence ` +
         `ORDER BY x.id LIMIT $limit`,
-      { id, repo: repoId, limit: neo4j.int(limit) }
+      { id, repo_ids: repoIds, limit: neo4j.int(limit) }
     );
     return rows.map(Neo4jGraphStore.toNeighborRow);
   }
 
-  async callees(repoId: string, id: string, limit: number): Promise<NeighborRow[]> {
+  async callees(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     const rows = await this.runRead(
-      `MATCH (t:Rs {id:$id})-[r:CALLS]->(x:Function {repo_id:$repo}) ` +
+      `MATCH (t:Rs {id:$id})-[r:CALLS]->(x:Function) WHERE x.repo_id IN $repo_ids ` +
         `RETURN x.id ${Neo4jGraphStore.NEIGHBOR_RETURN}, r.resolution AS resolution, r.confidence AS confidence ` +
         `ORDER BY x.id LIMIT $limit`,
-      { id, repo: repoId, limit: neo4j.int(limit) }
+      { id, repo_ids: repoIds, limit: neo4j.int(limit) }
     );
     return rows.map(Neo4jGraphStore.toNeighborRow);
   }
 
-  async calleesAt2Hops(repoId: string, id: string, limit: number): Promise<NeighborRow[]> {
+  async calleesAt2Hops(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     const rows = await this.runRead(
-      `MATCH (t:Rs {id:$id})-[:CALLS*2..2]->(x:Function {repo_id:$repo}) ` +
+      `MATCH (t:Rs {id:$id})-[:CALLS*2..2]->(x:Function) WHERE x.repo_id IN $repo_ids ` +
         `RETURN DISTINCT x.id ${Neo4jGraphStore.NEIGHBOR_RETURN} ` +
         `ORDER BY x.id LIMIT $limit`,
-      { id, repo: repoId, limit: neo4j.int(limit) }
+      { id, repo_ids: repoIds, limit: neo4j.int(limit) }
     );
     return rows.map(Neo4jGraphStore.toNeighborRow);
   }

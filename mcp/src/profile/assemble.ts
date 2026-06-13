@@ -19,6 +19,7 @@ function neighborFromRow(r: NeighborRow, distance: number): NeighborEntry {
   };
   if (r.resolution !== undefined) entry.resolution = r.resolution;
   if (r.confidence !== undefined) entry.confidence = r.confidence;
+  if (r.repo_id !== undefined) entry.repo_id = r.repo_id;
   return entry;
 }
 
@@ -28,20 +29,21 @@ const MAX_NEIGHBORS = 25;
  *  hard-capped at 2 (PRD §10.1). */
 export async function assembleProfile(
   store: GraphStore,
-  repo: string,
+  repos: string | string[],
   target: TargetRow,
   hops: 1 | 2
 ): Promise<ContextProfile> {
+  const repoIds = Array.isArray(repos) ? repos : [repos];
   const id = target.id;
 
   // Upstream: direct callers — fetch one extra to detect truncation.
-  const upRows = await store.callers(repo, id, MAX_NEIGHBORS + 1);
+  const upRows = await store.callers(repoIds, id, MAX_NEIGHBORS + 1);
   const upstreamRaw = upRows.map((r) => neighborFromRow(r, 1));
   const upstreamTruncated = upstreamRaw.length > MAX_NEIGHBORS;
   const upstream = upstreamRaw.slice(0, MAX_NEIGHBORS);
 
   // Downstream: direct callees (distance 1, with edge props).
-  const downRows = await store.callees(repo, id, MAX_NEIGHBORS + 1);
+  const downRows = await store.callees(repoIds, id, MAX_NEIGHBORS + 1);
   const downstreamRaw = downRows.map((r) => neighborFromRow(r, 1));
   let downstreamTruncated = downstreamRaw.length > MAX_NEIGHBORS;
   const downstream = downstreamRaw.slice(0, MAX_NEIGHBORS);
@@ -49,7 +51,7 @@ export async function assembleProfile(
   if (hops === 2) {
     const seen = new Set(downstream.map((d) => d.id));
     seen.add(id);
-    const d2 = await store.calleesAt2Hops(repo, id, MAX_NEIGHBORS + 1);
+    const d2 = await store.calleesAt2Hops(repoIds, id, MAX_NEIGHBORS + 1);
     for (const r of d2) {
       const e = neighborFromRow(r, 2);
       if (!seen.has(e.id)) {
@@ -71,6 +73,7 @@ export async function assembleProfile(
     lines: [target.start_line, target.end_line] as [number, number],
     summary: tState.summary,
     stale: tState.stale,
+    repo_id: target.repo_id,
   };
 
   const enrichment_needed = [

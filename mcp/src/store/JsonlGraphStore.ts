@@ -23,10 +23,11 @@ function num(v: unknown): number {
   return typeof v === "number" ? v : 0;
 }
 
-function toTargetRow(n: ParsedNode): TargetRow {
+function toTargetRow(n: ParsedNode, repoId: string): TargetRow {
   const name = str(n.props.name) ?? "";
   return {
     id: n.id,
+    repo_id: repoId,
     name,
     qualified_name: str(n.props.qualified_name) ?? name,
     file_path: str(n.props.file_path) ?? "",
@@ -39,9 +40,10 @@ function toTargetRow(n: ParsedNode): TargetRow {
   };
 }
 
-function toNeighborRow(n: ParsedNode, edgeProps?: Record<string, unknown>): NeighborRow {
+function toNeighborRow(n: ParsedNode, repoId: string, edgeProps?: Record<string, unknown>): NeighborRow {
   const row: NeighborRow = {
     id: n.id,
+    repo_id: repoId,
     name: str(n.props.qualified_name) ?? str(n.props.name) ?? "",
     semantic_summary: str(n.props.semantic_summary),
     summary_of_hash: str(n.props.summary_of_hash),
@@ -109,20 +111,20 @@ export class JsonlGraphStore implements GraphStore {
     }
   }
 
-  private scoped(repoId: string): boolean {
-    return repoId === this.repoId;
+  private scoped(repoIds: string[]): boolean {
+    return repoIds.includes(this.repoId);
   }
 
-  async getNode(repoId: string, id: string): Promise<TargetRow | null> {
+  async getNode(repoIds: string[], id: string): Promise<TargetRow | null> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return null;
+    if (!this.scoped(repoIds)) return null;
     const n = this.graph.byId.get(id);
-    return n ? toTargetRow(n) : null;
+    return n ? toTargetRow(n, this.repoId) : null;
   }
 
-  async resolveByPathAndName(repoId: string, filePath: string, name: string): Promise<TargetRow[]> {
+  async resolveByPathAndName(repoIds: string[], filePath: string, name: string): Promise<TargetRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return [];
+    if (!this.scoped(repoIds)) return [];
     return this.graph.nodes
       .filter(
         (n) =>
@@ -130,50 +132,50 @@ export class JsonlGraphStore implements GraphStore {
           (hasLabel(n, "Function") || hasLabel(n, "Class")) &&
           (str(n.props.name) === name || str(n.props.qualified_name) === name)
       )
-      .map(toTargetRow);
+      .map((n) => toTargetRow(n, this.repoId));
   }
 
-  async resolveByName(repoId: string, name: string): Promise<TargetRow[]> {
+  async resolveByName(repoIds: string[], name: string): Promise<TargetRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return [];
+    if (!this.scoped(repoIds)) return [];
     return this.graph.nodes
       .filter((n) => hasLabel(n, "Function") && str(n.props.name) === name)
-      .map(toTargetRow);
+      .map((n) => toTargetRow(n, this.repoId));
   }
 
-  async callers(repoId: string, id: string, limit: number): Promise<NeighborRow[]> {
+  async callers(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return [];
+    if (!this.scoped(repoIds)) return [];
     const rows: NeighborRow[] = [];
     for (const e of this.graph.callsTo.get(id) ?? []) {
       const x = this.graph.byId.get(e.from);
-      if (x && hasLabel(x, "Function")) rows.push(toNeighborRow(x, e.props));
+      if (x && hasLabel(x, "Function")) rows.push(toNeighborRow(x, this.repoId, e.props));
     }
     rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return rows.slice(0, limit);
   }
 
-  async callees(repoId: string, id: string, limit: number): Promise<NeighborRow[]> {
+  async callees(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return [];
+    if (!this.scoped(repoIds)) return [];
     const rows: NeighborRow[] = [];
     for (const e of this.graph.callsFrom.get(id) ?? []) {
       const x = this.graph.byId.get(e.to);
-      if (x && hasLabel(x, "Function")) rows.push(toNeighborRow(x, e.props));
+      if (x && hasLabel(x, "Function")) rows.push(toNeighborRow(x, this.repoId, e.props));
     }
     rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return rows.slice(0, limit);
   }
 
-  async calleesAt2Hops(repoId: string, id: string, limit: number): Promise<NeighborRow[]> {
+  async calleesAt2Hops(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return [];
+    if (!this.scoped(repoIds)) return [];
     const seen = new Map<string, NeighborRow>();
     for (const e1 of this.graph.callsFrom.get(id) ?? []) {
       for (const e2 of this.graph.callsFrom.get(e1.to) ?? []) {
         const x = this.graph.byId.get(e2.to);
         if (x && hasLabel(x, "Function") && !seen.has(x.id)) {
-          seen.set(x.id, toNeighborRow(x)); // no resolution/confidence at 2 hops
+          seen.set(x.id, toNeighborRow(x, this.repoId));
         }
       }
     }
@@ -182,7 +184,7 @@ export class JsonlGraphStore implements GraphStore {
 
   async writeSummary(repoId: string, id: string, fields: SummaryFields): Promise<WriteSummaryResult> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return { kind: "not_found" };
+    if (!this.scoped([repoId])) return { kind: "not_found" };
     const n = this.graph.byId.get(id);
     if (!n) return { kind: "not_found" };
     const chash = str(n.props.content_hash);
@@ -208,7 +210,7 @@ export class JsonlGraphStore implements GraphStore {
 
   async federatedRepoIds(repoId: string): Promise<string[]> {
     this.ensureFresh();
-    if (!this.scoped(repoId)) return [];
+    if (!this.scoped([repoId])) return [];
     const ids: string[] = [];
     for (const n of this.graph.nodes) {
       if (hasLabel(n, "Repository")) {

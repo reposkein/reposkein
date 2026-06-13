@@ -1,5 +1,6 @@
 export interface TargetRow {
   id: string;
+  repo_id: string;
   name: string;
   qualified_name: string;
   file_path: string;
@@ -20,6 +21,7 @@ export interface NeighborEntry {
   resolution?: string;
   confidence?: number;
   distance?: number;
+  repo_id?: string;
 }
 
 export interface ProfileTarget {
@@ -29,6 +31,7 @@ export interface ProfileTarget {
   lines: [number, number];
   summary: string | null;
   stale: boolean;
+  repo_id?: string;
 }
 
 export interface ContextProfile {

@@ -12,7 +12,7 @@ const MSG =
 /** A no-op store used when NEO4J_PASSWORD is absent.
  *  All operations reject with an instructive error. */
 export class UnconfiguredStore implements GraphStore {
-  async getNode(_repoId: string, _id: string): Promise<TargetRow | null> {
+  async getNode(_repoIds: string[], _id: string): Promise<TargetRow | null> {
     throw new Error(MSG);
   }
   async resolveByPathAndName(): Promise<TargetRow[]> {

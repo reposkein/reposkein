@@ -79,12 +79,13 @@ export async function main(): Promise<void> {
     {
       title: "Get context profile",
       description:
-        "Resolve a function/class (by node_id, file_path+name, or name) and return its caller/callee neighborhood (hops 1-2) with inlined prose and an enrichment_needed list. Never guesses — returns candidates if a name is ambiguous.",
+        "Resolve a function/class (by node_id, file_path+name, or name) and return its caller/callee neighborhood (hops 1-2) with inlined prose and an enrichment_needed list. Never guesses — returns candidates if a name is ambiguous. Pass federated:true to resolve and traverse across nested repos.",
       inputSchema: {
         node_id: z.string().optional(),
         file_path: z.string().optional(),
         name: z.string().optional(),
         hops: z.union([z.literal(1), z.literal(2)]).optional(),
+        federated: z.boolean().optional(),
       },
     },
     async (args) => {
