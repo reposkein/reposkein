@@ -149,19 +149,42 @@ fn resolve_one(
     Vec::new()
 }
 
+/// Edges (unchanged) — see [`resolve_full`].
 pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &str) -> Vec<Edge> {
+    resolve_full(nodes, imports, calls, repo).0
+}
+
+/// Like [`resolve`], but also returns, per caller Function id, the sorted+deduped
+/// list of **imported-but-unresolved-in-repo** bare call names (the callee's
+/// *original* name, so aliases match the target). This is the committed
+/// `external_calls` data a federation-load stitch uses to create cross-repo
+/// CALLS edges (design: cross-repo-calls.md, Option A).
+pub fn resolve_full(
+    nodes: &[Node],
+    imports: &[RawImport],
+    calls: &[RawCall],
+    repo: &str,
+) -> (Vec<Edge>, Vec<(String, Vec<String>)>) {
     let files = file_paths(nodes);
     let (mut edges, import_targets) = resolve_imports(imports, &files, repo);
+
+    // ALL imported local→original bindings (incl. cross-repo imports that
+    // resolve_imports filtered out, since their target file isn't in-repo).
+    let mut imported_originals: HashMap<(String, String), String> = HashMap::new();
+    for imp in imports {
+        for (local, original) in &imp.symbols {
+            imported_originals
+                .entry((imp.importing_file_id.clone(), local.clone()))
+                .or_insert_with(|| original.clone());
+        }
+    }
 
     let funcs = functions(nodes);
     let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut by_file_freefn: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
     for f in &funcs {
-        by_name
-            .entry(f.name.clone())
-            .or_default()
-            .push(f.id.clone());
+        by_name.entry(f.name.clone()).or_default().push(f.id.clone());
         if !f.qualified.contains('.') {
             by_file_freefn
                 .entry((f.file_path.clone(), f.name.clone()))
@@ -177,8 +200,9 @@ pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &
         v.sort();
     }
 
-    // Aggregate call sites: (caller_id, target_id) -> (count, resolution, confidence).
     let mut agg: BTreeMap<(String, String), (u64, &'static str, f64)> = BTreeMap::new();
+    // caller_id -> sorted-unique external (imported-but-unresolved) original names.
+    let mut external: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for c in calls {
         let caller_file_id = id::file_id(repo, &c.caller_path);
         let resolved = resolve_one(
@@ -189,6 +213,18 @@ pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &
             &import_targets,
             &caller_file_id,
         );
+        if resolved.is_empty() && c.receiver.is_none() {
+            // Unresolved bare call: if it names an imported symbol, record the
+            // import's ORIGINAL name as a cross-repo candidate.
+            if let Some(original) =
+                imported_originals.get(&(caller_file_id.clone(), c.callee_name.clone()))
+            {
+                external
+                    .entry(c.caller_id.clone())
+                    .or_default()
+                    .insert(original.clone());
+            }
+        }
         for (target, res, conf) in resolved {
             let entry = agg
                 .entry((c.caller_id.clone(), target))
@@ -205,7 +241,12 @@ pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &
         e.props.insert("call_sites".to_string(), json!(count));
         edges.push(e);
     }
-    edges
+
+    let external_out: Vec<(String, Vec<String>)> = external
+        .into_iter()
+        .map(|(k, set)| (k, set.into_iter().collect()))
+        .collect();
+    (edges, external_out)
 }
 
 #[cfg(test)]
@@ -421,5 +462,75 @@ mod tests {
         let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
         assert_eq!(e.to, target_fn.id);
         assert_eq!(e.props["resolution"], json!("exact"));
+    }
+
+    #[test]
+    fn imported_unresolved_call_recorded_as_external() {
+        // svc.py imports `helper` from a module NOT in this repo (child.base),
+        // so the import is unresolved in-repo; the bare call to helper() then
+        // resolves to nothing → recorded as an external call (original name).
+        let caller = func_node("r", "svc.py", "run", 0);
+        let nodes = vec![file_node("r", "svc.py"), caller.clone()];
+        let imports = vec![RawImport {
+            importing_file_id: id::file_id("r", "svc.py"),
+            importing_path: "svc.py".to_string(),
+            symbols: vec![("helper".into(), "helper".into())],
+            candidate_paths: vec!["child/base.py".to_string()], // not in `files`
+        }];
+        let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");
+        assert!(edges.iter().all(|e| e.typ != "CALLS"), "no in-repo CALLS edge");
+        assert_eq!(external, vec![(caller.id.clone(), vec!["helper".to_string()])]);
+    }
+
+    #[test]
+    fn aliased_imported_unresolved_call_records_original_name() {
+        // `from child.base import helper as h; h()` → record "helper".
+        let caller = func_node("r", "svc.py", "run", 0);
+        let nodes = vec![file_node("r", "svc.py"), caller.clone()];
+        let imports = vec![RawImport {
+            importing_file_id: id::file_id("r", "svc.py"),
+            importing_path: "svc.py".to_string(),
+            symbols: vec![("h".into(), "helper".into())],
+            candidate_paths: vec!["child/base.py".to_string()],
+        }];
+        let calls = vec![call(&caller.id, "svc.py", "run", "h", None)];
+        let (_e, external) = resolve_full(&nodes, &imports, &calls, "r");
+        assert_eq!(external, vec![(caller.id.clone(), vec!["helper".to_string()])]);
+    }
+
+    #[test]
+    fn non_imported_unresolved_call_is_not_external() {
+        // A bare call to a name that is NOT imported (e.g. a builtin) is noise —
+        // not recorded.
+        let caller = func_node("r", "svc.py", "run", 0);
+        let nodes = vec![file_node("r", "svc.py"), caller.clone()];
+        let calls = vec![call(&caller.id, "svc.py", "run", "print", None)];
+        let (_e, external) = resolve_full(&nodes, &[], &calls, "r");
+        assert!(external.is_empty(), "non-imported unresolved call is not recorded");
+    }
+
+    #[test]
+    fn in_repo_resolved_imported_call_is_not_external() {
+        // helper IS defined in this repo (in base.py) and imported → it resolves
+        // in-repo (rung 3), so it is NOT recorded as external.
+        let caller = func_node("r", "svc.py", "run", 0);
+        let helper = func_node("r", "base.py", "helper", 0);
+        let nodes = vec![
+            file_node("r", "svc.py"),
+            file_node("r", "base.py"),
+            caller.clone(),
+            helper.clone(),
+        ];
+        let imports = vec![RawImport {
+            importing_file_id: id::file_id("r", "svc.py"),
+            importing_path: "svc.py".to_string(),
+            symbols: vec![("helper".into(), "helper".into())],
+            candidate_paths: vec!["base.py".to_string()], // in-repo
+        }];
+        let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");
+        assert!(edges.iter().any(|e| e.typ == "CALLS" && e.to == helper.id));
+        assert!(external.is_empty(), "in-repo-resolved import is not external");
     }
 }
