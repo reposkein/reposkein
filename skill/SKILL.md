@@ -20,7 +20,9 @@ grep when the graph can answer structurally.
   `file_path`+`name`, or `name`) and get its caller/callee neighborhood (1–2
   hops) as pre-inlined prose plus an `enrichment_needed` list. Your primary
   navigation tool. Pass `federated: true` to resolve a symbol in a nested repo
-  and include cross-repo callers/callees (each tagged with its `repo_id`).
+  and include cross-repo callers/callees (each tagged with its `repo_id`, and
+  `cross_repo: true` when the call crosses a repo boundary). Cross-repo edges are
+  name-matched heuristics — treat them as hypotheses to verify, not facts.
 - **`write_semantic_summary`** — attach a 1–3 sentence plain-text business-logic
   summary to a node. Stamped with the node's content hash so staleness is
   tracked automatically.

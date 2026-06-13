@@ -33,11 +33,11 @@ gated("federated get_context_profile (Neo4j, 2 repos)", () => {
       `CREATE (t:Rs:Function {id:'rs1:fedBtest:func:b.py#target@0', repo_id:$child, name:'target', qualified_name:'target', file_path:'b.py', start_line:1, end_line:2, content_hash:'ht'})`,
       { child: CHILD }
     );
-    // Hand-built CROSS-REPO CALLS edge (the indexer does not emit these yet;
-    // this proves the federated traversal mechanism).
+    // Cross-repo CALLS edge representative of what stitch_cross_repo_calls
+    // (XR-M2) emits at federation load: cross_repo + name_match.
     await s.run(
       `MATCH (c:Rs {id:'rs1:fedAtest:func:a.py#caller@0'}), (t:Rs {id:'rs1:fedBtest:func:b.py#target@0'})
-       CREATE (c)-[:CALLS {resolution:'exact', confidence:1.0, call_sites:1}]->(t)`
+       CREATE (c)-[:CALLS {resolution:'name_match', confidence:0.5, cross_repo:true, stitched:true, call_sites:1}]->(t)`
     );
     await s.close();
     store = Neo4jGraphStore.fromEnv();
@@ -79,6 +79,8 @@ gated("federated get_context_profile (Neo4j, 2 repos)", () => {
     expect(fed.downstream.map((d) => d.name)).toContain("target");
     const t = fed.downstream.find((d) => d.name === "target")!;
     expect(t.repo_id).toBe(CHILD);
+    expect(t.cross_repo).toBe(true);
+    expect(t.resolution).toBe("name_match");
     expect(fed.inlined_context).toContain(`[repo: ${CHILD}]`);
   });
 });

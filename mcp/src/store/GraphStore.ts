@@ -22,6 +22,8 @@ export interface NeighborRow {
   content_hash: string | null;
   resolution?: string;
   confidence?: number;
+  /** True for a federation-stitched cross-repo CALLS edge. */
+  cross_repo?: boolean;
 }
 
 /** Fields the caller computes (date/agent) and hands to the store to persist. */

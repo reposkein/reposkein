@@ -22,6 +22,8 @@ export interface NeighborEntry {
   confidence?: number;
   distance?: number;
   repo_id?: string;
+  /** True for a cross-repo (federation-stitched) neighbor. */
+  cross_repo?: boolean;
 }
 
 export interface ProfileTarget {

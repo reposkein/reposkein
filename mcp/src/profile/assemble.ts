@@ -20,6 +20,7 @@ function neighborFromRow(r: NeighborRow, distance: number): NeighborEntry {
   if (r.resolution !== undefined) entry.resolution = r.resolution;
   if (r.confidence !== undefined) entry.confidence = r.confidence;
   if (r.repo_id !== undefined) entry.repo_id = r.repo_id;
+  if (r.cross_repo) entry.cross_repo = true;
   return entry;
 }
 

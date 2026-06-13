@@ -67,6 +67,7 @@ export class Neo4jGraphStore implements GraphStore {
     if (r.confidence !== undefined && r.confidence !== null)
       row.confidence = r.confidence as number;
     if (typeof r.repo_id === "string") row.repo_id = r.repo_id;
+    if (r.cross_repo === true) row.cross_repo = true;
     return row;
   }
 
@@ -103,7 +104,7 @@ export class Neo4jGraphStore implements GraphStore {
   async callers(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     const rows = await this.runRead(
       `MATCH (x:Function)-[r:CALLS]->(t:Rs {id:$id}) WHERE x.repo_id IN $repo_ids ` +
-        `RETURN x.id ${Neo4jGraphStore.NEIGHBOR_RETURN}, r.resolution AS resolution, r.confidence AS confidence ` +
+        `RETURN x.id ${Neo4jGraphStore.NEIGHBOR_RETURN}, r.resolution AS resolution, r.confidence AS confidence, r.cross_repo AS cross_repo ` +
         `ORDER BY x.id LIMIT $limit`,
       { id, repo_ids: repoIds, limit: neo4j.int(limit) }
     );
@@ -113,7 +114,7 @@ export class Neo4jGraphStore implements GraphStore {
   async callees(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     const rows = await this.runRead(
       `MATCH (t:Rs {id:$id})-[r:CALLS]->(x:Function) WHERE x.repo_id IN $repo_ids ` +
-        `RETURN x.id ${Neo4jGraphStore.NEIGHBOR_RETURN}, r.resolution AS resolution, r.confidence AS confidence ` +
+        `RETURN x.id ${Neo4jGraphStore.NEIGHBOR_RETURN}, r.resolution AS resolution, r.confidence AS confidence, r.cross_repo AS cross_repo ` +
         `ORDER BY x.id LIMIT $limit`,
       { id, repo_ids: repoIds, limit: neo4j.int(limit) }
     );
