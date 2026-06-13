@@ -19,7 +19,8 @@ grep when the graph can answer structurally.
 - **`get_context_profile`** — resolve a function/class (by `node_id`,
   `file_path`+`name`, or `name`) and get its caller/callee neighborhood (1–2
   hops) as pre-inlined prose plus an `enrichment_needed` list. Your primary
-  navigation tool.
+  navigation tool. Pass `federated: true` to resolve a symbol in a nested repo
+  and include cross-repo callers/callees (each tagged with its `repo_id`).
 - **`write_semantic_summary`** — attach a 1–3 sentence plain-text business-logic
   summary to a node. Stamped with the node's content hash so staleness is
   tracked automatically.
@@ -47,7 +48,9 @@ grep when the graph can answer structurally.
 5. **Graph over grep.** Use `read_cypher` for multi-hop questions. Keep
    traversals ≤ 2 hops and filter by `n.repo_id = $repo_id`. To trace across
    nested repositories, pass `federated: true` and filter by
-   `n.repo_id IN $repo_ids`.
+   `n.repo_id IN $repo_ids`. For `get_context_profile`, pass `federated: true`
+   to span nested repositories; cross-repo neighbors are annotated
+   `[repo: <id>]`.
 6. **Reindex after editing.** After modifying any source file, call
    `reindex_file` for it so the graph reflects your change before you continue
    reasoning over it.
