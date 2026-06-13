@@ -1111,10 +1111,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reposkein-lang-common"
+version = "0.0.0"
+dependencies = [
+ "reposkein-core",
+ "tree-sitter",
+]
+
+[[package]]
 name = "reposkein-lang-python"
 version = "0.0.0"
 dependencies = [
  "reposkein-core",
+ "reposkein-lang-common",
  "serde_json",
  "tree-sitter",
  "tree-sitter-python",
@@ -1125,6 +1134,7 @@ name = "reposkein-lang-rust"
 version = "0.0.0"
 dependencies = [
  "reposkein-core",
+ "reposkein-lang-common",
  "serde_json",
  "tree-sitter",
  "tree-sitter-rust",
@@ -1135,6 +1145,7 @@ name = "reposkein-lang-ts"
 version = "0.0.0"
 dependencies = [
  "reposkein-core",
+ "reposkein-lang-common",
  "serde_json",
  "tree-sitter",
  "tree-sitter-typescript",
