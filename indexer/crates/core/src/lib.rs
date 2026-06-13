@@ -195,8 +195,22 @@ pub fn index_tree_with(
         }
     }
 
-    let mut resolved = resolve::resolve(&nodes, &all_imports, &all_calls, repo);
+    let (mut resolved, external) = resolve::resolve_full(&nodes, &all_imports, &all_calls, repo);
     edges.append(&mut resolved);
+    // Attach cross-repo call candidates to their caller Function nodes (design:
+    // cross-repo-calls.md). Omitted when empty → repos without cross-repo
+    // imports stay byte-identical. A federation-load stitch (XR-M2) turns these
+    // into cross-repo CALLS edges.
+    if !external.is_empty() {
+        let ext: std::collections::HashMap<&str, &Vec<String>> =
+            external.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        for n in &mut nodes {
+            if let Some(names) = ext.get(n.id.as_str()) {
+                n.props
+                    .insert("external_calls".to_string(), json!(names));
+            }
+        }
+    }
 
     // --- Federation records for ReposkeinChild boundaries ---
     let mut children: Vec<ChildRepoInfo> = Vec::new();
@@ -415,6 +429,18 @@ mod tests {
             });
             out
         }
+    }
+
+    #[test]
+    fn external_calls_absent_when_no_cross_repo_imports() {
+        // The python fixture (src/a.py: print(1)) has no imported-unresolved
+        // calls → no node carries external_calls → output unchanged.
+        let dir = fixture();
+        let g = index_tree(dir.path(), "r", "demo", &[]).unwrap();
+        assert!(
+            g.nodes.iter().all(|n| !n.props.contains_key("external_calls")),
+            "no external_calls property when there are no cross-repo imports"
+        );
     }
 
     #[test]
