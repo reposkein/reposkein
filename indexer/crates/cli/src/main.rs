@@ -315,19 +315,24 @@ fn run_index(
     if let Some(db_nodes) = db_summary_nodes(&repo) {
         nodes = reposkein_core::merge::graft_summaries(&nodes, &db_nodes);
     }
-    // 3) Overlay JSONL-mode sidecar summaries.
+    // 3) Overlay JSONL-mode sidecar summaries. Atomically *claim* the sidecar
+    //    (rename aside) BEFORE reading it: a write_semantic_summary landing
+    //    during this window then writes a FRESH sidecar that survives to the
+    //    next index, instead of being erased by a blind truncate (data loss).
     let sidecar_path = out_dir.join("local").join("summaries.jsonl");
-    let had_sidecar = sidecar_path.exists();
-    if had_sidecar {
-        if let Ok(text) = std::fs::read_to_string(&sidecar_path) {
+    let claimed_path = out_dir.join("local").join("summaries.consuming.jsonl");
+    let claimed = std::fs::rename(&sidecar_path, &claimed_path).is_ok();
+    if claimed {
+        if let Ok(text) = std::fs::read_to_string(&claimed_path) {
             let sidecar_nodes = reposkein_core::jsonl::read_sidecar_summaries(&text);
             nodes = reposkein_core::merge::graft_summaries(&nodes, &sidecar_nodes);
         }
     }
     std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
         .context("failed to write nodes.jsonl")?;
-    if had_sidecar {
-        let _ = std::fs::write(&sidecar_path, "");
+    if claimed {
+        // Grafted summaries are now in committed nodes.jsonl; drop the claim.
+        let _ = std::fs::remove_file(&claimed_path);
     }
     std::fs::write(
         out_dir.join("edges.jsonl"),
