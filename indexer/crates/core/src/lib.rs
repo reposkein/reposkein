@@ -4,6 +4,7 @@ pub mod cache;
 pub mod classify;
 pub mod extractor;
 pub mod hash;
+pub mod heritage;
 pub mod id;
 pub mod jsonl;
 pub mod merge;
