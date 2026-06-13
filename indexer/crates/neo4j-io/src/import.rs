@@ -17,8 +17,19 @@ fn props_to_bolt_map(props: &serde_json::Map<String, serde_json::Value>) -> Bolt
     BoltType::Map(m)
 }
 
+/// Whether a Neo4j error from a `CREATE ... IF NOT EXISTS` schema statement
+/// indicates the rule already exists. `CREATE INDEX IF NOT EXISTS` is NOT
+/// race-free: two concurrent callers (e.g. parallel `load`s, or a fresh DB hit
+/// by several processes) can both see "not exists" and both create, so one
+/// fails with `EquivalentSchemaRuleAlreadyExists`. The schema is correct either
+/// way, so this is benign and must be tolerated.
+fn schema_already_exists(err_msg: &str) -> bool {
+    err_msg.contains("EquivalentSchemaRuleAlreadyExists") || err_msg.contains("already exists")
+}
+
 impl Neo4jStore {
-    /// Idempotent constraints + indexes (no APOC). Safe to call repeatedly.
+    /// Idempotent constraints + indexes (no APOC). Safe to call repeatedly AND
+    /// concurrently: an "already exists" race on creation is treated as success.
     pub fn setup_schema(&self) -> Result<()> {
         self.rt.block_on(async {
             for stmt in [
@@ -28,7 +39,12 @@ impl Neo4jStore {
                 "CREATE INDEX rs_name IF NOT EXISTS FOR (n:Rs) ON (n.name)",
                 "CREATE INDEX rs_chash IF NOT EXISTS FOR (n:Rs) ON (n.content_hash)",
             ] {
-                self.graph.run(query(stmt)).await?;
+                if let Err(e) = self.graph.run(query(stmt)).await {
+                    if schema_already_exists(&e.to_string()) {
+                        continue; // benign concurrent-creation race
+                    }
+                    return Err(e.into());
+                }
             }
             Ok(())
         })
@@ -95,5 +111,30 @@ impl Neo4jStore {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::schema_already_exists;
+
+    #[test]
+    fn classifies_equivalent_schema_rule_as_already_exists() {
+        let msg = "Neo4j error `Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists`: \
+                   An equivalent index already exists, 'Index( id=6, name='rs_path' )'.";
+        assert!(schema_already_exists(msg));
+    }
+
+    #[test]
+    fn classifies_generic_already_exists() {
+        assert!(schema_already_exists("constraint already exists"));
+    }
+
+    #[test]
+    fn does_not_classify_unrelated_errors() {
+        assert!(!schema_already_exists(
+            "Neo.ClientError.Statement.SyntaxError: bad query"
+        ));
+        assert!(!schema_already_exists("connection refused"));
     }
 }
