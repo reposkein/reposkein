@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli", "crates/lang-python", "crates/lang-ts", "crates/lang-rust", "crates/neo4j-io"]
+members = ["crates/core", "crates/lang-common", "crates/cli", "crates/lang-python", "crates/lang-ts", "crates/lang-rust", "crates/neo4j-io"]
 
 [workspace.package]
 version = "0.0.0"
