@@ -1,5 +1,5 @@
 import { statSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, isAbsolute, sep } from "node:path";
 import {
   CypherUnsupportedError,
   type GraphStore,
@@ -9,10 +9,11 @@ import {
 } from "./GraphStore.js";
 import type { TargetRow } from "../profile/types.js";
 import {
-  buildGraph,
+  buildFederatedGraph,
   emptyGraph,
   type ParsedGraph,
   type ParsedNode,
+  type RepoSource,
 } from "./jsonlGraph.js";
 import { readSidecar, upsertSidecar, sidecarPath } from "./sidecar.js";
 
@@ -23,11 +24,22 @@ function num(v: unknown): number {
   return typeof v === "number" ? v : 0;
 }
 
-function toTargetRow(n: ParsedNode, repoId: string): TargetRow {
+/** Resolves a federated child dir from an untrusted committed root_path,
+ *  rejecting absolute paths, `..`, and anything escaping `base`. */
+function safeChildDir(base: string, rootPath: string): string | null {
+  if (isAbsolute(rootPath)) return null;
+  if (rootPath.split(/[\\/]/).includes("..")) return null;
+  const baseAbs = resolve(base);
+  const childAbs = resolve(baseAbs, rootPath);
+  if (childAbs === baseAbs || childAbs.startsWith(baseAbs + sep)) return childAbs;
+  return null;
+}
+
+function toTargetRow(n: ParsedNode): TargetRow {
   const name = str(n.props.name) ?? "";
   return {
     id: n.id,
-    repo_id: repoId,
+    repo_id: n.repoId,
     name,
     qualified_name: str(n.props.qualified_name) ?? name,
     file_path: str(n.props.file_path) ?? "",
@@ -40,10 +52,10 @@ function toTargetRow(n: ParsedNode, repoId: string): TargetRow {
   };
 }
 
-function toNeighborRow(n: ParsedNode, repoId: string, edgeProps?: Record<string, unknown>): NeighborRow {
+function toNeighborRow(n: ParsedNode, edgeProps?: Record<string, unknown>): NeighborRow {
   const row: NeighborRow = {
     id: n.id,
-    repo_id: repoId,
+    repo_id: n.repoId,
     name: str(n.props.qualified_name) ?? str(n.props.name) ?? "",
     semantic_summary: str(n.props.semantic_summary),
     summary_of_hash: str(n.props.summary_of_hash),
@@ -52,19 +64,26 @@ function toNeighborRow(n: ParsedNode, repoId: string, edgeProps?: Record<string,
   if (edgeProps) {
     if (typeof edgeProps.resolution === "string") row.resolution = edgeProps.resolution;
     if (typeof edgeProps.confidence === "number") row.confidence = edgeProps.confidence;
+    if (edgeProps.cross_repo === true) row.cross_repo = true;
   }
   return row;
 }
 
 const hasLabel = (n: ParsedNode, l: string): boolean => n.labels.includes(l);
 
-/** A GraphStore over a single repo's committed .reposkein JSONL. Holds exactly
- *  the repo whose files it loaded; all methods scope on repo === this.repoId.
- *  Reloads when either JSONL file's mtime changes. writeSummary persists to the
- *  durable sidecar (.reposkein/local/summaries.jsonl) added in B1-M3. */
+/** A GraphStore over a repo's committed .reposkein JSONL.  In single-repo mode
+ *  it loads only the root; in federated mode it also loads nested children
+ *  (guarded, cycle-safe) and merges them into one graph.  All read methods
+ *  scope per-node by repoIds — so non-federated reads (repoIds=[root]) see
+ *  exactly the root (children invisible).
+ *
+ *  Reloads when either ROOT JSONL file's mtime changes (v1: a child-only
+ *  change without a root change won't trigger reload — acceptable).
+ *  writeSummary persists to the durable sidecar (.reposkein/local/summaries.jsonl). */
 export class JsonlGraphStore implements GraphStore {
   private graph: ParsedGraph = emptyGraph();
   private mtime = -1;
+  private readonly repoPath: string;
   private readonly nodesPath: string;
   private readonly edgesPath: string;
   private readonly sidecarFile: string;
@@ -73,6 +92,7 @@ export class JsonlGraphStore implements GraphStore {
     repoPath: string,
     private readonly repoId: string
   ) {
+    this.repoPath = repoPath;
     const dir = join(repoPath, ".reposkein");
     this.nodesPath = join(dir, "nodes.jsonl");
     this.edgesPath = join(dir, "edges.jsonl");
@@ -80,7 +100,50 @@ export class JsonlGraphStore implements GraphStore {
     this.ensureFresh();
   }
 
-  /** Reloads the graph if either file's mtime changed since last load. */
+  /** Gathers committed JSONL for the root + all transitively federated
+   *  children (guarded, cycle-safe). Each child's repo_id comes from the proxy
+   *  Repository node's federated_repo_id in the parent's nodes.jsonl. */
+  private collectRepos(): RepoSource[] {
+    const repos: RepoSource[] = [];
+    const seen = new Set<string>();
+    const visit = (dir: string, repoId: string) => {
+      if (seen.has(repoId)) return;
+      seen.add(repoId);
+      const nodesPath = join(dir, ".reposkein", "nodes.jsonl");
+      const edgesPath = join(dir, ".reposkein", "edges.jsonl");
+      let nodesText = "";
+      let edgesText = "";
+      try {
+        if (existsSync(nodesPath)) nodesText = readFileSync(nodesPath, "utf8");
+        if (existsSync(edgesPath)) edgesText = readFileSync(edgesPath, "utf8");
+      } catch {
+        return;
+      }
+      repos.push({ repoId, nodesText, edgesText });
+      // Discover children from this repo's Repository proxy nodes.
+      for (const line of nodesText.split("\n")) {
+        if (line.trim() === "") continue;
+        let obj: Record<string, unknown>;
+        try {
+          obj = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        const labels = Array.isArray(obj.labels) ? obj.labels : [];
+        if (!labels.includes("Repository")) continue;
+        const fid = obj.federated_repo_id;
+        const rp = obj.root_path;
+        if (typeof fid === "string" && typeof rp === "string" && rp !== ".") {
+          const childDir = safeChildDir(dir, rp);
+          if (childDir) visit(childDir, fid);
+        }
+      }
+    };
+    visit(this.repoPath, this.repoId);
+    return repos;
+  }
+
+  /** Reloads the graph if either ROOT file's mtime changed since last load. */
   private ensureFresh(): void {
     let m = 0;
     try {
@@ -92,10 +155,9 @@ export class JsonlGraphStore implements GraphStore {
     if (m === this.mtime) return;
     this.mtime = m;
     try {
-      const nodesText = existsSync(this.nodesPath) ? readFileSync(this.nodesPath, "utf8") : "";
-      const edgesText = existsSync(this.edgesPath) ? readFileSync(this.edgesPath, "utf8") : "";
-      this.graph = buildGraph(nodesText, edgesText);
-      // Overlay durable JSONL-mode summaries (visible even before reindex).
+      this.graph = buildFederatedGraph(this.collectRepos());
+      // Overlay the ROOT's durable sidecar summaries (child sidecars are their
+      // own concern; v1 overlays the active repo only).
       for (const [id, rec] of readSidecar(this.sidecarFile)) {
         const n = this.graph.byId.get(id);
         if (n) {
@@ -111,45 +173,38 @@ export class JsonlGraphStore implements GraphStore {
     }
   }
 
-  private scoped(repoIds: string[]): boolean {
-    return repoIds.includes(this.repoId);
-  }
-
   async getNode(repoIds: string[], id: string): Promise<TargetRow | null> {
     this.ensureFresh();
-    if (!this.scoped(repoIds)) return null;
     const n = this.graph.byId.get(id);
-    return n ? toTargetRow(n, this.repoId) : null;
+    return n && repoIds.includes(n.repoId) ? toTargetRow(n) : null;
   }
 
   async resolveByPathAndName(repoIds: string[], filePath: string, name: string): Promise<TargetRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoIds)) return [];
     return this.graph.nodes
       .filter(
         (n) =>
+          repoIds.includes(n.repoId) &&
           str(n.props.file_path) === filePath &&
           (hasLabel(n, "Function") || hasLabel(n, "Class")) &&
           (str(n.props.name) === name || str(n.props.qualified_name) === name)
       )
-      .map((n) => toTargetRow(n, this.repoId));
+      .map(toTargetRow);
   }
 
   async resolveByName(repoIds: string[], name: string): Promise<TargetRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoIds)) return [];
     return this.graph.nodes
-      .filter((n) => hasLabel(n, "Function") && str(n.props.name) === name)
-      .map((n) => toTargetRow(n, this.repoId));
+      .filter((n) => repoIds.includes(n.repoId) && hasLabel(n, "Function") && str(n.props.name) === name)
+      .map(toTargetRow);
   }
 
   async callers(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoIds)) return [];
     const rows: NeighborRow[] = [];
     for (const e of this.graph.callsTo.get(id) ?? []) {
       const x = this.graph.byId.get(e.from);
-      if (x && hasLabel(x, "Function")) rows.push(toNeighborRow(x, this.repoId, e.props));
+      if (x && hasLabel(x, "Function") && repoIds.includes(x.repoId)) rows.push(toNeighborRow(x, e.props));
     }
     rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return rows.slice(0, limit);
@@ -157,11 +212,10 @@ export class JsonlGraphStore implements GraphStore {
 
   async callees(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoIds)) return [];
     const rows: NeighborRow[] = [];
     for (const e of this.graph.callsFrom.get(id) ?? []) {
       const x = this.graph.byId.get(e.to);
-      if (x && hasLabel(x, "Function")) rows.push(toNeighborRow(x, this.repoId, e.props));
+      if (x && hasLabel(x, "Function") && repoIds.includes(x.repoId)) rows.push(toNeighborRow(x, e.props));
     }
     rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return rows.slice(0, limit);
@@ -169,13 +223,12 @@ export class JsonlGraphStore implements GraphStore {
 
   async calleesAt2Hops(repoIds: string[], id: string, limit: number): Promise<NeighborRow[]> {
     this.ensureFresh();
-    if (!this.scoped(repoIds)) return [];
     const seen = new Map<string, NeighborRow>();
     for (const e1 of this.graph.callsFrom.get(id) ?? []) {
       for (const e2 of this.graph.callsFrom.get(e1.to) ?? []) {
         const x = this.graph.byId.get(e2.to);
-        if (x && hasLabel(x, "Function") && !seen.has(x.id)) {
-          seen.set(x.id, toNeighborRow(x, this.repoId));
+        if (x && hasLabel(x, "Function") && repoIds.includes(x.repoId) && !seen.has(x.id)) {
+          seen.set(x.id, toNeighborRow(x));
         }
       }
     }
@@ -184,9 +237,9 @@ export class JsonlGraphStore implements GraphStore {
 
   async writeSummary(repoId: string, id: string, fields: SummaryFields): Promise<WriteSummaryResult> {
     this.ensureFresh();
-    if (!this.scoped([repoId])) return { kind: "not_found" };
+    if (repoId !== this.repoId) return { kind: "not_found" };
     const n = this.graph.byId.get(id);
-    if (!n) return { kind: "not_found" };
+    if (!n || n.repoId !== this.repoId) return { kind: "not_found" };
     const chash = str(n.props.content_hash);
     if (chash === null) return { kind: "no_content_hash" };
     const oldSummary = str(n.props.semantic_summary);
@@ -210,10 +263,10 @@ export class JsonlGraphStore implements GraphStore {
 
   async federatedRepoIds(repoId: string): Promise<string[]> {
     this.ensureFresh();
-    if (!this.scoped([repoId])) return [];
+    if (repoId !== this.repoId) return [];
     const ids: string[] = [];
     for (const n of this.graph.nodes) {
-      if (hasLabel(n, "Repository")) {
+      if (n.repoId === this.repoId && hasLabel(n, "Repository")) {
         const fid = str(n.props.federated_repo_id);
         if (fid) ids.push(fid);
       }
