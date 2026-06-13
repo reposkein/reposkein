@@ -206,8 +206,7 @@ pub fn index_tree_with(
             external.iter().map(|(k, v)| (k.as_str(), v)).collect();
         for n in &mut nodes {
             if let Some(names) = ext.get(n.id.as_str()) {
-                n.props
-                    .insert("external_calls".to_string(), json!(names));
+                n.props.insert("external_calls".to_string(), json!(names));
             }
         }
     }
@@ -438,7 +437,9 @@ mod tests {
         let dir = fixture();
         let g = index_tree(dir.path(), "r", "demo", &[]).unwrap();
         assert!(
-            g.nodes.iter().all(|n| !n.props.contains_key("external_calls")),
+            g.nodes
+                .iter()
+                .all(|n| !n.props.contains_key("external_calls")),
             "no external_calls property when there are no cross-repo imports"
         );
     }

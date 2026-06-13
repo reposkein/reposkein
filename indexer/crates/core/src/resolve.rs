@@ -184,7 +184,10 @@ pub fn resolve_full(
     let mut by_file_freefn: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
     for f in &funcs {
-        by_name.entry(f.name.clone()).or_default().push(f.id.clone());
+        by_name
+            .entry(f.name.clone())
+            .or_default()
+            .push(f.id.clone());
         if !f.qualified.contains('.') {
             by_file_freefn
                 .entry((f.file_path.clone(), f.name.clone()))
@@ -479,8 +482,14 @@ mod tests {
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
         let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");
-        assert!(edges.iter().all(|e| e.typ != "CALLS"), "no in-repo CALLS edge");
-        assert_eq!(external, vec![(caller.id.clone(), vec!["helper".to_string()])]);
+        assert!(
+            edges.iter().all(|e| e.typ != "CALLS"),
+            "no in-repo CALLS edge"
+        );
+        assert_eq!(
+            external,
+            vec![(caller.id.clone(), vec!["helper".to_string()])]
+        );
     }
 
     #[test]
@@ -496,7 +505,10 @@ mod tests {
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "h", None)];
         let (_e, external) = resolve_full(&nodes, &imports, &calls, "r");
-        assert_eq!(external, vec![(caller.id.clone(), vec!["helper".to_string()])]);
+        assert_eq!(
+            external,
+            vec![(caller.id.clone(), vec!["helper".to_string()])]
+        );
     }
 
     #[test]
@@ -507,7 +519,10 @@ mod tests {
         let nodes = vec![file_node("r", "svc.py"), caller.clone()];
         let calls = vec![call(&caller.id, "svc.py", "run", "print", None)];
         let (_e, external) = resolve_full(&nodes, &[], &calls, "r");
-        assert!(external.is_empty(), "non-imported unresolved call is not recorded");
+        assert!(
+            external.is_empty(),
+            "non-imported unresolved call is not recorded"
+        );
     }
 
     #[test]
@@ -531,6 +546,9 @@ mod tests {
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
         let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");
         assert!(edges.iter().any(|e| e.typ == "CALLS" && e.to == helper.id));
-        assert!(external.is_empty(), "in-repo-resolved import is not external");
+        assert!(
+            external.is_empty(),
+            "in-repo-resolved import is not external"
+        );
     }
 }
