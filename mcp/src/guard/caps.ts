@@ -26,6 +26,5 @@ export function applyCaps(
     out.push(rows[i]);
     bytes += size;
   }
-  if (out.length < rows.length) truncated = true;
   return { rows: out, truncated };
 }

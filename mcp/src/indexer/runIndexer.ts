@@ -28,13 +28,6 @@ export function spawnIndexer(bin: string, args: string[]): Promise<SpawnResult> 
   });
 }
 
-/** @deprecated Use the --json flag and parseJsonStats instead. Kept for legacy callers. */
-export function parseIndexStats(stdout: string): { nodes: number; edges: number } {
-  const m = stdout.match(/(\d+)\s+nodes,\s+(\d+)\s+edges/);
-  if (!m) return { nodes: 0, edges: 0 };
-  return { nodes: Number(m[1]), edges: Number(m[2]) };
-}
-
 export interface IndexJsonStats {
   repo_id: string;
   files: number;

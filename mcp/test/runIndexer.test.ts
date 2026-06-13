@@ -1,16 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { parseIndexStats, parseJsonStats, shouldLoadNeo4j } from "../src/indexer/runIndexer.js";
-
-describe("parseIndexStats (legacy)", () => {
-  it("extracts node and edge counts from indexer stdout", () => {
-    const out = "indexed repo_id=abc name=demo: 27 nodes, 25 edges\n";
-    expect(parseIndexStats(out)).toEqual({ nodes: 27, edges: 25 });
-  });
-
-  it("returns zeros when the line is absent", () => {
-    expect(parseIndexStats("nothing here")).toEqual({ nodes: 0, edges: 0 });
-  });
-});
+import { parseJsonStats, shouldLoadNeo4j } from "../src/indexer/runIndexer.js";
 
 describe("parseJsonStats", () => {
   it("parses a valid index --json object", () => {
