@@ -429,10 +429,20 @@ mod tests {
     #[test]
     fn nested_class_inherits_sibling_resolves() {
         let w = run(b"class Outer:\n    class A:\n        pass\n    class B(A):\n        pass\n");
-        let b = w.nodes.iter().find(|n| n.props.get("qualified_name") == Some(&json!("Outer.B"))).unwrap();
-        let a = w.nodes.iter().find(|n| n.props.get("qualified_name") == Some(&json!("Outer.A"))).unwrap();
+        let b = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("qualified_name") == Some(&json!("Outer.B")))
+            .unwrap();
+        let a = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("qualified_name") == Some(&json!("Outer.A")))
+            .unwrap();
         assert!(
-            w.edges.iter().any(|e| e.from == b.id && e.typ == "INHERITS" && e.to == a.id),
+            w.edges
+                .iter()
+                .any(|e| e.from == b.id && e.typ == "INHERITS" && e.to == a.id),
             "nested B(A) should INHERITS the sibling Outer.A (was previously dropped)"
         );
     }

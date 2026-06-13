@@ -237,14 +237,13 @@ impl<'a> Walk<'a> {
                     if let Some(tr) = child.child_by_field_name("trait") {
                         let trait_name = type_name(tr, self.source);
                         if !trait_name.is_empty() {
-                            self.pending_heritage.push(
-                                reposkein_core::heritage::PendingHeritage {
+                            self.pending_heritage
+                                .push(reposkein_core::heritage::PendingHeritage {
                                     decl_scope: scope.to_vec(),
                                     from_name: ty.clone(),
                                     edge_type: "IMPLEMENTS".to_string(),
                                     base_name: trait_name,
-                                },
-                            );
+                                });
                         }
                     }
                     // Methods attribute to the type.
@@ -387,13 +386,26 @@ mod tests {
     #[test]
     fn impl_in_module_for_toplevel_trait_resolves() {
         // trait at top level; struct + impl inside a module → cross-scope.
-        let w = run(b"trait Greeter {}\nmod m {\n    pub struct S;\n    impl super::Greeter for S {}\n}\n");
-        let s = w.nodes.iter().find(|n| n.props.get("qualified_name").and_then(|v| v.as_str()) == Some("m.S")).map(|n| n.id.clone());
-        let g = w.nodes.iter().find(|n| n.props.get("qualified_name").and_then(|v| v.as_str()) == Some("Greeter")).map(|n| n.id.clone());
+        let w = run(
+            b"trait Greeter {}\nmod m {\n    pub struct S;\n    impl super::Greeter for S {}\n}\n",
+        );
+        let s = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("qualified_name").and_then(|v| v.as_str()) == Some("m.S"))
+            .map(|n| n.id.clone());
+        let g = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("qualified_name").and_then(|v| v.as_str()) == Some("Greeter"))
+            .map(|n| n.id.clone());
         // Only assert if both nodes were produced (mod walking may vary); the
         // point is no panic + if present, the IMPLEMENTS edge resolves.
         if let (Some(s), Some(g)) = (s, g) {
-            assert!(w.edges.iter().any(|e| e.from == s && e.typ == "IMPLEMENTS" && e.to == g));
+            assert!(w
+                .edges
+                .iter()
+                .any(|e| e.from == s && e.typ == "IMPLEMENTS" && e.to == g));
         }
     }
 

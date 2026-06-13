@@ -65,7 +65,10 @@ mod tests {
     use super::*;
 
     fn declared(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -79,7 +82,10 @@ mod tests {
         }];
         let e = resolve(&p, &d);
         assert_eq!(e.len(), 1);
-        assert_eq!((e[0].from.as_str(), e[0].typ.as_str(), e[0].to.as_str()), ("idB", "INHERITS", "idA"));
+        assert_eq!(
+            (e[0].from.as_str(), e[0].typ.as_str(), e[0].to.as_str()),
+            ("idB", "INHERITS", "idA")
+        );
     }
 
     #[test]
@@ -109,7 +115,10 @@ mod tests {
         }];
         let e = resolve(&p, &d);
         assert_eq!(e.len(), 1);
-        assert_eq!((e[0].from.as_str(), e[0].typ.as_str(), e[0].to.as_str()), ("idS", "IMPLEMENTS", "idG"));
+        assert_eq!(
+            (e[0].from.as_str(), e[0].typ.as_str(), e[0].to.as_str()),
+            ("idS", "IMPLEMENTS", "idG")
+        );
     }
 
     #[test]

@@ -272,7 +272,8 @@ impl<'a> Walk<'a> {
                                                         decl_scope: scope.to_vec(),
                                                         from_name: name.clone(),
                                                         edge_type: "IMPLEMENTS".to_string(),
-                                                        base_name: text(ty, self.source).to_string(),
+                                                        base_name: text(ty, self.source)
+                                                            .to_string(),
                                                     },
                                                 );
                                             }
@@ -427,10 +428,18 @@ mod tests {
     fn nested_namespace_class_inherits_resolves() {
         // A class extending an in-file sibling under a namespace scope.
         let w = run(b"class Base {}\nclass Mid extends Base {}\nclass Leaf extends Mid {}\n");
-        let id = |q: &str| w.nodes.iter().find(|n| n.props.get("qualified_name").and_then(|v| v.as_str()) == Some(q)).map(|n| n.id.clone());
+        let id = |q: &str| {
+            w.nodes
+                .iter()
+                .find(|n| n.props.get("qualified_name").and_then(|v| v.as_str()) == Some(q))
+                .map(|n| n.id.clone())
+        };
         let leaf = id("Leaf").unwrap();
         let mid = id("Mid").unwrap();
-        assert!(w.edges.iter().any(|e| e.from == leaf && e.typ == "INHERITS" && e.to == mid));
+        assert!(w
+            .edges
+            .iter()
+            .any(|e| e.from == leaf && e.typ == "INHERITS" && e.to == mid));
     }
 
     #[test]
