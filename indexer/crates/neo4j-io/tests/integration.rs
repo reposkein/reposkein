@@ -184,8 +184,22 @@ fn cross_repo_call_stitches_to_unique_child_function() {
     let b_helper = Node::new("rs1:xrB:func:base.py#helper@0", "Function")
         .set("name", json!("helper"))
         .set("qualified_name", json!("helper"));
-    s.import_graph("xrA", &Graph { nodes: vec![a_run], edges: vec![] }).unwrap();
-    s.import_graph("xrB", &Graph { nodes: vec![b_helper], edges: vec![] }).unwrap();
+    s.import_graph(
+        "xrA",
+        &Graph {
+            nodes: vec![a_run],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xrB",
+        &Graph {
+            nodes: vec![b_helper],
+            edges: vec![],
+        },
+    )
+    .unwrap();
 
     let n = s
         .stitch_cross_repo_calls(&["xrA".to_string(), "xrB".to_string()])
@@ -225,9 +239,30 @@ fn ambiguous_cross_repo_call_is_skipped() {
     let c_helper = Node::new("rs1:xrC:func:other.py#helper@0", "Function")
         .set("name", json!("helper"))
         .set("qualified_name", json!("helper"));
-    s.import_graph("xrA", &Graph { nodes: vec![a_run], edges: vec![] }).unwrap();
-    s.import_graph("xrB", &Graph { nodes: vec![b_helper], edges: vec![] }).unwrap();
-    s.import_graph("xrC", &Graph { nodes: vec![c_helper], edges: vec![] }).unwrap();
+    s.import_graph(
+        "xrA",
+        &Graph {
+            nodes: vec![a_run],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xrB",
+        &Graph {
+            nodes: vec![b_helper],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xrC",
+        &Graph {
+            nodes: vec![c_helper],
+            edges: vec![],
+        },
+    )
+    .unwrap();
 
     s.stitch_cross_repo_calls(&["xrA".into(), "xrB".into(), "xrC".into()])
         .unwrap();
