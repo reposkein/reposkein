@@ -166,3 +166,52 @@ fn stitch_links_proxy_to_child_root() {
     s.purge("fedroot").unwrap();
     s.purge("fedchild").unwrap();
 }
+
+#[test]
+#[ignore]
+fn confidence_floats_round_trip_byte_identical() {
+    // PRD §6.2.4 fixes confidence to 2 decimals; §6.2.7 guarantees load->export
+    // byte-identical. Exercise the exact values the resolver emits (0.5/0.7 and
+    // round2(1/n) like 0.33/0.14) through a Bolt float round-trip.
+    use reposkein_core::model::Edge;
+    use reposkein_core::Graph;
+    let s = store();
+    let repo = "conffloat";
+    s.purge(repo).unwrap();
+
+    let node = |n: u32| {
+        Node::new(format!("rs1:conffloat:func:a#f{n}@0"), "Function")
+            .set("content_hash", serde_json::json!("h"))
+    };
+    let edge = |from: u32, to: u32, conf: f64| {
+        let mut e = Edge::new(
+            format!("rs1:conffloat:func:a#f{from}@0"),
+            "CALLS",
+            format!("rs1:conffloat:func:a#f{to}@0"),
+        );
+        e.props
+            .insert("resolution".into(), serde_json::json!("name_match"));
+        e.props.insert("confidence".into(), serde_json::json!(conf));
+        e.props.insert("call_sites".into(), serde_json::json!(1));
+        e
+    };
+    let confs = [0.5_f64, 0.7, 0.33, 0.14, 1.0];
+    let g = Graph {
+        nodes: (0..=confs.len() as u32).map(node).collect(),
+        edges: confs
+            .iter()
+            .enumerate()
+            .map(|(i, c)| edge(i as u32, i as u32 + 1, *c))
+            .collect(),
+    };
+
+    let before = jsonl::edges_to_jsonl(&g.edges);
+    s.import_graph(repo, &g).unwrap();
+    let g2 = s.export_graph(repo).unwrap();
+    assert_eq!(
+        jsonl::edges_to_jsonl(&g2.edges),
+        before,
+        "confidence floats must survive a Bolt round-trip byte-identical"
+    );
+    s.purge(repo).unwrap();
+}
