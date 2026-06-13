@@ -30,9 +30,22 @@ describe("assertReadOnly", () => {
     }
   });
 
-  it("rejects LOAD CSV, write procedures, and multiple statements", () => {
+  it("rejects LOAD CSV, unknown/write procedures, and multiple statements", () => {
     expect(() => assertReadOnly("LOAD CSV FROM 'file:///x.csv' AS row RETURN row")).toThrow();
     expect(() => assertReadOnly("CALL apoc.create.node(['X'], {}) YIELD node RETURN node")).toThrow();
+    expect(() => assertReadOnly("CALL apoc.atomic.add(n, 'x', 1)")).toThrow();
+    expect(() => assertReadOnly("CALL custom.write()")).toThrow();
+    expect(() => assertReadOnly("CALL dbms.security.createUser('x','y')")).toThrow();
     expect(() => assertReadOnly("MATCH (n) RETURN n; CREATE (m:Evil)")).toThrow();
+  });
+
+  it("allows read-only procedures on the allowlist and CALL subqueries", () => {
+    expect(() => assertReadOnly("CALL db.labels() YIELD label RETURN label")).not.toThrow();
+    expect(() =>
+      assertReadOnly("MATCH (a) CALL apoc.path.expand(a, '>', '', 1, 2) YIELD path RETURN path")
+    ).not.toThrow();
+    expect(() =>
+      assertReadOnly("CALL { MATCH (n:File) RETURN n LIMIT 1 } RETURN n")
+    ).not.toThrow();
   });
 });

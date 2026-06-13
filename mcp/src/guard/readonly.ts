@@ -67,9 +67,22 @@ export function assertReadOnly(query: string): void {
   if (/\bLOAD\s+CSV\b/i.test(stripped)) {
     throw new Error("read-only guard: LOAD CSV is not allowed");
   }
-  // Write procedure calls (heuristic: known write-proc namespaces).
-  if (/\bCALL\s+(apoc\.(create|merge|refactor|periodic)|db\.create|dbms\.)/i.test(stripped)) {
-    throw new Error("read-only guard: write/admin procedure calls are not allowed");
+  // Named procedure calls: default-deny. Only a small read-only allowlist is
+  // permitted; everything else (incl. unknown/third-party write procs) is
+  // rejected. `CALL { ... }` subqueries have no procedure name so they pass
+  // here and are scanned for write clauses below. The Neo4j READ session is
+  // the authoritative backstop; this is PRD §3.7 layer 2 as default-deny.
+  const PROC_ALLOWLIST =
+    /^(db\.labels|db\.relationshipTypes|db\.propertyKeys|db\.schema(\.|$)|apoc\.(path|coll|text|map|convert|meta)\.)/i;
+  const procRe = /\bCALL\s+([A-Za-z_][\w.]*)/gi;
+  let pm: RegExpExecArray | null;
+  while ((pm = procRe.exec(stripped)) !== null) {
+    const proc = pm[1]!;
+    if (!PROC_ALLOWLIST.test(proc)) {
+      throw new Error(
+        `read-only guard: procedure '${proc}' is not on the read-only allowlist`
+      );
+    }
   }
   // Write clauses as whole words.
   for (const kw of WRITE_CLAUSES) {
