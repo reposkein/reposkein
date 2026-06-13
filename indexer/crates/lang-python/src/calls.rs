@@ -6,7 +6,11 @@ use reposkein_lang_common::{text, CallConfig};
 use tree_sitter::Node as TsNode;
 
 const CONFIG: CallConfig = CallConfig {
-    boundaries: &["function_definition", "class_definition", "decorated_definition"],
+    boundaries: &[
+        "function_definition",
+        "class_definition",
+        "decorated_definition",
+    ],
     call_kind: "call",
     classify,
 };

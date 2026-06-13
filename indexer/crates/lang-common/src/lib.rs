@@ -53,6 +53,14 @@ pub fn collect_calls(
                 }
             }
         }
-        collect_calls(child, source, caller_id, caller_qualified, caller_path, out, cfg);
+        collect_calls(
+            child,
+            source,
+            caller_id,
+            caller_qualified,
+            caller_path,
+            out,
+            cfg,
+        );
     }
 }
