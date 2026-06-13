@@ -97,10 +97,12 @@ pub fn walk_federated(root: &Path, federation: bool) -> Result<WalkOutput> {
             if path == root {
                 continue;
             }
-            let rel = path
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .replace('\\', "/");
+            // Skip non-UTF-8 paths: a lossy conversion could collide with
+            // another path and be silently deduped (PRD §6.2 determinism).
+            let Some(rel_raw) = path.strip_prefix(root)?.to_str() else {
+                continue;
+            };
+            let rel = rel_raw.replace('\\', "/");
             let is_dir = dent.file_type().map(|t| t.is_dir()).unwrap_or(false);
             entries.push(Entry {
                 rel_path: rel,

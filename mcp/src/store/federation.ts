@@ -20,3 +20,10 @@ export async function federationIds(store: GraphStore, repoId: string): Promise<
   cache.set(repoId, { ids: sorted, at: Date.now() });
   return sorted;
 }
+
+/** Clears the federation cache. Exported for test isolation (the cache is a
+ *  process-global with a 30s TTL; functionally fine for the single-store MCP
+ *  server, but tests that reuse a repo_id within the window need a reset). */
+export function clearFederationCache(): void {
+  cache.clear();
+}
