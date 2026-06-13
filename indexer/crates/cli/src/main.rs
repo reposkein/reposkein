@@ -403,6 +403,34 @@ fn compute_repo_id(root: &Path) -> String {
     blake3::hash(basis.as_bytes()).to_hex().to_string()[..12].to_string()
 }
 
+/// Resolves a federation child's path from an UNTRUSTED committed `root_path`,
+/// rejecting absolute paths, `..` traversal, and anything that escapes `base`.
+/// Committed JSONL is an untrusted supply-chain input (PRD §3.6), and the
+/// load path runs no collision/identity guard, so this must be defensive.
+fn safe_child_path(base: &Path, root_path: &str) -> Option<PathBuf> {
+    let rp = Path::new(root_path);
+    if rp.is_absolute() {
+        return None;
+    }
+    if rp
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let joined = base.join(rp);
+    // Require the resolved child to stay within base (defends against symlinks
+    // and any residual traversal). Canonicalize needs the path to exist; a
+    // non-existent child canonicalizes to Err → None → safely skipped.
+    let cbase = base.canonicalize().ok()?;
+    let cjoined = joined.canonicalize().ok()?;
+    if cjoined.starts_with(&cbase) {
+        Some(joined)
+    } else {
+        None
+    }
+}
+
 /// Loads a repo's JSONL into the DB (purge-then-import), then recurses into its
 /// federated children (proxy Repository nodes carrying `federated_repo_id` +
 /// `root_path`). JSONL-driven so it reconstructs purely from committed files.
@@ -447,10 +475,20 @@ fn load_federation(
                 node.props.get("federated_repo_id").and_then(|v| v.as_str()),
                 node.props.get("root_path").and_then(|v| v.as_str()),
             ) {
-                let (cr, cn, ce) = load_federation(store, &path.join(rp), fed, seen, skipped)?;
-                repos += cr;
-                n += cn;
-                e += ce;
+                match safe_child_path(path, rp) {
+                    Some(child) => {
+                        let (cr, cn, ce) = load_federation(store, &child, fed, seen, skipped)?;
+                        repos += cr;
+                        n += cn;
+                        e += ce;
+                    }
+                    None => {
+                        eprintln!(
+                            "reposkein: federation child root_path '{rp}' rejected (absolute or escapes the repo); skipping"
+                        );
+                        skipped.push(rp.to_string());
+                    }
+                }
             }
         }
     }
@@ -476,7 +514,9 @@ fn federation_repo_ids(path: &Path, repo_id: &str, seen: &mut std::collections::
                 node.props.get("federated_repo_id").and_then(|v| v.as_str()),
                 node.props.get("root_path").and_then(|v| v.as_str()),
             ) {
-                federation_repo_ids(&path.join(rp), fed, seen);
+                if let Some(child) = safe_child_path(path, rp) {
+                    federation_repo_ids(&child, fed, seen);
+                }
             }
         }
     }
@@ -759,6 +799,9 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::normalize_remote;
+    use super::safe_child_path;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn remote_schemes_normalize_equal() {
@@ -768,5 +811,35 @@ mod tests {
         assert_eq!(https, "github.com/reposkein/reposkein");
         assert_eq!(https, ssh);
         assert_eq!(https, ssh2);
+    }
+
+    #[test]
+    fn safe_child_path_accepts_real_nested_child() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("vendor/child")).unwrap();
+        assert!(safe_child_path(base, "vendor/child").is_some());
+    }
+
+    #[test]
+    fn safe_child_path_rejects_absolute() {
+        let dir = tempdir().unwrap();
+        assert!(safe_child_path(dir.path(), "/etc").is_none());
+    }
+
+    #[test]
+    fn safe_child_path_rejects_parent_traversal() {
+        let dir = tempdir().unwrap();
+        let base = dir.path();
+        fs::create_dir_all(base.join("sub")).unwrap();
+        // Even if the traversed target exists, `..` is rejected outright.
+        assert!(safe_child_path(&base.join("sub"), "../").is_none());
+        assert!(safe_child_path(base, "../sibling").is_none());
+    }
+
+    #[test]
+    fn safe_child_path_rejects_nonexistent_child() {
+        let dir = tempdir().unwrap();
+        assert!(safe_child_path(dir.path(), "does/not/exist").is_none());
     }
 }
