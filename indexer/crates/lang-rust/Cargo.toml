@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 reposkein-core = { path = "../core" }
+reposkein-lang-common = { path = "../lang-common" }
 tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
 serde_json.workspace = true
