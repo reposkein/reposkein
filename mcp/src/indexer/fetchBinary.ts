@@ -36,7 +36,7 @@ export function releaseUrl(version: string, key: string): string {
 }
 
 /** Package root (two levels up from dist/indexer/fetchBinary.js). */
-function packageRoot(): string {
+export function packageRoot(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
 

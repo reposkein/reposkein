@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { runInit } from "./cli/init.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -166,8 +167,17 @@ export async function main(): Promise<void> {
 
 // Run when invoked as the binary (not when imported by tests).
 if (import.meta.url === pathToFileURL(process.argv[1]!).href) {
-  main().catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+  if (process.argv[2] === "init") {
+    runInit(process.argv[3] ?? ".")
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+  } else {
+    main().catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+  }
 }
