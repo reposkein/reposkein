@@ -3,6 +3,7 @@
 
 use reposkein_core::hash::content_hash;
 use reposkein_core::model::{Edge, Node};
+use reposkein_lang_common::{text, unique};
 use serde_json::json;
 use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
@@ -17,10 +18,6 @@ pub struct Walk<'a> {
     used: HashMap<String, u32>,
     declared: std::collections::HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
-}
-
-fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
-    node.utf8_text(source).unwrap_or("")
 }
 
 fn name_of(node: TsNode, source: &[u8]) -> String {
@@ -85,14 +82,7 @@ impl<'a> Walk<'a> {
     /// Returns a per-file-unique id: base for the first occurrence, then
     /// base.1, base.2, … for collisions (PRD §5.3 ordinal disambiguation).
     fn unique(&mut self, base: String) -> String {
-        let n = self.used.entry(base.clone()).or_insert(0);
-        let id = if *n == 0 {
-            base.clone()
-        } else {
-            format!("{base}.{n}")
-        };
-        *n += 1;
-        id
+        unique(&mut self.used, base)
     }
 
     fn func_id(&self, qualified: &str, arity: usize) -> String {
