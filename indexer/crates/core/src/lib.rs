@@ -17,7 +17,7 @@ use anyhow::Result;
 use extractor::{Extractor, FileContext};
 use model::{Edge, Node};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub fn version() -> &'static str {
@@ -257,6 +257,59 @@ pub fn index_tree_with(
     }
     children.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
+    // Cross-repo IMPORTS candidates (MF5): for each import whose candidate_path
+    // falls under a federated child's root_path, resolve it to the child's File
+    // id now (we know the child boundaries) and record {target, symbols} on the
+    // importing File node. Child-scoped → library imports and non-federated
+    // repos record nothing (byte-identical). A load-time stitch turns these into
+    // cross-repo IMPORTS edges (the target lives in the child, so it can't be a
+    // committed edge here).
+    if !children.is_empty() {
+        // importing_file_id -> (target child File id -> sorted local symbols)
+        let mut ext_imports: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> =
+            BTreeMap::new();
+        for imp in &all_imports {
+            for child in &children {
+                let prefix = format!("{}/", child.rel_path);
+                if let Some(cp) = imp.candidate_paths.iter().find(|p| p.starts_with(&prefix)) {
+                    let child_rel = &cp[prefix.len()..];
+                    let target = id::file_id(&child.repo_id, child_rel);
+                    let syms = ext_imports
+                        .entry(imp.importing_file_id.clone())
+                        .or_default()
+                        .entry(target)
+                        .or_default();
+                    for (local, _original) in &imp.symbols {
+                        syms.insert(local.clone());
+                    }
+                    break; // first matching child boundary wins
+                }
+            }
+        }
+        if !ext_imports.is_empty() {
+            for n in &mut nodes {
+                if let Some(targets) = ext_imports.get(&n.id) {
+                    let arr: Vec<Value> = targets
+                        .iter()
+                        .map(|(target, syms)| {
+                            let mut m = serde_json::Map::new();
+                            m.insert(
+                                "symbols".to_string(),
+                                Value::Array(
+                                    syms.iter().cloned().map(Value::String).collect(),
+                                ),
+                            );
+                            m.insert("target".to_string(), Value::String(target.clone()));
+                            Value::Object(m)
+                        })
+                        .collect();
+                    n.props
+                        .insert("external_imports".to_string(), Value::Array(arr));
+                }
+            }
+        }
+    }
+
     let edges = drop_dangling_edges(&nodes, edges);
 
     Ok(IndexOutput {
@@ -484,6 +537,68 @@ mod tests {
             jsonl::edges_to_jsonl(&warm2.edges),
             cold_edges,
             "warm edges must match cold byte-for-byte"
+        );
+    }
+
+    /// Emits a single cross-repo RawImport from `top.py` into the child at
+    /// vendor/childA (candidate path under the child's root_path).
+    struct ImportStub;
+    impl extractor::Extractor for ImportStub {
+        fn language(&self) -> &'static str {
+            "python"
+        }
+        fn extract(&self, ctx: &extractor::FileContext) -> extractor::ExtractOutput {
+            let mut out = extractor::ExtractOutput::default();
+            if ctx.rel_path == "top.py" {
+                out.imports.push(extractor::RawImport {
+                    importing_file_id: ctx.file_id.to_string(),
+                    importing_path: ctx.rel_path.to_string(),
+                    symbols: vec![("helper".to_string(), "helper".to_string())],
+                    candidate_paths: vec!["vendor/childA/base.py".to_string()],
+                });
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn federated_index_records_external_imports() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("top.py"), b"x = 1\n").unwrap();
+        fs::create_dir_all(root.join("vendor/childA/.reposkein")).unwrap();
+        fs::write(
+            root.join("vendor/childA/.reposkein/meta.json"),
+            b"{\"repo_id\":\"childa\"}",
+        )
+        .unwrap();
+        fs::write(root.join("vendor/childA/base.py"), b"y = 2\n").unwrap();
+
+        let stub = ImportStub;
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let out = index_tree_with(root, "rootid", "root", extractors, IndexOptions { federation: true, cache: None }).unwrap();
+
+        let top = out
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "rs1:rootid:file:top.py")
+            .expect("top.py File node");
+        let ei = top.props.get("external_imports").expect("external_imports present");
+        // One entry targeting the child's base.py File id, symbols ["helper"].
+        assert_eq!(
+            ei,
+            &json!([{ "symbols": ["helper"], "target": "rs1:childa:file:base.py" }])
+        );
+    }
+
+    #[test]
+    fn non_federated_index_has_no_external_imports() {
+        let dir = fixture(); // no children
+        let g = index_tree(dir.path(), "r", "demo", &[]).unwrap();
+        assert!(
+            g.nodes.iter().all(|n| !n.props.contains_key("external_imports")),
+            "no external_imports without federated children"
         );
     }
 }
