@@ -105,4 +105,23 @@ describe("buildFederatedGraph", () => {
     const g = buildFederatedGraph([{ repoId: "A", nodesText: rootNodes, edgesText: "" }]);
     expect(g.edges.some((e) => e.type === "IMPORTS")).toBe(false);
   });
+
+  it("import-scoping resolves a name that is federation-wide ambiguous", () => {
+    // caller imports `helper` from B (only); `helper` also exists in C.
+    // Federation-wide → ambiguous (skip). Import-scoped → resolves to B.
+    const root =
+      `{"id":"rs1:A:func:a.py#run@0","labels":["Function"],"name":"run","qualified_name":"run","file_path":"a.py","external_calls":["helper"]}\n` +
+      `{"id":"rs1:A:file:a.py","labels":["File"],"path":"a.py","external_import_targets":["rs1:B:file:base.py"]}\n`;
+    const b = `{"id":"rs1:B:func:base.py#helper@0","labels":["Function"],"name":"helper","qualified_name":"helper","file_path":"base.py"}\n`;
+    const c = `{"id":"rs1:C:func:other.py#helper@0","labels":["Function"],"name":"helper","qualified_name":"helper","file_path":"other.py"}\n`;
+    const g = buildFederatedGraph([
+      { repoId: "A", nodesText: root, edgesText: "" },
+      { repoId: "B", nodesText: b, edgesText: "" },
+      { repoId: "C", nodesText: c, edgesText: "" },
+    ]);
+    const out = g.callsFrom.get("rs1:A:func:a.py#run@0") ?? [];
+    expect(out).toHaveLength(1);
+    expect(out[0]!.to).toBe("rs1:B:func:base.py#helper@0");
+    expect(out[0]!.props.confidence).toBe(0.6);
+  });
 });

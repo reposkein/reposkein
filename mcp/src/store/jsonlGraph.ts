@@ -100,9 +100,12 @@ export interface RepoSource {
 const isFunction = (n: ParsedNode): boolean => n.labels.includes("Function");
 
 /** Builds one merged graph from several repos' committed JSONL, then injects
- *  DB-only-style cross-repo CALLS edges from each caller's `external_calls`
- *  (XR-M1) to the UNIQUE function of that name in a different repo (the
- *  in-memory mirror of Neo4j's stitch_cross_repo_calls — ambiguous skipped). */
+ *  DB-only-style cross-repo edges (M3 + M4):
+ *  - IMPORTS edges (File→File) from external_import_targets (parity with Neo4j
+ *    stitch_cross_repo_imports).
+ *  - CALLS edges (Function→Function) from external_calls, import-scoped first
+ *    (confidence 0.6) with federation-wide unique fallback (0.5); ambiguous
+ *    skipped. Per-name (mirrors Neo4j stitch_cross_repo_calls). */
 export function buildFederatedGraph(repos: RepoSource[]): ParsedGraph {
   const byId = new Map<string, ParsedNode>();
   const callsFrom = new Map<string, ParsedEdge[]>();
@@ -127,15 +130,26 @@ export function buildFederatedGraph(repos: RepoSource[]): ParsedGraph {
     for (const [, list] of g.callsFrom) for (const e of list) pushCall(e);
   }
 
-  // 2) Cross-repo name index: function name -> [{id, repoId}] (sorted by id).
-  const byName = new Map<string, { id: string; repoId: string }[]>();
+  // 2) Cross-repo name index: function name -> [{id, repoId, fileId}] (sorted by id).
+  const byName = new Map<string, { id: string; repoId: string; fileId: string }[]>();
   for (const n of nodes) {
     if (!isFunction(n)) continue;
     const nm = typeof n.props.name === "string" ? n.props.name : null;
     if (!nm) continue;
-    (byName.get(nm) ?? byName.set(nm, []).get(nm)!).push({ id: n.id, repoId: n.repoId });
+    const fp = typeof n.props.file_path === "string" ? n.props.file_path : "";
+    const fileId = `rs1:${n.repoId}:file:${fp}`;
+    (byName.get(nm) ?? byName.set(nm, []).get(nm)!).push({ id: n.id, repoId: n.repoId, fileId });
   }
   for (const arr of byName.values()) arr.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  // File id -> set of external_import_targets (the child Files it imports from).
+  const importTargets = new Map<string, Set<string>>();
+  for (const n of nodes) {
+    const t = n.props.external_import_targets;
+    if (Array.isArray(t)) {
+      importTargets.set(n.id, new Set(t.filter((x): x is string => typeof x === "string")));
+    }
+  }
 
   // M3: cross-repo IMPORTS edges (File -> child File) from external_import_targets,
   // for backend parity with Neo4j's stitch_cross_repo_imports. Added to `edges`
@@ -150,19 +164,36 @@ export function buildFederatedGraph(repos: RepoSource[]): ParsedGraph {
     }
   }
 
-  // 3) Inject cross-repo CALLS from external_calls (unique cross-repo match).
+  // 3) Inject cross-repo CALLS. Prefer an import-scoped match (the called name
+  //    in a file the caller's file imports from — precise); fall back to a
+  //    federation-wide unique match. Per name; ambiguous skipped.
   for (const n of nodes) {
     const ext = n.props.external_calls;
     if (!Array.isArray(ext)) continue;
+    const callerFp = typeof n.props.file_path === "string" ? n.props.file_path : "";
+    const callerFileId = `rs1:${n.repoId}:file:${callerFp}`;
+    const targets = importTargets.get(callerFileId);
     const names = [...new Set(ext.filter((x): x is string => typeof x === "string"))].sort();
     for (const name of names) {
-      const matches = (byName.get(name) ?? []).filter((m) => m.repoId !== n.repoId);
-      if (matches.length !== 1) continue; // skip ambiguous / external
+      const all = (byName.get(name) ?? []).filter((m) => m.repoId !== n.repoId);
+      let chosen: { id: string } | undefined;
+      let confidence = 0.5;
+      if (targets) {
+        const scoped = all.filter((m) => targets.has(m.fileId));
+        if (scoped.length === 1) {
+          chosen = scoped[0];
+          confidence = 0.6; // import-scoped → more precise
+        }
+      }
+      if (!chosen && all.length === 1) {
+        chosen = all[0]; // federation-wide fallback
+      }
+      if (!chosen) continue; // ambiguous / unresolved
       pushCall({
         from: n.id,
         type: "CALLS",
-        to: matches[0]!.id,
-        props: { resolution: "name_match", confidence: 0.5, cross_repo: true, stitched: true, call_sites: 1 },
+        to: chosen.id,
+        props: { resolution: "name_match", confidence, cross_repo: true, stitched: true, call_sites: 1 },
       });
     }
   }
