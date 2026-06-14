@@ -164,4 +164,38 @@ impl Neo4jStore {
             }
         })
     }
+
+    /// Creates DB-only cross-repo `IMPORTS` edges from each File's committed
+    /// `external_import_targets` (MF5-M1: already-resolved child File ids) to
+    /// the matching File — when that File is loaded and in a different repo.
+    /// Edges are `cross_repo:true, stitched:true` and cross repo_id boundaries,
+    /// so per-repo export ignores them. Idempotent (MERGE). Returns the edge
+    /// count after the call.
+    pub fn stitch_cross_repo_imports(&self, repo_ids: &[String]) -> Result<u64> {
+        let ids: Vec<String> = repo_ids.to_vec();
+        self.rt.block_on(async {
+            let mut r = self
+                .graph
+                .execute(
+                    query(
+                        "MATCH (f:Rs:File) \
+                         WHERE f.repo_id IN $ids AND f.external_import_targets IS NOT NULL \
+                         UNWIND f.external_import_targets AS target \
+                         MATCH (t:Rs:File {id: target}) \
+                         WHERE t.repo_id IN $ids AND t.repo_id <> f.repo_id \
+                         MERGE (f)-[s:IMPORTS {cross_repo: true}]->(t) \
+                         ON CREATE SET s.stitched = true \
+                         RETURN count(s) AS c",
+                    )
+                    .param("ids", ids),
+                )
+                .await?;
+            if let Ok(Some(row)) = r.next().await {
+                let c: i64 = row.get("c")?;
+                Ok(c as u64)
+            } else {
+                Ok(0)
+            }
+        })
+    }
 }

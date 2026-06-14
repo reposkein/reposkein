@@ -280,6 +280,64 @@ fn ambiguous_cross_repo_call_is_skipped() {
 
 #[test]
 #[ignore]
+fn cross_repo_imports_stitch_links_file_to_child_file() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    s.purge("xiA").unwrap();
+    s.purge("xiB").unwrap();
+
+    // A/svc.py records a cross-repo import target = B/base.py's File id.
+    let a_svc = Node::new("rs1:xiA:file:svc.py", "File")
+        .set("path", json!("svc.py"))
+        .set("external_import_targets", json!(["rs1:xiB:file:base.py"]));
+    let b_base = Node::new("rs1:xiB:file:base.py", "File").set("path", json!("base.py"));
+    // This import + load also proves Neo4j accepts the string-array property.
+    s.import_graph("xiA", &Graph { nodes: vec![a_svc], edges: vec![] }).unwrap();
+    s.import_graph("xiB", &Graph { nodes: vec![b_base], edges: vec![] }).unwrap();
+
+    let n = s
+        .stitch_cross_repo_imports(&["xiA".to_string(), "xiB".to_string()])
+        .unwrap();
+    assert!(n >= 1, "one cross-repo IMPORTS edge created");
+
+    let c = s
+        .run_count(
+            "MATCH (:Rs:File {id:'rs1:xiA:file:svc.py'})\
+             -[r:IMPORTS {cross_repo:true}]->\
+             (:Rs:File {id:'rs1:xiB:file:base.py'}) RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(c, 1, "exactly one cross-repo IMPORTS A/svc.py -> B/base.py");
+
+    s.purge("xiA").unwrap();
+    s.purge("xiB").unwrap();
+}
+
+#[test]
+#[ignore]
+fn cross_repo_imports_skips_missing_target() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    s.purge("xiA").unwrap();
+    // Target child File is NOT loaded → no edge (graceful).
+    let a_svc = Node::new("rs1:xiA:file:svc.py", "File")
+        .set("path", json!("svc.py"))
+        .set("external_import_targets", json!(["rs1:xiGHOST:file:nope.py"]));
+    s.import_graph("xiA", &Graph { nodes: vec![a_svc], edges: vec![] }).unwrap();
+    s.stitch_cross_repo_imports(&["xiA".to_string()]).unwrap();
+    let c = s
+        .run_count(
+            "MATCH (:Rs:File {id:'rs1:xiA:file:svc.py'})-[r:IMPORTS {cross_repo:true}]->() RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(c, 0, "no edge when the target File isn't loaded");
+    s.purge("xiA").unwrap();
+}
+
+#[test]
+#[ignore]
 fn confidence_floats_round_trip_byte_identical() {
     // PRD §6.2.4 fixes confidence to 2 decimals; §6.2.7 guarantees load->export
     // byte-identical. Exercise the exact values the resolver emits (0.5/0.7 and
