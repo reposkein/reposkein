@@ -137,6 +137,19 @@ export function buildFederatedGraph(repos: RepoSource[]): ParsedGraph {
   }
   for (const arr of byName.values()) arr.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
+  // M3: cross-repo IMPORTS edges (File -> child File) from external_import_targets,
+  // for backend parity with Neo4j's stitch_cross_repo_imports. Added to `edges`
+  // (no dedicated reader yet — the committed property already carries the data).
+  for (const n of nodes) {
+    const targets = n.props.external_import_targets;
+    if (!Array.isArray(targets)) continue;
+    for (const t of targets) {
+      if (typeof t === "string" && byId.has(t)) {
+        edges.push({ from: n.id, type: "IMPORTS", to: t, props: { cross_repo: true, stitched: true } });
+      }
+    }
+  }
+
   // 3) Inject cross-repo CALLS from external_calls (unique cross-repo match).
   for (const n of nodes) {
     const ext = n.props.external_calls;

@@ -84,4 +84,25 @@ describe("buildFederatedGraph", () => {
     const g = buildFederatedGraph([{ repoId: "A", nodesText: same, edgesText: "" }]);
     expect(g.callsFrom.get("rs1:A:func:a.py#caller@0") ?? []).toHaveLength(0);
   });
+
+  it("injects a cross-repo IMPORTS edge when the target File is loaded", () => {
+    const rootNodes =
+      `{"id":"rs1:A:file:svc.py","labels":["File"],"path":"svc.py","external_import_targets":["rs1:B:file:base.py"]}` + "\n";
+    const childNodes = `{"id":"rs1:B:file:base.py","labels":["File"],"path":"base.py"}` + "\n";
+    const g = buildFederatedGraph([
+      { repoId: "A", nodesText: rootNodes, edgesText: "" },
+      { repoId: "B", nodesText: childNodes, edgesText: "" },
+    ]);
+    const imp = g.edges.find((e) => e.type === "IMPORTS" && e.from === "rs1:A:file:svc.py");
+    expect(imp).toBeTruthy();
+    expect(imp!.to).toBe("rs1:B:file:base.py");
+    expect(imp!.props.cross_repo).toBe(true);
+  });
+
+  it("does not inject a cross-repo IMPORTS edge when the target is not loaded", () => {
+    const rootNodes =
+      `{"id":"rs1:A:file:svc.py","labels":["File"],"path":"svc.py","external_import_targets":["rs1:GHOST:file:x.py"]}` + "\n";
+    const g = buildFederatedGraph([{ repoId: "A", nodesText: rootNodes, edgesText: "" }]);
+    expect(g.edges.some((e) => e.type === "IMPORTS")).toBe(false);
+  });
 });
