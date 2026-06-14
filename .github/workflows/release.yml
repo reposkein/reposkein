@@ -1,0 +1,135 @@
+name: Release
+
+# Cut a release by pushing a tag like `v0.1.0`:
+#   git tag v0.1.0 && git push origin v0.1.0
+# This builds prebuilt reposkein-indexer binaries for the 5 supported platforms,
+# attaches them to a GitHub Release for the tag, then publishes @reposkein/mcp to
+# npm at the matching version (postinstall fetches the binary for that version).
+#
+# PREREQUISITES (one-time, repo owner):
+#   - Own/claim the @reposkein npm scope and create an automation token.
+#   - Add it as the `NPM_TOKEN` repo secret (the publish job is skipped without it).
+#   - The asset names here MUST match mcp/src/indexer/fetchBinary.ts (M4-D1):
+#       reposkein-indexer-<platformKey>[.exe], platformKey ∈
+#       darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-binaries:
+    name: build ${{ matrix.platform_key }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            platform_key: darwin-arm64
+            ext: ""
+          - os: macos-13
+            target: x86_64-apple-darwin
+            platform_key: darwin-x64
+            ext: ""
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform_key: linux-x64
+            ext: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform_key: linux-arm64
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform_key: win32-x64
+            ext: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: indexer
+      - name: Build release binary
+        working-directory: indexer
+        run: cargo build --release -p reposkein-indexer --target ${{ matrix.target }}
+      - name: Stage renamed artifact
+        shell: bash
+        run: |
+          mkdir -p bin-dist
+          cp "indexer/target/${{ matrix.target }}/release/reposkein-indexer${{ matrix.ext }}" \
+             "bin-dist/reposkein-indexer-${{ matrix.platform_key }}${{ matrix.ext }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: indexer-${{ matrix.platform_key }}
+          path: bin-dist/reposkein-indexer-${{ matrix.platform_key }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: build-binaries
+    # Only on a tag push — workflow_dispatch (branch ref) just exercises the builds.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: bin-dist
+          pattern: indexer-*
+          merge-multiple: true
+      - name: List artifacts
+        run: ls -l bin-dist
+      - name: Create / update the release with the binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin-dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  publish-npm:
+    name: Publish @reposkein/mcp
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Derive version from tag
+        id: ver
+        shell: bash
+        run: |
+          REF="${GITHUB_REF_NAME}"
+          VERSION="${REF#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Publishing version ${VERSION}"
+      - name: Install + build
+        run: |
+          npm ci
+          npm run build
+      - name: Set package version to the tag
+        run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+      - name: Publish to npm
+        if: ${{ env.NPM_TOKEN != '' }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+      - name: Skipped publish (no NPM_TOKEN)
+        if: ${{ env.NPM_TOKEN == '' }}
+        run: echo "::warning::NPM_TOKEN not set — built + versioned but did not publish. Add the NPM_TOKEN secret to enable publishing."
