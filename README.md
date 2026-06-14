@@ -4,7 +4,45 @@
 
 RepoSkein is a local-first developer tool that solves the context-window problem for LLM agents working in large or nested repositories. Instead of letting an agent grep and guess, it builds a deterministic **Code Property Graph** of your codebase — directories, files, classes, functions, imports, calls — with [Tree-sitter](https://tree-sitter.github.io/) static analysis, then lets the agent enrich that skeleton with natural-language summaries *just-in-time*. The graph is served to any MCP-capable agent (Claude Code, Cursor, Zed, …) and the agent-written summaries are versioned in git alongside the code — so semantic understanding becomes **shared team memory**.
 
-> Status: **v1 core is complete and CI-green** — deterministic indexer, Neo4j round-trip, the five MCP tools, the git-sync merge driver + hooks, and summary persistence all work end-to-end across Python, TypeScript/TSX, JavaScript/JSX, and Rust. Packaged distribution (npm + prebuilt binaries) is in progress; for now, build from source (below).
+> Status: **v1 core is complete and CI-green** — deterministic indexer, Neo4j round-trip, the five MCP tools, the git-sync merge driver + hooks, and summary persistence all work end-to-end across Python, TypeScript/TSX, JavaScript/JSX, and Rust. Packaged distribution (npm + prebuilt binaries) is in progress; after the first release `npx @reposkein/mcp init` will work out of the box. Contributors: build from source (see below).
+
+## Install
+
+> **Note:** `npx @reposkein/mcp` is available after the first `v*` release is published to npm. Until then, contributors use the build-from-source path below.
+
+### After the first release (users)
+
+```sh
+# In the repository you want to index:
+npx @reposkein/mcp init [path]
+```
+
+`init` will:
+1. Download and cache the `reposkein-indexer` binary for your platform.
+2. Install git hooks + the JSONL three-way merge driver (runs `reposkein-indexer init --hooks`).
+3. Drop the navigation skill (`SKILL.md`) into `.claude/skills/reposkein-graph-rag/`.
+4. Print the MCP server config to add to your client.
+
+Add the printed config to your agent client (e.g. Claude Code `.mcp.json`):
+
+```jsonc
+{
+  "mcpServers": {
+    "reposkein": {
+      "command": "reposkein-mcp",
+      "env": { "REPOSKEIN_REPO_PATH": "/path/to/your/repo" }
+    }
+  }
+}
+```
+
+Then build the graph — ask your agent to call `init_cpg_skeleton`, or run:
+
+```sh
+reposkein-indexer index /path/to/your/repo
+```
+
+Commit the generated `.reposkein/` directory so the graph and summaries are shared with your team.
 
 ## How it works
 
@@ -56,7 +94,7 @@ Stable IDs (`rs1:<repo>:<kind>:<path>#<qualified_name>@<arity>`) survive line-nu
 - **`read_cypher`** — read-only Cypher (write clauses rejected; results capped).
 - **`reindex_file`** — refresh the graph after editing a file.
 
-## Quick start (from source)
+### Build from source (contributors)
 
 Prerequisites: Rust (stable), Node 24, Docker.
 
