@@ -2,11 +2,39 @@
 //! tree-sitter-free: the dependency arrow is lang-* → lang-common → core.
 
 use reposkein_core::extractor::RawCall;
+use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
 /// UTF-8 text of a node (empty string on non-UTF-8 — matches prior behavior).
 pub fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
     node.utf8_text(source).unwrap_or("")
+}
+
+/// Per-file-unique id: `base` for the first occurrence, then `base.1`, `base.2`,
+/// … for collisions (PRD §5.3 ordinal disambiguation). The determinism-critical
+/// id disambiguator — shared so it can't fork across language crates.
+pub fn unique(used: &mut HashMap<String, u32>, base: String) -> String {
+    let n = used.entry(base.clone()).or_insert(0);
+    let id = if *n == 0 {
+        base.clone()
+    } else {
+        format!("{base}.{n}")
+    };
+    *n += 1;
+    id
+}
+
+/// Kind of a module/global-scope variable: ALL-CAPS (with underscores, at least
+/// one uppercase letter) → `"const"`, otherwise `"module"`. Shared by the Python
+/// and TypeScript extractors.
+pub fn module_var_kind(name: &str) -> &'static str {
+    if name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+        && name.chars().any(|c| c.is_ascii_uppercase())
+    {
+        "const"
+    } else {
+        "module"
+    }
 }
 
 /// Per-language configuration for [`collect_calls`].
@@ -62,5 +90,29 @@ pub fn collect_calls(
             out,
             cfg,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{module_var_kind, unique};
+    use std::collections::HashMap;
+
+    #[test]
+    fn unique_appends_ordinals_on_collision() {
+        let mut used = HashMap::new();
+        assert_eq!(unique(&mut used, "x".into()), "x");
+        assert_eq!(unique(&mut used, "x".into()), "x.1");
+        assert_eq!(unique(&mut used, "x".into()), "x.2");
+        assert_eq!(unique(&mut used, "y".into()), "y");
+    }
+
+    #[test]
+    fn module_var_kind_classifies_const_vs_module() {
+        assert_eq!(module_var_kind("MAX_SIZE"), "const");
+        assert_eq!(module_var_kind("TIMEOUT"), "const");
+        assert_eq!(module_var_kind("config"), "module");
+        assert_eq!(module_var_kind("_private"), "module"); // no uppercase
+        assert_eq!(module_var_kind("Mixed"), "module");
     }
 }
