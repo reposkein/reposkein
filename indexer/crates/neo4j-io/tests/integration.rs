@@ -293,8 +293,22 @@ fn cross_repo_imports_stitch_links_file_to_child_file() {
         .set("external_import_targets", json!(["rs1:xiB:file:base.py"]));
     let b_base = Node::new("rs1:xiB:file:base.py", "File").set("path", json!("base.py"));
     // This import + load also proves Neo4j accepts the string-array property.
-    s.import_graph("xiA", &Graph { nodes: vec![a_svc], edges: vec![] }).unwrap();
-    s.import_graph("xiB", &Graph { nodes: vec![b_base], edges: vec![] }).unwrap();
+    s.import_graph(
+        "xiA",
+        &Graph {
+            nodes: vec![a_svc],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xiB",
+        &Graph {
+            nodes: vec![b_base],
+            edges: vec![],
+        },
+    )
+    .unwrap();
 
     let n = s
         .stitch_cross_repo_imports(&["xiA".to_string(), "xiB".to_string()])
@@ -324,8 +338,18 @@ fn cross_repo_imports_skips_missing_target() {
     // Target child File is NOT loaded → no edge (graceful).
     let a_svc = Node::new("rs1:xiA:file:svc.py", "File")
         .set("path", json!("svc.py"))
-        .set("external_import_targets", json!(["rs1:xiGHOST:file:nope.py"]));
-    s.import_graph("xiA", &Graph { nodes: vec![a_svc], edges: vec![] }).unwrap();
+        .set(
+            "external_import_targets",
+            json!(["rs1:xiGHOST:file:nope.py"]),
+        );
+    s.import_graph(
+        "xiA",
+        &Graph {
+            nodes: vec![a_svc],
+            edges: vec![],
+        },
+    )
+    .unwrap();
     s.stitch_cross_repo_imports(&["xiA".to_string()]).unwrap();
     let c = s
         .run_count(
