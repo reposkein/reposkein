@@ -259,28 +259,26 @@ pub fn index_tree_with(
 
     // Cross-repo IMPORTS candidates (MF5): for each import whose candidate_path
     // falls under a federated child's root_path, resolve it to the child's File
-    // id now (we know the child boundaries) and record {target, symbols} on the
-    // importing File node. Child-scoped → library imports and non-federated
-    // repos record nothing (byte-identical). A load-time stitch turns these into
-    // cross-repo IMPORTS edges (the target lives in the child, so it can't be a
-    // committed edge here).
+    // id (we know the child boundaries at index time) and record the target on
+    // the importing File node as `external_import_targets`. Child-scoped →
+    // library imports and non-federated repos record nothing (byte-identical).
+    // Stored as a FLAT STRING ARRAY (Neo4j node props can't hold arrays of maps,
+    // so per-target symbols are dropped in v1). A load-time stitch turns these
+    // into cross-repo IMPORTS edges (the target lives in the child, so it can't
+    // be a committed edge here).
     if !children.is_empty() {
-        // importing_file_id -> (target child File id -> sorted local symbols)
-        let mut ext_imports: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
+        // importing_file_id -> sorted-unique target child File ids
+        let mut ext_imports: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for imp in &all_imports {
             for child in &children {
                 let prefix = format!("{}/", child.rel_path);
                 if let Some(cp) = imp.candidate_paths.iter().find(|p| p.starts_with(&prefix)) {
                     let child_rel = &cp[prefix.len()..];
                     let target = id::file_id(&child.repo_id, child_rel);
-                    let syms = ext_imports
+                    ext_imports
                         .entry(imp.importing_file_id.clone())
                         .or_default()
-                        .entry(target)
-                        .or_default();
-                    for (local, _original) in &imp.symbols {
-                        syms.insert(local.clone());
-                    }
+                        .insert(target);
                     break; // first matching child boundary wins
                 }
             }
@@ -288,20 +286,10 @@ pub fn index_tree_with(
         if !ext_imports.is_empty() {
             for n in &mut nodes {
                 if let Some(targets) = ext_imports.get(&n.id) {
-                    let arr: Vec<Value> = targets
-                        .iter()
-                        .map(|(target, syms)| {
-                            let mut m = serde_json::Map::new();
-                            m.insert(
-                                "symbols".to_string(),
-                                Value::Array(syms.iter().cloned().map(Value::String).collect()),
-                            );
-                            m.insert("target".to_string(), Value::String(target.clone()));
-                            Value::Object(m)
-                        })
-                        .collect();
-                    n.props
-                        .insert("external_imports".to_string(), Value::Array(arr));
+                    n.props.insert(
+                        "external_import_targets".to_string(),
+                        Value::Array(targets.iter().cloned().map(Value::String).collect()),
+                    );
                 }
             }
         }
@@ -593,13 +581,10 @@ mod tests {
             .expect("top.py File node");
         let ei = top
             .props
-            .get("external_imports")
-            .expect("external_imports present");
-        // One entry targeting the child's base.py File id, symbols ["helper"].
-        assert_eq!(
-            ei,
-            &json!([{ "symbols": ["helper"], "target": "rs1:childa:file:base.py" }])
-        );
+            .get("external_import_targets")
+            .expect("external_import_targets present");
+        // Flat string array of the resolved child File id(s).
+        assert_eq!(ei, &json!(["rs1:childa:file:base.py"]));
     }
 
     #[test]
@@ -609,8 +594,8 @@ mod tests {
         assert!(
             g.nodes
                 .iter()
-                .all(|n| !n.props.contains_key("external_imports")),
-            "no external_imports without federated children"
+                .all(|n| !n.props.contains_key("external_import_targets")),
+            "no external_import_targets without federated children"
         );
     }
 }
