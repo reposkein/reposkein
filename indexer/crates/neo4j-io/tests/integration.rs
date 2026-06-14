@@ -280,6 +280,68 @@ fn ambiguous_cross_repo_call_is_skipped() {
 
 #[test]
 #[ignore]
+fn import_scoped_resolves_federation_ambiguous_call() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    for r in ["xsA", "xsB", "xsC"] {
+        s.purge(r).unwrap();
+    }
+
+    // A/run calls "helper"; A/a.py imports from B/base.py (only). helper exists
+    // in BOTH B and C → federation-wide ambiguous, but import-scoped → B.
+    let a_run = Node::new("rs1:xsA:func:a.py#run@0", "Function")
+        .set("name", json!("run"))
+        .set("file_path", json!("a.py"))
+        .set("external_calls", json!(["helper"]));
+    let a_file = Node::new("rs1:xsA:file:a.py", "File")
+        .set("path", json!("a.py"))
+        .set("external_import_targets", json!(["rs1:xsB:file:base.py"]));
+    let b_helper = Node::new("rs1:xsB:func:base.py#helper@0", "Function")
+        .set("name", json!("helper"))
+        .set("file_path", json!("base.py"));
+    let c_helper = Node::new("rs1:xsC:func:other.py#helper@0", "Function")
+        .set("name", json!("helper"))
+        .set("file_path", json!("other.py"));
+    s.import_graph(
+        "xsA",
+        &Graph {
+            nodes: vec![a_run, a_file],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xsB",
+        &Graph {
+            nodes: vec![b_helper],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xsC",
+        &Graph {
+            nodes: vec![c_helper],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+
+    s.stitch_cross_repo_calls(&["xsA".into(), "xsB".into(), "xsC".into()])
+        .unwrap();
+    // Edge resolves to B (import-scoped), not C; and not skipped.
+    let to_b = s.run_count("MATCH (:Rs:Function {id:'rs1:xsA:func:a.py#run@0'})-[r:CALLS {cross_repo:true}]->(:Rs:Function {id:'rs1:xsB:func:base.py#helper@0'}) RETURN count(r) AS c").unwrap();
+    let to_c = s.run_count("MATCH (:Rs:Function {id:'rs1:xsA:func:a.py#run@0'})-[r:CALLS {cross_repo:true}]->(:Rs:Function {id:'rs1:xsC:func:other.py#helper@0'}) RETURN count(r) AS c").unwrap();
+    assert_eq!(to_b, 1, "import-scoped resolves to the imported repo B");
+    assert_eq!(to_c, 0, "not to the non-imported repo C");
+    for r in ["xsA", "xsB", "xsC"] {
+        s.purge(r).unwrap();
+    }
+}
+
+#[test]
+#[ignore]
 fn cross_repo_imports_stitch_links_file_to_child_file() {
     use reposkein_core::Graph;
     use serde_json::json;

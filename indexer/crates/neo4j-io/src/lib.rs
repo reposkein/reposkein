@@ -126,17 +126,52 @@ impl Neo4jStore {
 
     /// Creates DB-only cross-repo `CALLS` edges from each caller's committed
     /// `external_calls` (imported-but-unresolved names) to the matching function
-    /// in another federated repo. Only an UNAMBIGUOUS match (exactly one
-    /// federated function with that name, in a different repo) produces an edge;
-    /// ambiguous/absent names are skipped. Edges are `cross_repo:true,
-    /// stitched:true` and cross repo_id boundaries, so per-repo export ignores
-    /// them. Idempotent (MERGE). Returns the number of such edges after the call.
+    /// in another federated repo. Two passes, both per-(f, name):
+    ///
+    /// Pass A (import-scoped, precise): resolve the called name in a file the
+    /// caller's file imports from (via `external_import_targets`). Confidence 0.6.
+    ///
+    /// Pass B (federation-wide fallback): unique cross-repo match for names not
+    /// already resolved by pass A. Confidence 0.5. Fixes the latent XR-M2
+    /// grouping bug (was per-caller, now per-(f, name)).
+    ///
+    /// Ambiguous names (multiple matches) are skipped. Idempotent (MERGE).
+    /// Edges are `cross_repo:true, stitched:true`. Returns the total edge count.
     pub fn stitch_cross_repo_calls(&self, repo_ids: &[String]) -> Result<u64> {
         let ids: Vec<String> = repo_ids.to_vec();
         self.rt.block_on(async {
-            // For each (caller f, external name), collect the federated
-            // functions named `name` in OTHER repos; link only when exactly one.
-            let mut r = self
+            let mut total: i64 = 0;
+            // Pass A — import-scoped (precise): the called name in a file the
+            // caller's file imports from. Per (f, name); unique only.
+            let mut a = self
+                .graph
+                .execute(
+                    query(
+                        "MATCH (f:Rs:Function) \
+                         WHERE f.repo_id IN $ids AND f.external_calls IS NOT NULL \
+                         MATCH (ff:Rs:File {id: 'rs1:' + f.repo_id + ':file:' + f.file_path}) \
+                         WHERE ff.external_import_targets IS NOT NULL \
+                         UNWIND f.external_calls AS name \
+                         MATCH (m:Rs:Function {name: name}) \
+                         WHERE m.repo_id IN $ids AND m.repo_id <> f.repo_id \
+                           AND ('rs1:' + m.repo_id + ':file:' + m.file_path) IN ff.external_import_targets \
+                         WITH f, name, collect(DISTINCT m) AS matches \
+                         WHERE size(matches) = 1 \
+                         WITH f, matches[0] AS m \
+                         MERGE (f)-[s:CALLS {cross_repo: true}]->(m) \
+                         ON CREATE SET s.resolution = 'name_match', s.confidence = 0.6, \
+                                       s.stitched = true, s.call_sites = 1 \
+                         RETURN count(s) AS c",
+                    )
+                    .param("ids", ids.clone()),
+                )
+                .await?;
+            if let Ok(Some(row)) = a.next().await {
+                total += row.get::<i64>("c")?;
+            }
+            // Pass B — federation-wide fallback, per (f, name), ONLY for names
+            // not already resolved cross-repo by pass A.
+            let mut b = self
                 .graph
                 .execute(
                     query(
@@ -145,8 +180,9 @@ impl Neo4jStore {
                          UNWIND f.external_calls AS name \
                          MATCH (m:Rs:Function {name: name}) \
                          WHERE m.repo_id IN $ids AND m.repo_id <> f.repo_id \
-                         WITH f, collect(DISTINCT m) AS matches \
+                         WITH f, name, collect(DISTINCT m) AS matches \
                          WHERE size(matches) = 1 \
+                           AND NOT EXISTS { MATCH (f)-[:CALLS {cross_repo: true}]->(x:Rs:Function {name: name}) } \
                          WITH f, matches[0] AS m \
                          MERGE (f)-[s:CALLS {cross_repo: true}]->(m) \
                          ON CREATE SET s.resolution = 'name_match', s.confidence = 0.5, \
@@ -156,12 +192,10 @@ impl Neo4jStore {
                     .param("ids", ids),
                 )
                 .await?;
-            if let Ok(Some(row)) = r.next().await {
-                let c: i64 = row.get("c")?;
-                Ok(c as u64)
-            } else {
-                Ok(0)
+            if let Ok(Some(row)) = b.next().await {
+                total += row.get::<i64>("c")?;
             }
+            Ok(total as u64)
         })
     }
 
