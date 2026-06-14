@@ -266,8 +266,7 @@ pub fn index_tree_with(
     // committed edge here).
     if !children.is_empty() {
         // importing_file_id -> (target child File id -> sorted local symbols)
-        let mut ext_imports: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> =
-            BTreeMap::new();
+        let mut ext_imports: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
         for imp in &all_imports {
             for child in &children {
                 let prefix = format!("{}/", child.rel_path);
@@ -295,9 +294,7 @@ pub fn index_tree_with(
                             let mut m = serde_json::Map::new();
                             m.insert(
                                 "symbols".to_string(),
-                                Value::Array(
-                                    syms.iter().cloned().map(Value::String).collect(),
-                                ),
+                                Value::Array(syms.iter().cloned().map(Value::String).collect()),
                             );
                             m.insert("target".to_string(), Value::String(target.clone()));
                             Value::Object(m)
@@ -576,7 +573,17 @@ mod tests {
 
         let stub = ImportStub;
         let extractors: &[&dyn extractor::Extractor] = &[&stub];
-        let out = index_tree_with(root, "rootid", "root", extractors, IndexOptions { federation: true, cache: None }).unwrap();
+        let out = index_tree_with(
+            root,
+            "rootid",
+            "root",
+            extractors,
+            IndexOptions {
+                federation: true,
+                cache: None,
+            },
+        )
+        .unwrap();
 
         let top = out
             .graph
@@ -584,7 +591,10 @@ mod tests {
             .iter()
             .find(|n| n.id == "rs1:rootid:file:top.py")
             .expect("top.py File node");
-        let ei = top.props.get("external_imports").expect("external_imports present");
+        let ei = top
+            .props
+            .get("external_imports")
+            .expect("external_imports present");
         // One entry targeting the child's base.py File id, symbols ["helper"].
         assert_eq!(
             ei,
@@ -597,7 +607,9 @@ mod tests {
         let dir = fixture(); // no children
         let g = index_tree(dir.path(), "r", "demo", &[]).unwrap();
         assert!(
-            g.nodes.iter().all(|n| !n.props.contains_key("external_imports")),
+            g.nodes
+                .iter()
+                .all(|n| !n.props.contains_key("external_imports")),
             "no external_imports without federated children"
         );
     }
