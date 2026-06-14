@@ -2,10 +2,10 @@ import type { ToolResult } from "./readCypher.js";
 import {
   spawnIndexer,
   parseJsonStats,
-  indexerBinPath,
   repoPath,
   shouldLoadNeo4j,
 } from "../indexer/runIndexer.js";
+import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 
 export type RunResult =
   | { ok: true; nodes: number; edges: number; files: number; warnings: string[] }
@@ -23,9 +23,9 @@ export interface IndexerDeps {
 /** Default runner: run the index/reindex verb with --json, then load into Neo4j
  *  unless we're in JSONL mode (shouldLoadNeo4j() === false). */
 function defaultRun(repoId: string, indexPath: string, opts?: RunOpts): Promise<RunResult> {
-  const bin = indexerBinPath();
   const verb = opts?.verb ?? "index";
   return (async (): Promise<RunResult> => {
+    const bin = await ensureIndexerBinary();
     const verbArgs =
       verb === "reindex"
         ? ["reindex", "--json", "--repo-id", repoId, indexPath, ...(opts?.file ? ["--file", opts.file] : [])]

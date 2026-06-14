@@ -6,7 +6,9 @@ export interface SpawnResult {
   stderr: string;
 }
 
-/** Path to the indexer binary: REPOSKEIN_INDEXER_BIN or `reposkein-indexer`. */
+/** Path to the indexer binary: REPOSKEIN_INDEXER_BIN or `reposkein-indexer`.
+ * @deprecated Superseded by ensureIndexerBinary() in fetchBinary.ts (M4-D1).
+ *             Kept for back-compat; prefer ensureIndexerBinary() in new code. */
 export function indexerBinPath(): string {
   return process.env.REPOSKEIN_INDEXER_BIN ?? "reposkein-indexer";
 }

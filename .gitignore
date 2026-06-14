@@ -6,3 +6,6 @@ docs/prd.md
 
 # Local-only working docs (plans, skill scratch) — never commit.
 docs/superpowers/
+
+# Cached indexer binary (postinstall fetch, M4-D1) — never commit.
+mcp/bin/
