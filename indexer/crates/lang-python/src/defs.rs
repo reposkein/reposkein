@@ -3,6 +3,7 @@
 
 use reposkein_core::hash::content_hash;
 use reposkein_core::model::{Edge, Node};
+use reposkein_lang_common::{module_var_kind, text, unique};
 use serde_json::json;
 use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
@@ -27,10 +28,6 @@ pub struct Walk<'a> {
     used: HashMap<String, u32>,
     declared: std::collections::HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
-}
-
-fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
-    node.utf8_text(source).unwrap_or("")
 }
 
 /// Number of positional/keyword parameters (the @arity disambiguator).
@@ -64,14 +61,7 @@ impl<'a> Walk<'a> {
     /// Returns a per-file-unique id: base for the first occurrence, then
     /// base.1, base.2, … for collisions (PRD §5.3 ordinal disambiguation).
     fn unique(&mut self, base: String) -> String {
-        let n = self.used.entry(base.clone()).or_insert(0);
-        let id = if *n == 0 {
-            base.clone()
-        } else {
-            format!("{base}.{n}")
-        };
-        *n += 1;
-        id
+        unique(&mut self.used, base)
     }
 
     /// Builds the rs1 id for a function given its qualified name and arity.
@@ -206,14 +196,8 @@ impl<'a> Walk<'a> {
                                     let qualified = qual.join(".");
                                     let kind = if scope_kind == ScopeKind::Class {
                                         "class"
-                                    } else if name
-                                        .chars()
-                                        .all(|c| c.is_ascii_uppercase() || c == '_')
-                                        && name.chars().any(|c| c.is_ascii_uppercase())
-                                    {
-                                        "const"
                                     } else {
-                                        "module"
+                                        module_var_kind(&name)
                                     };
                                     let id = self.var_id(&qualified);
                                     self.nodes.push(
