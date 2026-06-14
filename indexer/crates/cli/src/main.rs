@@ -607,6 +607,7 @@ fn main() -> Result<()> {
                 let stitches = store.stitch_federation()?;
                 let repo_ids: Vec<String> = seen.iter().cloned().collect();
                 let xcalls = store.stitch_cross_repo_calls(&repo_ids)?;
+                let ximports = store.stitch_cross_repo_imports(&repo_ids)?;
                 for s in &skipped {
                     eprintln!("reposkein: skipped (no .reposkein JSONL): {s}");
                 }
@@ -617,11 +618,12 @@ fn main() -> Result<()> {
                         "nodes": n,
                         "edges": e,
                         "cross_repo_calls": xcalls,
+                        "cross_repo_imports": ximports,
                     });
                     println!("{}", serde_json::to_string(&stats).unwrap());
                 } else {
                     println!(
-                        "loaded {repos} repo(s): {n} nodes, {e} edges; {stitches} federation stitch(es); {xcalls} cross-repo call(s)"
+                        "loaded {repos} repo(s): {n} nodes, {e} edges; {stitches} federation stitch(es); {xcalls} cross-repo call(s); {ximports} cross-repo import(s)"
                     );
                 }
             }
