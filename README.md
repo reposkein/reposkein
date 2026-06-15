@@ -145,6 +145,24 @@ Then set `REPOSKEIN_STORE=neo4j` and the `NEO4J_*` env vars on the MCP server. (
 
 ---
 
+## Optional: semantic embeddings for `semantic_find`
+
+By default, `semantic_find` is **deterministic and lexical** (BM25F — zero-infra, no keys needed). You can opt into **hybrid embedding** (lexical + cosine, fused via RRF) by setting env vars on the MCP server:
+
+| Provider | When to use | Config |
+| --- | --- | --- |
+| `none` (default) | always works, deterministic | — |
+| `voyage` | best retrieval quality (code-specialized, cloud API) | `REPOSKEIN_EMBED_PROVIDER=voyage`, `VOYAGE_API_KEY=...` |
+| `http` | local/offline model, no egress | `REPOSKEIN_EMBED_PROVIDER=http`, `REPOSKEIN_EMBED_URL=...`, `REPOSKEIN_EMBED_MODEL=...` |
+
+Embedding vectors are cached in `.reposkein/local/embeddings/` (gitignored — never in committed JSONL). On any embedding error, `semantic_find` falls back to lexical automatically.
+
+> **Privacy:** with `REPOSKEIN_EMBED_PROVIDER=voyage`, code text is sent to Voyage AI's API. For offline operation, use the `http` provider with a local model (e.g. `voyage-4-nano` via [huggingface.co/voyageai/voyage-4-nano](https://huggingface.co/voyageai/voyage-4-nano)).
+
+See [`mcp/README.md`](mcp/README.md#optional-semantic-embeddings) for full configuration details.
+
+---
+
 ## Build from source
 
 Requirements: Rust (stable), Node 24. Docker only for the optional Neo4j backend.

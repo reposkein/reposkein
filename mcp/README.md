@@ -65,6 +65,39 @@ CLI: `reposkein-mcp init` (set up a repo) and `reposkein-mcp doctor` (health che
 | `REPOSKEIN_STORE` | `auto` (default) · `jsonl` (zero-infra) · `neo4j` |
 | `REPOSKEIN_INDEXER_BIN` | override the `reposkein-indexer` binary path (unsupported platforms) |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | optional Neo4j backend (large graphs / Cypher at scale) |
+| `REPOSKEIN_EMBED_PROVIDER` | `none` (default) · `voyage` · `http` — see below |
+| `REPOSKEIN_EMBED_MODEL` | embedding model id (provider default when absent) |
+| `REPOSKEIN_EMBED_DIMS` | output dimension (model default when absent) |
+| `VOYAGE_API_KEY` | API key for the `voyage` provider |
+| `REPOSKEIN_EMBED_URL` | base URL for the `http` (local model) provider |
+
+### Optional: semantic embeddings
+
+By default, `semantic_find` is **deterministic and lexical** (BM25F over qualified names, signatures, and summaries) — zero-infra, no API keys, byte-identical results. You can optionally enable a **hybrid embedding tier** that fuses lexical + cosine similarity via Reciprocal Rank Fusion (RRF):
+
+**Voyage API (cloud):**
+
+```sh
+REPOSKEIN_EMBED_PROVIDER=voyage
+VOYAGE_API_KEY=<your-key>
+# Optional: REPOSKEIN_EMBED_MODEL=voyage-code-3 (default)
+# Optional: REPOSKEIN_EMBED_DIMS=1024  (default; Matryoshka: 256/512/1024/2048)
+```
+
+> **Privacy note:** with `REPOSKEIN_EMBED_PROVIDER=voyage`, the document strings (qualified names, signatures, agent-written summaries) are sent to Voyage AI's servers for embedding. Teams with code-egress restrictions should use the local/http provider or leave embeddings disabled.
+
+**Local/offline model (no egress):**
+
+```sh
+REPOSKEIN_EMBED_PROVIDER=http
+REPOSKEIN_EMBED_URL=http://127.0.0.1:8080/v1/embeddings
+REPOSKEIN_EMBED_MODEL=voyage-4-nano   # or any model your local server serves
+REPOSKEIN_EMBED_DIMS=1024
+```
+
+Point this at any OpenAI-compatible local embedding server (e.g. running `voyage-4-nano` from [huggingface.co/voyageai/voyage-4-nano](https://huggingface.co/voyageai/voyage-4-nano), sentence-transformers, or similar). All text stays on your machine.
+
+**How it works:** vectors are cached in `.reposkein/local/embeddings/` (gitignored — never committed, never required). The cache is invalidated per-node when the document content changes. On any embedding error, `semantic_find` silently falls back to the lexical result. Enabling embeddings never changes the committed graph.
 
 **Platforms:** prebuilt indexer binaries for macOS (Apple Silicon), Linux (x64/arm64), and Windows (x64).
 

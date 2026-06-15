@@ -25,6 +25,10 @@ grep when the graph can answer structurally.
   `score` as a hint and `matched` tokens as the reason — verify structurally.
   Prefer `get_context_profile` directly for an exact known identifier; prefer grep
   for exact byte strings in comments, literals, or config files.
+  When `REPOSKEIN_EMBED_PROVIDER` is configured, `semantic_find` uses hybrid
+  retrieval (lexical + embedding cosine, fused via RRF); otherwise pure-lexical.
+  The tool is identical either way — `ranking:"hybrid"` in the response discloses
+  when embedding reranking was applied.
 
 - **`get_context_profile`** — resolve a function/class (by `node_id`,
   `file_path`+`name`, or `name`) and get its caller/callee neighborhood (1–2
