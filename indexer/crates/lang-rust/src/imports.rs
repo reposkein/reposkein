@@ -273,18 +273,19 @@ fn parse_use_tree_with_prefix(
             }
             let root = effective_prefix[0].clone();
             let inner: Vec<String> = effective_prefix[1..].to_vec();
-            let (resolved_root, resolved_segs) = if matches!(root.as_str(), "crate" | "super" | "self") {
-                (root, inner)
-            } else {
-                let mut segs = vec![root.clone()];
-                segs.extend(inner);
-                (root, segs)
-            };
+            let (resolved_root, resolved_segs) =
+                if matches!(root.as_str(), "crate" | "super" | "self") {
+                    (root, inner)
+                } else {
+                    let mut segs = vec![root.clone()];
+                    segs.extend(inner);
+                    (root, segs)
+                };
             out.push((
                 resolved_root,
                 resolved_segs,
-                "*".to_string(),  // original = "*" sentinel
-                "".to_string(),   // local = "" (empty local binding for glob)
+                "*".to_string(), // original = "*" sentinel
+                "".to_string(),  // local = "" (empty local binding for glob)
             ));
         }
         _ => {}
@@ -337,7 +338,9 @@ pub fn extract_imports(
             // Detect pub use (visibility_modifier as a child node).
             let is_reexport = {
                 let mut cc = child.walk();
-                let found = child.children(&mut cc).any(|c| c.kind() == "visibility_modifier");
+                let found = child
+                    .children(&mut cc)
+                    .any(|c| c.kind() == "visibility_modifier");
                 found
             };
             if let Some(arg) = child.child_by_field_name("argument") {
@@ -476,10 +479,12 @@ mod tests {
         let v = imps(b"pub use crate::b::Thing;\n", "src/a.rs");
         assert_eq!(v.len(), 1);
         assert!(v[0].reexport);
-        assert_eq!(v[0].symbols, vec![("Thing".to_string(), "Thing".to_string())]);
+        assert_eq!(
+            v[0].symbols,
+            vec![("Thing".to_string(), "Thing".to_string())]
+        );
         // plain use is NOT a reexport
         let p = imps(b"use crate::b::Thing;\n", "src/a.rs");
         assert!(!p[0].reexport);
     }
-
 }

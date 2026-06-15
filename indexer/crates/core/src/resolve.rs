@@ -128,11 +128,8 @@ fn resolve_imports(
             for (local, original) in &imp.symbols {
                 entry.insert(local.clone());
                 // Chase the reexport chain to find the original definition
-                let (final_path, final_sym) = chase_reexport(
-                    target.clone(),
-                    original.clone(),
-                    &reexports,
-                );
+                let (final_path, final_sym) =
+                    chase_reexport(target.clone(), original.clone(), &reexports);
                 sym_map.insert(
                     (imp.importing_file_id.clone(), local.clone()),
                     (final_path, final_sym),
@@ -595,9 +592,18 @@ mod tests {
     fn glob_import_expands_to_target_file_free_fns() {
         // a.rs defines helper + other; b.rs glob-imports a and calls helper().
         let nodes = vec![
-            Node::new("rs1:r:func:a.rs#helper@0", "Function").set("name", json!("helper")).set("qualified_name", json!("helper")).set("file_path", json!("a.rs")),
-            Node::new("rs1:r:func:a.rs#other@0", "Function").set("name", json!("other")).set("qualified_name", json!("other")).set("file_path", json!("a.rs")),
-            Node::new("rs1:r:func:b.rs#run@0", "Function").set("name", json!("run")).set("qualified_name", json!("run")).set("file_path", json!("b.rs")),
+            Node::new("rs1:r:func:a.rs#helper@0", "Function")
+                .set("name", json!("helper"))
+                .set("qualified_name", json!("helper"))
+                .set("file_path", json!("a.rs")),
+            Node::new("rs1:r:func:a.rs#other@0", "Function")
+                .set("name", json!("other"))
+                .set("qualified_name", json!("other"))
+                .set("file_path", json!("a.rs")),
+            Node::new("rs1:r:func:b.rs#run@0", "Function")
+                .set("name", json!("run"))
+                .set("qualified_name", json!("run"))
+                .set("file_path", json!("b.rs")),
             Node::new("rs1:r:file:a.rs", "File").set("path", json!("a.rs")),
         ];
         let imports = vec![RawImport {
@@ -615,18 +621,38 @@ mod tests {
             receiver: None,
         }];
         let edges = resolve(&nodes, &imports, &calls, "r");
-        let e = edges.iter().find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:a.rs#helper@0").expect("glob-imported helper resolves");
-        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("exact"));
-        assert_eq!(e.props.get("confidence").and_then(|v| v.as_f64()), Some(1.0));
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:a.rs#helper@0")
+            .expect("glob-imported helper resolves");
+        assert_eq!(
+            e.props.get("resolution").and_then(|v| v.as_str()),
+            Some("exact")
+        );
+        assert_eq!(
+            e.props.get("confidence").and_then(|v| v.as_f64()),
+            Some(1.0)
+        );
         // IMPORTS edge b->a present
-        assert!(edges.iter().any(|e| e.typ == "IMPORTS" && e.to == "rs1:r:file:a.rs"));
+        assert!(edges
+            .iter()
+            .any(|e| e.typ == "IMPORTS" && e.to == "rs1:r:file:a.rs"));
     }
 
     fn fn_node(id: &str, name: &str, path: &str) -> Node {
-        Node::new(id, "Function").set("name", json!(name)).set("qualified_name", json!(name)).set("file_path", json!(path))
+        Node::new(id, "Function")
+            .set("name", json!(name))
+            .set("qualified_name", json!(name))
+            .set("file_path", json!(path))
     }
     fn reexp(from_path: &str, sym: &str, cand: &str) -> RawImport {
-        RawImport { importing_file_id: format!("rs1:r:file:{from_path}"), importing_path: from_path.into(), symbols: vec![(sym.into(), sym.into())], candidate_paths: vec![cand.into()], reexport: true }
+        RawImport {
+            importing_file_id: format!("rs1:r:file:{from_path}"),
+            importing_path: from_path.into(),
+            symbols: vec![(sym.into(), sym.into())],
+            candidate_paths: vec![cand.into()],
+            reexport: true,
+        }
     }
 
     #[test]
@@ -639,14 +665,31 @@ mod tests {
         nodes.push(Node::new("rs1:r:file:a.rs", "File").set("path", json!("a.rs")));
         nodes.push(Node::new("rs1:r:file:b.rs", "File").set("path", json!("b.rs")));
         let imports = vec![
-            reexp("a.rs", "Thing", "b.rs"),                       // a re-exports from b
-            RawImport { importing_file_id: "rs1:r:file:c.rs".to_string(), importing_path: "c.rs".to_string(),
-                        symbols: vec![("Thing".into(), "Thing".into())], candidate_paths: vec!["a.rs".into()], reexport: false }, // c uses from a
+            reexp("a.rs", "Thing", "b.rs"), // a re-exports from b
+            RawImport {
+                importing_file_id: "rs1:r:file:c.rs".to_string(),
+                importing_path: "c.rs".to_string(),
+                symbols: vec![("Thing".into(), "Thing".into())],
+                candidate_paths: vec!["a.rs".into()],
+                reexport: false,
+            }, // c uses from a
         ];
-        let calls = vec![RawCall { caller_id: "rs1:r:func:c.rs#run@0".to_string(), caller_qualified: "run".to_string(), caller_path: "c.rs".to_string(), callee_name: "Thing".to_string(), receiver: None }];
+        let calls = vec![RawCall {
+            caller_id: "rs1:r:func:c.rs#run@0".to_string(),
+            caller_qualified: "run".to_string(),
+            caller_path: "c.rs".to_string(),
+            callee_name: "Thing".to_string(),
+            receiver: None,
+        }];
         let edges = resolve(&nodes, &imports, &calls, "r");
-        let e = edges.iter().find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:b.rs#Thing@0").expect("Thing chased through a's reexport to b");
-        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("exact"));
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:b.rs#Thing@0")
+            .expect("Thing chased through a's reexport to b");
+        assert_eq!(
+            e.props.get("resolution").and_then(|v| v.as_str()),
+            Some("exact")
+        );
     }
 
     #[test]
