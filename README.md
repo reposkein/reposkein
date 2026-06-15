@@ -127,6 +127,7 @@ Got nested repositories (e.g. a monorepo of indexed repos)? RepoSkein discovers 
 | `write_semantic_summary` | attach a hash-stamped summary to a node |
 | `init_cpg_skeleton` | build/rebuild the graph |
 | `reindex_file` | refresh after editing a file |
+| `get_temporal_context` | git-derived signals for a file: change frequency, top authors, and co-change — which files historically change together (advisory, not committed) |
 
 The `reposkein-mcp` CLI adds **`init`** (set up a repo) and **`doctor`** (health check).
 

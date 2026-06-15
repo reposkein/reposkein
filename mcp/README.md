@@ -54,6 +54,7 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 | `write_semantic_summary` | attach a hash-stamped summary to a node |
 | `init_cpg_skeleton` | build/rebuild the graph |
 | `reindex_file` | refresh after editing a file |
+| `get_temporal_context` | git-derived signals for a file: change frequency, top authors, and co-change — which files historically change together (advisory, not committed) |
 
 CLI: `reposkein-mcp init` (set up a repo) and `reposkein-mcp doctor` (health check).
 
