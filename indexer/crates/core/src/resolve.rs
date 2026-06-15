@@ -46,6 +46,31 @@ fn file_paths(nodes: &[Node]) -> BTreeSet<String> {
 /// Map from (importing_file_id, local_binding) → (target_path, original_name).
 type ImportTargets = HashMap<(String, String), (String, String)>;
 
+const MAX_REEXPORT_DEPTH: usize = 8;
+
+/// Chase a pub-use re-export chain to the original definition.
+/// Returns (final_path, final_sym), bounded by MAX_REEXPORT_DEPTH with cycle guard.
+fn chase_reexport(
+    mut path: String,
+    mut sym: String,
+    reexports: &BTreeMap<(String, String), (String, String)>,
+) -> (String, String) {
+    let mut seen = BTreeSet::new();
+    for _ in 0..MAX_REEXPORT_DEPTH {
+        if !seen.insert((path.clone(), sym.clone())) {
+            break; // cycle
+        }
+        match reexports.get(&(path.clone(), sym.clone())) {
+            Some((np, ns)) => {
+                path = np.clone();
+                sym = ns.clone();
+            }
+            None => break,
+        }
+    }
+    (path, sym)
+}
+
 /// Resolves imports → IMPORTS edges, and returns a map
 /// (importing_file_id, local_binding) → (target_path, original_name), for call following.
 fn resolve_imports(
@@ -54,6 +79,27 @@ fn resolve_imports(
     repo: &str,
     by_file_funcs: &BTreeMap<String, Vec<(String, String)>>,
 ) -> (Vec<Edge>, ImportTargets) {
+    // Pass 1: build re-export map from reexport=true imports
+    let mut reexports: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
+    for imp in imports {
+        if !imp.reexport {
+            continue;
+        }
+        let Some(target) = imp.candidate_paths.iter().find(|p| files.contains(*p)) else {
+            continue;
+        };
+        for (local, original) in &imp.symbols {
+            if local == "*" || original == "*" {
+                continue; // glob re-exports handled by glob expansion only
+            }
+            reexports.insert(
+                (imp.importing_path.clone(), local.clone()),
+                (target.clone(), original.clone()),
+            );
+        }
+    }
+
+    // Pass 2: resolve all imports and build edges
     // (from_id, to_id) -> sorted-unique local names (for the edge's symbols property)
     let mut agg: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut sym_map: HashMap<(String, String), (String, String)> = HashMap::new();
@@ -68,7 +114,7 @@ fn resolve_imports(
 
         // Check if this is a glob sentinel (symbols == [("", "*")])
         if imp.symbols == [(String::new(), "*".to_string())] {
-            // Expand: add each free fn of the target file as a binding
+            // Expand: add each free fn of the target file as a binding (no reexport chasing for globs)
             if let Some(fns) = by_file_funcs.get(target) {
                 for (name, _id) in fns {
                     entry.insert(name.clone());
@@ -81,9 +127,15 @@ fn resolve_imports(
         } else {
             for (local, original) in &imp.symbols {
                 entry.insert(local.clone());
+                // Chase the reexport chain to find the original definition
+                let (final_path, final_sym) = chase_reexport(
+                    target.clone(),
+                    original.clone(),
+                    &reexports,
+                );
                 sym_map.insert(
                     (imp.importing_file_id.clone(), local.clone()),
-                    (target.clone(), original.clone()),
+                    (final_path, final_sym),
                 );
             }
         }
@@ -568,6 +620,45 @@ mod tests {
         assert_eq!(e.props.get("confidence").and_then(|v| v.as_f64()), Some(1.0));
         // IMPORTS edge b->a present
         assert!(edges.iter().any(|e| e.typ == "IMPORTS" && e.to == "rs1:r:file:a.rs"));
+    }
+
+    fn fn_node(id: &str, name: &str, path: &str) -> Node {
+        Node::new(id, "Function").set("name", json!(name)).set("qualified_name", json!(name)).set("file_path", json!(path))
+    }
+    fn reexp(from_path: &str, sym: &str, cand: &str) -> RawImport {
+        RawImport { importing_file_id: format!("rs1:r:file:{from_path}"), importing_path: from_path.into(), symbols: vec![(sym.into(), sym.into())], candidate_paths: vec![cand.into()], reexport: true }
+    }
+
+    #[test]
+    fn pub_use_chain_resolves_to_original_definition() {
+        // b.rs defines Thing(); a.rs `pub use crate::b::Thing`; c.rs `use crate::a::Thing` + calls Thing().
+        let mut nodes = vec![
+            fn_node("rs1:r:func:b.rs#Thing@0", "Thing", "b.rs"),
+            fn_node("rs1:r:func:c.rs#run@0", "run", "c.rs"),
+        ];
+        nodes.push(Node::new("rs1:r:file:a.rs", "File").set("path", json!("a.rs")));
+        nodes.push(Node::new("rs1:r:file:b.rs", "File").set("path", json!("b.rs")));
+        let imports = vec![
+            reexp("a.rs", "Thing", "b.rs"),                       // a re-exports from b
+            RawImport { importing_file_id: "rs1:r:file:c.rs".to_string(), importing_path: "c.rs".to_string(),
+                        symbols: vec![("Thing".into(), "Thing".into())], candidate_paths: vec!["a.rs".into()], reexport: false }, // c uses from a
+        ];
+        let calls = vec![RawCall { caller_id: "rs1:r:func:c.rs#run@0".to_string(), caller_qualified: "run".to_string(), caller_path: "c.rs".to_string(), callee_name: "Thing".to_string(), receiver: None }];
+        let edges = resolve(&nodes, &imports, &calls, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:b.rs#Thing@0").expect("Thing chased through a's reexport to b");
+        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("exact"));
+    }
+
+    #[test]
+    fn pub_use_cycle_terminates() {
+        // a re-exports X from b; b re-exports X from a → cycle. Must not loop; resolves to last.
+        let nodes = vec![
+            Node::new("rs1:r:file:a.rs", "File").set("path", json!("a.rs")),
+            Node::new("rs1:r:file:b.rs", "File").set("path", json!("b.rs")),
+        ];
+        let imports = vec![reexp("a.rs", "X", "b.rs"), reexp("b.rs", "X", "a.rs")];
+        // Just assert resolve() returns (does not hang / panic).
+        let _ = resolve(&nodes, &imports, &[], "r");
     }
 
     #[test]

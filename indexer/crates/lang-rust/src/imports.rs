@@ -334,6 +334,12 @@ pub fn extract_imports(
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         if child.kind() == "use_declaration" {
+            // Detect pub use (visibility_modifier as a child node).
+            let is_reexport = {
+                let mut cc = child.walk();
+                let found = child.children(&mut cc).any(|c| c.kind() == "visibility_modifier");
+                found
+            };
             if let Some(arg) = child.child_by_field_name("argument") {
                 let mut leaves: Vec<UseLeaf> = Vec::new();
                 parse_use_tree_with_prefix(arg, source, &[], &mut leaves);
@@ -350,7 +356,7 @@ pub fn extract_imports(
                         importing_path: importing_path.to_string(),
                         symbols: vec![(local, item)],
                         candidate_paths,
-                        reexport: false,
+                        reexport: is_reexport,
                     });
                 }
             }
@@ -463,6 +469,17 @@ mod tests {
             "src/auth/session.rs",
         );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pub_use_marked_reexport() {
+        let v = imps(b"pub use crate::b::Thing;\n", "src/a.rs");
+        assert_eq!(v.len(), 1);
+        assert!(v[0].reexport);
+        assert_eq!(v[0].symbols, vec![("Thing".to_string(), "Thing".to_string())]);
+        // plain use is NOT a reexport
+        let p = imps(b"use crate::b::Thing;\n", "src/a.rs");
+        assert!(!p[0].reexport);
     }
 
 }
