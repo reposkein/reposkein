@@ -233,8 +233,13 @@ pub fn resolve_full(
                 .entry((c.caller_id.clone(), target))
                 .or_insert((0, res, conf));
             entry.0 += 1;
-            entry.1 = res;
-            entry.2 = conf;
+            // Keep the best (highest-confidence) resolution for the pair; a
+            // pair that is ever `exact` must not be downgraded by a later
+            // lower-confidence call site. Deterministic (source order stable).
+            if conf > entry.2 {
+                entry.1 = res;
+                entry.2 = conf;
+            }
         }
     }
     for ((from, to), (count, res, conf)) in agg {
@@ -550,5 +555,51 @@ mod tests {
             external.is_empty(),
             "in-repo-resolved import is not external"
         );
+    }
+
+    #[test]
+    fn best_resolution_per_pair_is_kept_not_last_write() {
+        // caller f() in a.py calls g() twice; g is defined in a.py (same-file
+        // exact) AND in b.py (so by_name has 2 → the repo-wide rung would be
+        // ambiguous). Same-file rung 2 wins per call; assert the a.py edge is
+        // exact with call_sites = 2 (aggregated), never downgraded.
+        let nodes = vec![
+            Node::new("rs1:r:func:a.py#f@0", "Function")
+                .set("name", json!("f"))
+                .set("qualified_name", json!("f"))
+                .set("file_path", json!("a.py")),
+            Node::new("rs1:r:func:a.py#g@0", "Function")
+                .set("name", json!("g"))
+                .set("qualified_name", json!("g"))
+                .set("file_path", json!("a.py")),
+            Node::new("rs1:r:func:b.py#g@0", "Function")
+                .set("name", json!("g"))
+                .set("qualified_name", json!("g"))
+                .set("file_path", json!("b.py")),
+        ];
+        let calls = vec![
+            RawCall {
+                caller_id: "rs1:r:func:a.py#f@0".into(),
+                caller_qualified: "f".into(),
+                caller_path: "a.py".into(),
+                callee_name: "g".into(),
+                receiver: None,
+            },
+            RawCall {
+                caller_id: "rs1:r:func:a.py#f@0".into(),
+                caller_qualified: "f".into(),
+                caller_path: "a.py".into(),
+                callee_name: "g".into(),
+                receiver: None,
+            },
+        ];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:a.py#g@0")
+            .expect("a.py#f -> a.py#g CALLS edge");
+        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("exact"));
+        assert_eq!(e.props.get("confidence").and_then(|v| v.as_f64()), Some(1.0));
+        assert_eq!(e.props.get("call_sites").and_then(|v| v.as_u64()), Some(2));
     }
 }
