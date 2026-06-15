@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url)); // mcp/scripts
-const src = join(here, "..", "..", "skill", "SKILL.md"); // repo-root skill/SKILL.md
+const src = join(here, "..", "..", "skills", "reposkein-graph-rag", "SKILL.md"); // repo-root skills/reposkein-graph-rag/SKILL.md
 const distDir = join(here, "..", "dist");
 const dest = join(distDir, "SKILL.md");
 
