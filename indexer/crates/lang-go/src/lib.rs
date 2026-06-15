@@ -65,8 +65,7 @@ mod tests {
 
     #[test]
     fn extractor_surfaces_calls() {
-        let src =
-            b"package p\nfunc helper() {}\nfunc run() { helper() }\n";
+        let src = b"package p\nfunc helper() {}\nfunc run() { helper() }\n";
         let ctx = FileContext {
             repo: "r",
             rel_path: "pkg/m.go",
