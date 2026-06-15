@@ -1,0 +1,38 @@
+{
+  "repo": "reposkein (this repo)",
+  "note": "Ground-truth hand-labeled by reading the source + grepping call sites — independent of RepoSkein's own resolution. `relevant` lists Function names (unique here).",
+  "tasks": [
+    {
+      "id": "callers-round2",
+      "kind": "callers",
+      "question": "Which functions call round2 (impact of changing it)?",
+      "seed": "round2",
+      "grep_query": "round2",
+      "relevant": ["resolve_one"]
+    },
+    {
+      "id": "callers-drop_dangling_edges",
+      "kind": "callers",
+      "question": "Which functions call drop_dangling_edges?",
+      "seed": "drop_dangling_edges",
+      "grep_query": "drop_dangling_edges",
+      "relevant": ["index_tree_with"]
+    },
+    {
+      "id": "callers-parent_of",
+      "kind": "callers",
+      "question": "Which functions call parent_of?",
+      "seed": "parent_of",
+      "grep_query": "parent_of",
+      "relevant": ["index_tree_with"]
+    },
+    {
+      "id": "lookup-meta_json",
+      "kind": "lookup",
+      "question": "Where is meta_json defined (grep-favorable: unique symbol)?",
+      "seed": "meta_json",
+      "grep_query": "meta_json",
+      "relevant": ["meta_json"]
+    }
+  ]
+}
