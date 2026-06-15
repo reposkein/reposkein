@@ -25,6 +25,13 @@
 //!   kind `formal_parameter` or `spread_parameter`; `receiver_parameter` excluded;
 //!   generics in a param type and varargs each count as one param.
 //!   `void m(int a, String... r)` → 2.
+//! - **C#** (`lang-csharp`): named children of `parameter_list` of kind `parameter`
+//!   each count as 1 (covers regular, `ref`, `out`, `in` params). The `params T[] xs`
+//!   array parameter (which tree-sitter-c-sharp 0.23 represents as non-`parameter`
+//!   named children of `parameter_list`) counts as 1 collectively if present.
+//!   Generic type parameters (`type_parameters` field) are excluded.
+//!   `void M(int a, string b)` → 2; `void M(params int[] xs)` → 1;
+//!   `void M(ref int a, out int b)` → 2; `void M<T>(T a)` → 1.
 //!
 //! These intentionally differ per language; do not "normalize" them.
 

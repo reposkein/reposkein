@@ -19,6 +19,7 @@ reposkein-lang-ts = { path = "../lang-ts" }
 reposkein-lang-rust = { path = "../lang-rust" }
 reposkein-lang-go = { path = "../lang-go" }
 reposkein-lang-java = { path = "../lang-java" }
+reposkein-lang-csharp = { path = "../lang-csharp" }
 reposkein-neo4j-io = { path = "../neo4j-io" }
 
 [dev-dependencies]
