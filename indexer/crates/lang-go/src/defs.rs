@@ -355,12 +355,14 @@ mod tests {
         let w = run(
             b"package p\ntype S struct{ x int }\ntype G interface { Hi() }\nconst K = 1\nvar V = 2\n",
         );
-        assert!(w.nodes.iter().any(|n| n.labels == ["Class"] && n.id == "rs1:r:class:pkg/m.go#S"));
-        assert!(
-            w.nodes
-                .iter()
-                .any(|n| n.labels == ["Interface"] && n.id == "rs1:r:iface:pkg/m.go#G")
-        );
+        assert!(w
+            .nodes
+            .iter()
+            .any(|n| n.labels == ["Class"] && n.id == "rs1:r:class:pkg/m.go#S"));
+        assert!(w
+            .nodes
+            .iter()
+            .any(|n| n.labels == ["Interface"] && n.id == "rs1:r:iface:pkg/m.go#G"));
         assert!(w.nodes.iter().any(|n| n.labels == ["Variable"]
             && n.props.get("name").and_then(|v| v.as_str()) == Some("K")));
         assert!(w.nodes.iter().any(|n| n.labels == ["Variable"]
@@ -370,11 +372,7 @@ mod tests {
     #[test]
     fn function_has_content_hash_and_defines_edge() {
         let w = run(b"package p\nfunc Free() {}\n");
-        let f = w
-            .nodes
-            .iter()
-            .find(|n| n.labels == ["Function"])
-            .unwrap();
+        let f = w.nodes.iter().find(|n| n.labels == ["Function"]).unwrap();
         assert!(f
             .props
             .get("content_hash")
