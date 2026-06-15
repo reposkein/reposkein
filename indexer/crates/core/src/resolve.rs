@@ -598,8 +598,14 @@ mod tests {
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:a.py#g@0")
             .expect("a.py#f -> a.py#g CALLS edge");
-        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("exact"));
-        assert_eq!(e.props.get("confidence").and_then(|v| v.as_f64()), Some(1.0));
+        assert_eq!(
+            e.props.get("resolution").and_then(|v| v.as_str()),
+            Some("exact")
+        );
+        assert_eq!(
+            e.props.get("confidence").and_then(|v| v.as_f64()),
+            Some(1.0)
+        );
         assert_eq!(e.props.get("call_sites").and_then(|v| v.as_u64()), Some(2));
     }
 }

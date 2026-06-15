@@ -480,9 +480,16 @@ mod tests {
         assert!(enum_ids.contains(&"rs1:r:enum:m.ts#E"));
         assert!(enum_ids.contains(&"rs1:r:enum:m.ts#E.1"));
         // content_hash present on both kinds
-        for n in w.nodes.iter().filter(|n| n.labels == ["Interface"] || n.labels == ["Enum"]) {
+        for n in w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Interface"] || n.labels == ["Enum"])
+        {
             assert!(
-                n.props.get("content_hash").and_then(|v| v.as_str()).is_some(),
+                n.props
+                    .get("content_hash")
+                    .and_then(|v| v.as_str())
+                    .is_some(),
                 "type node {} must carry content_hash",
                 n.id
             );
