@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/lang-common", "crates/cli", "crates/lang-python", "crates/lang-ts", "crates/lang-rust", "crates/lang-go", "crates/lang-java", "crates/neo4j-io", "crates/lang-csharp"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/reposkein/reposkein"
