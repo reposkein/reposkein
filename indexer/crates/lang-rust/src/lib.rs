@@ -5,6 +5,7 @@ use tree_sitter::{Parser, Tree};
 
 pub mod calls;
 pub mod defs;
+pub mod imports;
 
 use reposkein_core::extractor::{ExtractOutput, Extractor, FileContext};
 
@@ -21,11 +22,12 @@ impl Extractor for RustExtractor {
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
         w.walk(tree.root_node(), ctx.file_id);
         w.finalize_heritage();
+        let imports = imports::extract_imports(tree.root_node(), ctx.source, ctx.file_id, ctx.rel_path);
         ExtractOutput {
             nodes: w.nodes,
             edges: w.edges,
             calls: w.calls,
-            ..Default::default()
+            imports,
         }
     }
 }
@@ -85,5 +87,25 @@ mod tests {
         let b = RustExtractor.extract(&ctx);
         assert_eq!(a.nodes, b.nodes);
         assert_eq!(a.edges, b.edges);
+    }
+
+    #[test]
+    fn extract_surfaces_use_imports() {
+        use reposkein_core::extractor::{Extractor, FileContext};
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "src/b.rs",
+            file_id: "rs1:r:file:src/b.rs",
+            source: b"use crate::a::helper;\npub fn run() { helper(); }\n",
+        };
+        let out = RustExtractor.extract(&ctx);
+        assert!(
+            out.imports.iter().any(|i| i
+                .candidate_paths
+                .contains(&"src/a.rs".to_string())
+                && i.symbols.iter().any(|(l, _)| l == "helper")),
+            "use crate::a::helper must yield a RawImport to src/a.rs"
+        );
+        assert!(out.calls.iter().any(|c| c.callee_name == "helper"));
     }
 }
