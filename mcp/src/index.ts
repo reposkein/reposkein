@@ -14,6 +14,7 @@ import { makeReadCypher } from "./tools/readCypher.js";
 import { makeGetContextProfile } from "./tools/getContextProfile.js";
 import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
 import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
+import { makeSemanticFind } from "./tools/semanticFind.js";
 import { resolveRepoId } from "./store/repoId.js";
 
 /** Selects the store backend.
@@ -153,6 +154,28 @@ export async function main(): Promise<void> {
         return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
       }
       return reindexFile(args);
+    }
+  );
+
+  const semanticFind = repoId ? makeSemanticFind(store, repoId) : null;
+  server.registerTool(
+    "semantic_find",
+    {
+      title: "Find code by meaning",
+      description:
+        "Rank functions/classes by a lexical match over their qualified names, signatures, and agent-written summaries — the entry point to seed get_context_profile when you don't know where to start. Returns ranked node_ids. federated:true spans nested repos.",
+      inputSchema: {
+        query: z.string(),
+        limit: z.number().int().min(1).max(25).optional(),
+        kind: z.enum(["Function", "Class", "Interface", "Enum"]).optional(),
+        federated: z.boolean().optional(),
+      },
+    },
+    async (args) => {
+      if (!semanticFind) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return semanticFind(args);
     }
   );
 

@@ -16,6 +16,16 @@ grep when the graph can answer structurally.
 
 ## Tools
 
+- **`semantic_find`** — **start here when you don't have a seed symbol.** Rank
+  functions/classes/interfaces/enums by a lexical match (BM25F) over their
+  qualified names, signatures, and committed summaries. Use for cold-start "where
+  is X?" queries when you have no `node_id`, file path, or exact identifier. Take
+  the top result's `node_id` and immediately call `get_context_profile` with it.
+  Pass `kind` to filter to a label; `federated:true` to span nested repos. Treat
+  `score` as a hint and `matched` tokens as the reason — verify structurally.
+  Prefer `get_context_profile` directly for an exact known identifier; prefer grep
+  for exact byte strings in comments, literals, or config files.
+
 - **`get_context_profile`** — resolve a function/class (by `node_id`,
   `file_path`+`name`, or `name`) and get its caller/callee neighborhood (1–2
   hops) as pre-inlined prose plus an `enrichment_needed` list. Your primary
