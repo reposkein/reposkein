@@ -124,6 +124,7 @@ pub fn extract_imports(
             importing_path: importing_path.to_string(),
             symbols,
             candidate_paths: candidates(&base),
+            reexport: false,
         });
     }
     out

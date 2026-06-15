@@ -74,6 +74,7 @@ fn push_import(
                         importing_path: importing_path.to_string(),
                         symbols: Vec::new(),
                         candidate_paths: candidates(&parts),
+                        reexport: false,
                     });
                 }
             }
@@ -140,6 +141,7 @@ fn push_import(
                 importing_path: importing_path.to_string(),
                 symbols,
                 candidate_paths: candidates(&base_parts),
+                reexport: false,
             });
         }
         _ => {}

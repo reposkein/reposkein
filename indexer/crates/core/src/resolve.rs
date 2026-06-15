@@ -311,6 +311,7 @@ mod tests {
             importing_path: "app/svc.py".to_string(),
             symbols: vec![(sym.into(), sym.into())],
             candidate_paths: vec!["app/base.py".to_string()],
+            reexport: false,
         };
         // Two separate imports from the same module.
         let imports = vec![mk("Base"), mk("helper")];
@@ -335,6 +336,7 @@ mod tests {
                 "app/base.py".to_string(),
                 "app/base/__init__.py".to_string(),
             ],
+            reexport: false,
         }];
         let edges = resolve(&nodes, &imports, &[], "r");
         let e = edges
@@ -354,6 +356,7 @@ mod tests {
             importing_path: "app/svc.py".to_string(),
             symbols: vec![("sqrt".into(), "sqrt".into())],
             candidate_paths: vec!["math.py".to_string(), "math/__init__.py".to_string()],
+            reexport: false,
         }];
         let edges = resolve(&nodes, &imports, &[], "r");
         assert!(edges.iter().all(|e| e.typ != "IMPORTS"));
@@ -499,6 +502,7 @@ mod tests {
             importing_path: "m.py".to_string(),
             symbols: vec![("h".to_string(), "helper".to_string())], // imported as `h`
             candidate_paths: vec!["util.py".to_string()],
+            reexport: false,
         }];
         // call site uses the alias `h`
         let calls = vec![call(&caller.id, "m.py", "use", "h", None)];
@@ -520,6 +524,7 @@ mod tests {
             importing_path: "svc.py".to_string(),
             symbols: vec![("helper".into(), "helper".into())],
             candidate_paths: vec!["child/base.py".to_string()], // not in `files`
+            reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
         let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");
@@ -543,6 +548,7 @@ mod tests {
             importing_path: "svc.py".to_string(),
             symbols: vec![("h".into(), "helper".into())],
             candidate_paths: vec!["child/base.py".to_string()],
+            reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "h", None)];
         let (_e, external) = resolve_full(&nodes, &imports, &calls, "r");
@@ -583,6 +589,7 @@ mod tests {
             importing_path: "svc.py".to_string(),
             symbols: vec![("helper".into(), "helper".into())],
             candidate_paths: vec!["base.py".to_string()], // in-repo
+            reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
         let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");

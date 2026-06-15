@@ -25,6 +25,8 @@ pub struct RawImport {
     /// Imported symbols as (local_binding, original_name); equal when not aliased.
     pub symbols: Vec<(String, String)>,
     pub candidate_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reexport: bool, // true for Rust `pub use` re-exports
 }
 
 /// A call site before resolution. `caller_id` is the enclosing Function node id.
@@ -80,6 +82,7 @@ mod tests {
             importing_path: "a.py".into(),
             symbols: vec![("g".into(), "g".into())],
             candidate_paths: vec!["b.py".into()],
+            reexport: false,
         });
         out.calls.push(RawCall {
             caller_id: "rs1:r:func:a.py#f@1".into(),

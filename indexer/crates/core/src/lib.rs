@@ -546,6 +546,7 @@ mod tests {
                     importing_path: ctx.rel_path.to_string(),
                     symbols: vec![("helper".to_string(), "helper".to_string())],
                     candidate_paths: vec!["vendor/childA/base.py".to_string()],
+                    reexport: false,
                 });
             }
             out

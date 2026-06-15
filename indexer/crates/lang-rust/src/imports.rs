@@ -317,6 +317,7 @@ pub fn extract_imports(
                         importing_path: importing_path.to_string(),
                         symbols: vec![(local, item)],
                         candidate_paths,
+                        reexport: false,
                     });
                 }
             }

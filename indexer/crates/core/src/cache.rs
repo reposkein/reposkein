@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// Bump to invalidate every cache entry (e.g. when extractor logic changes
 /// the ExtractOutput for unchanged source).
-pub const EXTRACT_CACHE_SCHEMA: u32 = 6;
+pub const EXTRACT_CACHE_SCHEMA: u32 = 7;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {

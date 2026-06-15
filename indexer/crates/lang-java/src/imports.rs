@@ -152,6 +152,7 @@ pub fn extract_imports(
             importing_path: importing_path.to_string(),
             symbols: vec![(cls.clone(), cls)],
             candidate_paths: candidates,
+            reexport: false,
         });
     }
     out
