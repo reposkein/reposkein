@@ -26,7 +26,9 @@ pub fn role_for(rel_path: &str, ext: &str) -> &'static str {
     let p = rel_path.to_ascii_lowercase();
     let basename = p.rsplit('/').next().unwrap_or(&p);
     let orig_basename = rel_path.rsplit('/').next().unwrap_or(rel_path);
-    let in_test_dir = p.split('/').any(|seg| seg == "test" || seg == "tests" || seg.ends_with(".tests"));
+    let in_test_dir = p
+        .split('/')
+        .any(|seg| seg == "test" || seg == "tests" || seg.ends_with(".tests"));
     let test_file = basename.starts_with("test_")
         || basename.contains("_test.")
         || basename.contains(".test.")
@@ -91,7 +93,7 @@ mod tests {
             role_for("src/main/java/com/acme/Contest.java", "java"),
             "doing"
         ); // NOT testing
-        // C#: .Tests/ project directory → testing.
+           // C#: .Tests/ project directory → testing.
         assert_eq!(role_for("src/MyLib.Tests/FooTests.cs", "cs"), "testing");
         // C#: plain source file → doing.
         assert_eq!(role_for("src/Contoso/Widget.cs", "cs"), "doing");

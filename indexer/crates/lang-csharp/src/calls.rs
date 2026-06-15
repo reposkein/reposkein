@@ -75,19 +75,24 @@ mod tests {
         let src = b"class C { void Run() { Foo(); obj.Bar(); this.X(); Type.StaticM(); } }";
         let tree = parse(src).unwrap();
         let root = tree.root_node();
-        let method = find_first(root, "method_declaration")
-            .expect("should find method_declaration");
-        let body = method.child_by_field_name("body")
+        let method =
+            find_first(root, "method_declaration").expect("should find method_declaration");
+        let body = method
+            .child_by_field_name("body")
             .expect("method should have body field");
         let mut calls = Vec::new();
         collect_calls(body, src, "cid", "C.Run", "C.cs", &mut calls);
-        let pairs: Vec<(&str, Option<&str>)> = calls.iter()
+        let pairs: Vec<(&str, Option<&str>)> = calls
+            .iter()
             .map(|c| (c.callee_name.as_str(), c.receiver.as_deref()))
             .collect();
         assert!(pairs.contains(&("Foo", None)), "bare call Foo()");
         assert!(pairs.contains(&("Bar", Some("obj"))), "obj.Bar() call");
         assert!(pairs.contains(&("X", Some("this"))), "this.X() call");
-        assert!(pairs.contains(&("StaticM", Some("Type"))), "Type.StaticM() call");
+        assert!(
+            pairs.contains(&("StaticM", Some("Type"))),
+            "Type.StaticM() call"
+        );
     }
 
     #[test]
@@ -96,9 +101,10 @@ mod tests {
         let src = b"class C { void Run() { Action a = () => { inner(); }; } }";
         let tree = parse(src).unwrap();
         let root = tree.root_node();
-        let method = find_first(root, "method_declaration")
-            .expect("should find method_declaration");
-        let body = method.child_by_field_name("body")
+        let method =
+            find_first(root, "method_declaration").expect("should find method_declaration");
+        let body = method
+            .child_by_field_name("body")
             .expect("method should have body field");
         let mut calls = Vec::new();
         collect_calls(body, src, "cid", "C.Run", "C.cs", &mut calls);

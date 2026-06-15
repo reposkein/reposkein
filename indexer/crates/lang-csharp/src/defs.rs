@@ -171,14 +171,7 @@ impl<'a> Walk<'a> {
         }
     }
 
-    fn push_type(
-        &mut self,
-        id: String,
-        label: &str,
-        qual: &str,
-        node: TsNode,
-        parent_id: &str,
-    ) {
+    fn push_type(&mut self, id: String, label: &str, qual: &str, node: TsNode, parent_id: &str) {
         let id = self.unique(id);
         let simple = qual.rsplit('.').next().unwrap_or(qual);
         self.declared.insert(qual.to_string(), id.clone());
@@ -200,12 +193,7 @@ impl<'a> Walk<'a> {
     /// Each named child of `base_list` is an identifier (simple name) or a
     /// qualified/generic name. The first entry is INHERITS (unless I[A-Z]),
     /// subsequent entries are IMPLEMENTS.
-    fn collect_base_list_heritage(
-        &mut self,
-        base_list: TsNode,
-        from_name: &str,
-        scope: &[String],
-    ) {
+    fn collect_base_list_heritage(&mut self, base_list: TsNode, from_name: &str, scope: &[String]) {
         let mut c = base_list.walk();
         let entries: Vec<TsNode> = base_list.named_children(&mut c).collect();
         for (i, entry) in entries.iter().enumerate() {

@@ -255,8 +255,15 @@ fn run_index(
     let go = GoExtractor;
     let java = JavaExtractor;
     let csharp = CsharpExtractor;
-    let extractors: &[&dyn reposkein_core::extractor::Extractor] =
-        &[&python, &typescript, &javascript, &rust, &go, &java, &csharp];
+    let extractors: &[&dyn reposkein_core::extractor::Extractor] = &[
+        &python,
+        &typescript,
+        &javascript,
+        &rust,
+        &go,
+        &java,
+        &csharp,
+    ];
 
     // Per-file extract cache under the git-ignored local/ dir.
     let cache = if no_cache {
