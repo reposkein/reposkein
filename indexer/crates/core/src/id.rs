@@ -16,6 +16,11 @@
 //!   `function f(a: number, b?: string)` → 2.
 //! - **Rust** (`lang-rust`): named children of kind `parameter` or
 //!   `self_parameter`. `fn m(&self, a: i32)` → 2.
+//! - **Go** (`lang-go`): number of parameter *names* across all
+//!   `parameter_declaration` and `variadic_parameter_declaration` children of
+//!   the `parameters` list; a zero-name (type-only) declaration counts as 1;
+//!   receiver, result, and generic type parameters are excluded.
+//!   `func f(a, b int)` → 2; `func f(int, string)` → 2; `func (s *S) M(a int)` → 1.
 //!
 //! These intentionally differ per language; do not "normalize" them.
 

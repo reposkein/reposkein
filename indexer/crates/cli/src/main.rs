@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use reposkein_core::{index_tree_with, jsonl};
+use reposkein_lang_go::GoExtractor;
 use reposkein_lang_python::PythonExtractor;
 use reposkein_lang_rust::RustExtractor;
 use reposkein_lang_ts::{JavaScriptExtractor, TypeScriptExtractor};
@@ -209,7 +210,7 @@ const DEFAULT_CONFIG_TOML: &str = r#"# RepoSkein configuration (committed; no se
 schema_version = 1
 
 [languages]
-enabled = ["python", "typescript", "rust"]
+enabled = ["python", "typescript", "rust", "go"]
 
 [neo4j]
 uri = "neo4j://localhost:7687"
@@ -249,8 +250,9 @@ fn run_index(
     let typescript = TypeScriptExtractor;
     let javascript = JavaScriptExtractor;
     let rust = RustExtractor;
+    let go = GoExtractor;
     let extractors: &[&dyn reposkein_core::extractor::Extractor] =
-        &[&python, &typescript, &javascript, &rust];
+        &[&python, &typescript, &javascript, &rust, &go];
 
     // Per-file extract cache under the git-ignored local/ dir.
     let cache = if no_cache {
