@@ -121,7 +121,9 @@ function grepArm(t: Task): { retrieved: Set<string>; rgBytes: number; files: Set
   try {
     out = execFileSync(
       RG_BIN,
-      ["-n", "--no-heading", "--color=never", "-g", "!.reposkein", "-g", "!target", "-g", "!node_modules", "-g", "!dist", t.grep_query, "."],
+      // Exclude the bench's own scaffolding so grep isn't penalised for matching
+      // the fixtures/README that contain the query terms (fairness).
+      ["-n", "--no-heading", "--color=never", "-g", "!.reposkein", "-g", "!target", "-g", "!node_modules", "-g", "!dist", "-g", "!bench", t.grep_query, "."],
       { cwd: repoPath, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
     );
   } catch (e: any) {

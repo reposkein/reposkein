@@ -1,6 +1,6 @@
 {
   "repo": "reposkein (this repo)",
-  "note": "Ground-truth hand-labeled by reading the source + grepping call sites — independent of RepoSkein's own resolution. `relevant` lists Function names (unique here).",
+  "note": "Ground-truth hand-labeled by reading the source + grepping call sites — independent of RepoSkein's own resolution. `relevant` lists Function names (unique here). Callers/callees ground-truth includes test callers (impact analysis covers tests).",
   "tasks": [
     {
       "id": "callers-round2",
@@ -16,7 +16,7 @@
       "question": "Which functions call drop_dangling_edges?",
       "seed": "drop_dangling_edges",
       "grep_query": "drop_dangling_edges",
-      "relevant": ["index_tree_with"]
+      "relevant": ["index_tree_with", "drop_dangling_edges_removes_unmatched_endpoints"]
     },
     {
       "id": "callers-parent_of",
@@ -27,9 +27,17 @@
       "relevant": ["index_tree_with"]
     },
     {
+      "id": "callees-index_tree",
+      "kind": "callees",
+      "question": "What does the index_tree wrapper call?",
+      "seed": "index_tree",
+      "grep_query": "index_tree",
+      "relevant": ["index_tree_with"]
+    },
+    {
       "id": "lookup-meta_json",
       "kind": "lookup",
-      "question": "Where is meta_json defined (grep-favorable: unique symbol)?",
+      "question": "Where is meta_json defined (lookup regime, closest to grep parity)?",
       "seed": "meta_json",
       "grep_query": "meta_json",
       "relevant": ["meta_json"]
