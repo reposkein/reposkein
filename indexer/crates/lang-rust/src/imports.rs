@@ -64,6 +64,17 @@ fn parent_mod_dir(importing_path: &str) -> String {
     }
 }
 
+/// The crate root directory for `crate::` resolution: the nearest ancestor
+/// directory ending at a `src` path segment. Handles cargo workspaces where
+/// crates live under e.g. `indexer/crates/core/src/`. Falls back to "src".
+fn crate_root_dir(importing_path: &str) -> String {
+    let segs: Vec<&str> = importing_path.split('/').collect();
+    match segs.iter().rposition(|s| *s == "src") {
+        Some(i) => segs[..=i].join("/"),
+        None => "src".to_string(),
+    }
+}
+
 /// Compute candidate file paths for a use path given root token, inner segs,
 /// and the importing file path.
 ///
@@ -73,18 +84,17 @@ fn module_candidates(importing_path: &str, root: &str, segs: &[String]) -> Vec<S
     let mut out: Vec<String> = Vec::new();
     match root {
         "crate" => {
+            let root = crate_root_dir(importing_path);
             if segs.is_empty() {
                 // item is defined in crate root
-                out.extend_from_slice(&[
-                    "src/lib.rs".to_string(),
-                    "src/main.rs".to_string(),
-                    "lib.rs".to_string(),
-                    "main.rs".to_string(),
-                ]);
+                out.push(format!("{root}/lib.rs"));
+                out.push(format!("{root}/main.rs"));
+                out.push("lib.rs".to_string());
+                out.push("main.rs".to_string());
             } else {
                 let inner = segs.join("/");
-                out.push(format!("src/{inner}.rs"));
-                out.push(format!("src/{inner}/mod.rs"));
+                out.push(format!("{root}/{inner}.rs"));
+                out.push(format!("{root}/{inner}/mod.rs"));
                 out.push(format!("{inner}.rs"));
                 out.push(format!("{inner}/mod.rs"));
             }
@@ -132,9 +142,10 @@ fn module_candidates(importing_path: &str, root: &str, segs: &[String]) -> Vec<S
             // Bare root: crate-relative AND literal from repo root.
             // segs INCLUDES the bare root segment at position 0.
             if !segs.is_empty() {
+                let root = crate_root_dir(importing_path);
                 let inner = segs.join("/");
-                out.push(format!("src/{inner}.rs"));
-                out.push(format!("src/{inner}/mod.rs"));
+                out.push(format!("{root}/{inner}.rs"));
+                out.push(format!("{root}/{inner}/mod.rs"));
                 out.push(format!("{inner}.rs"));
                 out.push(format!("{inner}/mod.rs"));
             }
@@ -380,6 +391,19 @@ mod tests {
     #[test]
     fn glob_is_skipped() {
         assert!(imps(b"use crate::a::*;\n", "src/svc.rs").is_empty());
+    }
+
+    #[test]
+    fn crate_root_detected_in_cargo_workspace() {
+        // Crates under e.g. indexer/crates/core/src/ — crate root is the
+        // nearest ancestor src/, not the literal repo-root "src".
+        let v = imps(b"use crate::a::helper;\n", "indexer/crates/core/src/b.rs");
+        assert!(v[0]
+            .candidate_paths
+            .contains(&"indexer/crates/core/src/a.rs".to_string()));
+        assert!(v[0]
+            .candidate_paths
+            .contains(&"indexer/crates/core/src/a/mod.rs".to_string()));
     }
 
     #[test]
