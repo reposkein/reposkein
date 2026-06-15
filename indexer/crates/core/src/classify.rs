@@ -8,6 +8,7 @@ pub fn language_for(ext: &str) -> &'static str {
         "ts" | "tsx" => "typescript",
         "js" | "jsx" | "mjs" | "cjs" => "javascript",
         "rs" => "rust",
+        "go" => "go",
         "md" | "markdown" => "markdown",
         "json" => "json",
         "toml" => "toml",
@@ -46,6 +47,7 @@ mod tests {
         assert_eq!(language_for("py"), "python");
         assert_eq!(language_for("tsx"), "typescript");
         assert_eq!(language_for("rs"), "rust");
+        assert_eq!(language_for("go"), "go");
         assert_eq!(language_for("xyz"), "unknown");
     }
 
@@ -62,5 +64,6 @@ mod tests {
         // basename test_ prefix → testing; directory segment "tests" → testing.
         assert_eq!(role_for("src/test_utils.py", "py"), "testing");
         assert_eq!(role_for("pkg/tests/helpers.py", "py"), "testing");
+        assert_eq!(role_for("pkg/svc_test.go", "go"), "testing");
     }
 }
