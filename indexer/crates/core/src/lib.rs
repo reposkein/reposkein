@@ -149,7 +149,16 @@ pub fn index_tree_with(
             ));
         } else {
             let ext = extension_of(&e.rel_path);
-            let bytes = std::fs::read(&e.abs_path)?;
+            let bytes = match std::fs::read(&e.abs_path) {
+                Ok(b) => b,
+                Err(err) => {
+                    eprintln!(
+                        "reposkein: skipping unreadable file {}: {err}",
+                        e.rel_path
+                    );
+                    continue;
+                }
+            };
             let content_hash = hash::content_hash(&bytes);
             let language = classify::language_for(&ext);
             let role = classify::role_for(&e.rel_path, &ext);
