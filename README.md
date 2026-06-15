@@ -120,8 +120,10 @@ Cross-repo edges are **never committed** (they're derived at load from each repo
 | Python | ✅ (incl. decorators, `if`/`try`-nested) | ✅ (incl. aliased) | ✅ |
 | TypeScript / TSX | ✅ (classes, interfaces, enums, default exports) | ✅ (incl. aliased) | ✅ |
 | JavaScript / JSX | ✅ | ✅ | ✅ |
-| Rust | ✅ (structs, traits, enums, `impl` methods) | ✅ `use`→`IMPORTS` (crate/super/self/groups/aliases; workspace-aware) | ✅ (import-resolved `exact`; cross-file `name_match`) |
+| Rust | ✅ (structs, traits, enums, `impl` methods) | ✅ `use`→`IMPORTS` (crate/super/self/groups/aliases, **globs**, **`pub use` re-export chains**; workspace-aware) | ✅ (import-resolved `exact`; cross-file `name_match`) |
 | Go | ✅ (funcs, methods as `Type.method`, structs, interfaces) | cross-package planned | ✅ (intra-package resolved; `pkg.Fn` by name) |
+| Java | ✅ (classes, interfaces, enums, methods, constructors) | ✅ package-path (`import a.b.C`; source-root aware) | ✅ (import-resolved; overloads by name) |
+| C# | ✅ (classes, interfaces, structs, records, enums, methods, properties) | cross-namespace planned | ✅ (intra-dir resolved; `obj.M`/`Type.M` by name) |
 
 Call edges carry an honest `resolution` (`exact` / `name_match` / `ambiguous`) and `confidence` — the skill instructs agents to verify non-exact edges. The resolver prefers same-directory candidates before a repo-wide match, reducing false-ambiguous fan-out.
 
