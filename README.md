@@ -1,28 +1,32 @@
 # RepoSkein
 
-**Thread your repo into agent-ready context.**
+**Give your AI coding agent a map of your codebase — instead of letting it grep and guess.**
 
-RepoSkein is a local-first developer tool that solves the context-window problem for LLM agents working in large or nested repositories. Instead of letting an agent grep and guess, it builds a deterministic **Code Property Graph** of your codebase — directories, files, classes, functions, imports, calls — with [Tree-sitter](https://tree-sitter.github.io/) static analysis, then lets the agent enrich that skeleton with natural-language summaries *just-in-time*. The graph is served to any MCP-capable agent (Claude Code, Cursor, Zed, …) and the agent-written summaries are versioned in git alongside the code — so semantic understanding becomes **shared team memory**.
+[![npm](https://img.shields.io/npm/v/@reposkein/mcp.svg?logo=npm)](https://www.npmjs.com/package/@reposkein/mcp)
+[![npm downloads](https://img.shields.io/npm/dm/@reposkein/mcp.svg)](https://www.npmjs.com/package/@reposkein/mcp)
+[![CI](https://github.com/reposkein/reposkein/actions/workflows/ci.yml/badge.svg)](https://github.com/reposkein/reposkein/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/reposkein/reposkein.svg?logo=github)](https://github.com/reposkein/reposkein/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-server-7c3aed.svg)](https://modelcontextprotocol.io)
 
-> Status: **v0.1.0 released.** `@reposkein/mcp` is on npm and prebuilt `reposkein-indexer` binaries ship with each GitHub Release, so `npx @reposkein/mcp init` works out of the box. The v1 core is complete and CI-green: deterministic indexer, **zero-infra** in-memory graph store *and* Neo4j round-trip, the five MCP tools, cross-repo federation, the git-sync merge driver + hooks, and summary persistence — across Python, TypeScript/TSX, JavaScript/JSX, and Rust.
+RepoSkein builds a deterministic **graph of your code** — files, classes, functions, imports, and call edges — with [Tree-sitter](https://tree-sitter.github.io/), and serves it to any MCP-capable agent (Claude Code, Cursor, Codex, …). Your agent navigates structure instead of guessing, then writes short summaries onto the graph as it learns — and those summaries are versioned in git, so understanding becomes **shared team memory**.
+
+- ⚡ **Zero-infra** — no database, no Docker. The graph lives in committed `.reposkein/*.jsonl` files.
+- 🔒 **Deterministic** — same code → byte-identical graph. No LLM in the construction path.
+- 🌐 **7 languages** — Python, TypeScript, JavaScript, Rust, Go, Java, C#.
+- 🧩 **Local-first & git-native** — the graph and its summaries travel with your code.
 
 ---
 
-## Quick start
+## Get started (≈30 seconds)
 
-In the repository you want to index:
+In the repo you want your agent to understand:
 
 ```sh
-npx @reposkein/mcp init [path]
+npx @reposkein/mcp init
 ```
 
-`init` will:
-1. Download and cache the `reposkein-indexer` binary for your platform.
-2. Install git hooks + the JSONL three-way merge driver (`reposkein-indexer init --hooks`).
-3. Drop the navigation skill into `.claude/skills/reposkein-graph-rag/`.
-4. Print the MCP server config to add to your client.
-
-Add the printed config to your agent client (e.g. Claude Code `.mcp.json`):
+That downloads the indexer, sets up git hooks, installs the agent skill, and prints an MCP config block. **Paste that block into your agent** (e.g. Claude Code's `.mcp.json`):
 
 ```jsonc
 {
@@ -35,81 +39,37 @@ Add the printed config to your agent client (e.g. Claude Code `.mcp.json`):
 }
 ```
 
-Build the graph — ask your agent to call `init_cpg_skeleton`, or run:
+Build the graph and commit it:
 
 ```sh
-reposkein-indexer index /path/to/your/repo
+reposkein-indexer index .      # writes .reposkein/
+reposkein-mcp doctor .         # ✓ binary  ✓ indexed (N nodes)  ✓ ready
+git add .reposkein && git commit -m "add RepoSkein code graph"
 ```
 
-Commit the generated `.reposkein/` directory so the graph and summaries are shared with your team. Then **verify everything is wired up**:
+That's it. Ask your agent *"what calls this function?"* or *"what breaks if I change X?"* and it answers from the graph.
 
-```sh
-reposkein-mcp doctor .      # ✓ indexer binary  ✓ repo indexed (N nodes)  ✓ repo id → PASS
-```
+> **Prefer your agent to do the setup?** Install the skills and let it drive:
+> ```sh
+> npx skills add reposkein/reposkein --all
+> ```
+> Then tell your agent to **run the `reposkein-setup` skill** — it installs, indexes, and verifies everything for you. Works across Claude Code, Cursor, Codex, and 70+ agents.
 
-`doctor` checks the prerequisites (binary present, repo indexed, repo id resolvable) and exits non-zero if any critical check fails, so you can gate on it. To confirm the server is actually reachable from your agent, ask it to call `get_context_profile` on a known function — a normal caller/callee profile means RepoSkein is live.
-
-### Zero-infra by default (no Docker required)
-
-The MCP server reads the **committed `.reposkein/*.jsonl`** directly from an in-memory graph store — **you do not need Neo4j or Docker** to query the graph. `REPOSKEIN_STORE=auto` (the default) uses the JSONL store when `.reposkein/nodes.jsonl` is present, and falls back to Neo4j only if you've configured it. Force a backend with `REPOSKEIN_STORE=jsonl` or `REPOSKEIN_STORE=neo4j`. Neo4j is an optional projection for very large graphs and raw Cypher at scale (see [Neo4j backend](#neo4j-backend-optional)).
-
-### Platforms
-
-Prebuilt binaries are published for **darwin-arm64 (Apple Silicon), linux-x64, linux-arm64, win32-x64**. Intel macOS (`darwin-x64`) is intentionally not built — all Macs ship Apple Silicon since 2020. On unsupported hosts, set `REPOSKEIN_INDEXER_BIN` to a `reposkein-indexer` you built from source.
+**Platforms:** prebuilt binaries for macOS (Apple Silicon), Linux (x64/arm64), and Windows (x64). Elsewhere, point `REPOSKEIN_INDEXER_BIN` at a [from-source](#build-from-source) build.
 
 ---
 
-## Install the agent skills (skills.sh)
+## Why RepoSkein
 
-RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — installable into Claude Code, Cursor, Codex, and 70+ other agents with one command:
+Agents waste their context window grepping files and guessing how code connects. RepoSkein answers structural questions directly:
 
-```sh
-npx skills add reposkein/reposkein --all
-```
+| Ask | RepoSkein gives the agent |
+| --- | --- |
+| "Who calls `charge()`?" | the exact callers, with one-line summaries |
+| "What does this change impact?" | the caller/callee neighborhood, not 20 files of grep hits |
+| "Where's this defined?" | the precise node — no false positives from comments or strings |
 
-- **`reposkein-setup`** — installs RepoSkein in a repo and **verifies it's running** (binary → `.reposkein/` index → MCP server reachability via a probe tool call). Start here.
-- **`reposkein-graph-rag`** — navigates the code graph (callers, callees, impact, summaries). Used once RepoSkein is set up.
-
-The skills are *procedural knowledge* — they teach your agent how to install, verify, and drive RepoSkein. The runtime itself is the `@reposkein/mcp` npm package + the native indexer. (A skill can't register an MCP server for you — that step is host-specific, so `reposkein-setup` guides it per agent.) See [`skills/`](skills/).
-
----
-
-## How it works
-
-```
- AI agent (MCP host)  ── governed by SKILL.md (reposkein-graph-rag / reposkein-setup)
-        │
-        ▼
- @reposkein/mcp  (TypeScript, thin)   read_cypher · get_context_profile ·
-   │  read-only guard, repo scoping,  write_semantic_summary · init_cpg_skeleton · reindex_file
-   │  summary validation              + CLI: init · doctor
-   │
-   ├── reads ──▶ .reposkein/nodes.jsonl + edges.jsonl   (zero-infra in-memory store — DEFAULT)
-   │
-   └── spawns ─▶ reposkein-indexer  (Rust)  walk · Tree-sitter parse · stable IDs ·
-                   canonical JSONL · Neo4j import/export · 3-way merge driver
-                        │                                  ▲
-                        ▼                                  │ bulk import / export (optional)
-              .reposkein/*.jsonl  ←── versioned in git ──▶ Neo4j 5.x (optional, for scale/Cypher)
-                        ▲
-                        │  pre-commit (export, incl. agent summaries) / post-merge (import)
-                      git hooks  +  three-way JSONL merge driver
-```
-
-- **Deterministic structure.** The graph skeleton comes only from static analysis — no LLM in the construction path. Identical source trees produce **byte-identical** `.reposkein/*.jsonl` (a CI-tested invariant), independent of the developer's machine. Stable IDs (`rs1:<repo>:<kind>:<path>#<qualified_name>@<arity>`) survive line-number drift so summaries persist through unrelated edits.
-- **Semantic flesh, just-in-time.** The agent writes 1–3-sentence summaries onto nodes only when it visits them; summaries are content-hash-stamped (flagged stale when code changes) and committed to git.
-- **Local-first, git-native.** The canonical JSONL files are the source of truth; Neo4j is a reconstructable projection. A git merge driver merges concurrent summaries across clones without conflicts.
-
----
-
-## Cross-repo federation
-
-RepoSkein understands **nested repositories**. When a repo contains other indexed repos, RepoSkein discovers them, links them with `FEDERATES_TO`, and stitches cross-repo edges at load time:
-
-- **Cross-repo `CALLS`** — import-gated and precise: a caller's unresolved bare calls are matched against functions in the files its file actually imports from (high-confidence), with a federation-wide fallback.
-- **Cross-repo `IMPORTS`** — file-to-file import edges resolved across repo boundaries.
-
-Cross-repo edges are **never committed** (they're derived at load from each repo's own committed JSONL), so per-repo determinism holds. Pass `federated: true` to `get_context_profile` / `read_cypher` to resolve and traverse across the federation. Both backends — the zero-infra JSONL store and Neo4j — implement federation at parity.
+In a deterministic, no-LLM [benchmark](mcp/bench/), RepoSkein surfaces the right functions with a **mean ~8.4× fewer context tokens** than a grep-based agent on structural queries.
 
 ---
 
@@ -117,113 +77,101 @@ Cross-repo edges are **never committed** (they're derived at load from each repo
 
 | Language | Definitions | Imports | Calls |
 | --- | --- | --- | --- |
-| Python | ✅ (incl. decorators, `if`/`try`-nested) | ✅ (incl. aliased) | ✅ |
-| TypeScript / TSX | ✅ (classes, interfaces, enums, default exports) | ✅ (incl. aliased) | ✅ |
+| Python | classes, functions (decorators, nested) | ✅ (aliased) | ✅ |
+| TypeScript / TSX | classes, interfaces, enums | ✅ (aliased) | ✅ |
 | JavaScript / JSX | ✅ | ✅ | ✅ |
-| Rust | ✅ (structs, traits, enums, `impl` methods) | ✅ `use`→`IMPORTS` (crate/super/self/groups/aliases, **globs**, **`pub use` re-export chains**; workspace-aware) | ✅ (import-resolved `exact`; cross-file `name_match`) |
-| Go | ✅ (funcs, methods as `Type.method`, structs, interfaces) | cross-package planned | ✅ (intra-package resolved; `pkg.Fn` by name) |
-| Java | ✅ (classes, interfaces, enums, methods, constructors) | ✅ package-path (`import a.b.C`; source-root aware) | ✅ (import-resolved; overloads by name) |
-| C# | ✅ (classes, interfaces, structs, records, enums, methods, properties) | cross-namespace planned | ✅ (intra-dir resolved; `obj.M`/`Type.M` by name) |
+| Rust | structs, traits, enums, `impl` methods | ✅ `use` (groups, aliases, globs, `pub use` re-exports; workspace-aware) | ✅ |
+| Go | funcs, methods (`Type.method`), structs, interfaces | intra-package; cross-package planned | ✅ |
+| Java | classes, interfaces, enums, methods, constructors | ✅ package-path | ✅ |
+| C# | classes, interfaces, structs, records, enums, methods, properties | intra-dir; cross-namespace planned | ✅ |
 
-Call edges carry an honest `resolution` (`exact` / `name_match` / `ambiguous`) and `confidence` — the skill instructs agents to verify non-exact edges. The resolver prefers same-directory candidates before a repo-wide match, reducing false-ambiguous fan-out.
+Every call edge is labeled with how it was resolved (`exact` / `name_match` / `ambiguous`) and a confidence, so the agent knows what to trust. Adding a language is a small, well-trodden path — contributions welcome.
 
 ---
 
-## The graph
+## How it works
 
-**Nodes:** `Repository`, `Directory`, `File`, `Class`, `Interface`, `Enum`, `Function`, `Variable`.
-**Edges:** `CONTAINS`, `DEFINES`, `IMPORTS`, `CALLS`, `INHERITS`, `IMPLEMENTS`, `FEDERATES_TO`.
+```
+ Your agent (Claude Code / Cursor / …)   ── guided by the reposkein skill
+        │  MCP
+        ▼
+ @reposkein/mcp        get_context_profile · read_cypher · write_semantic_summary
+   (TypeScript)        init_cpg_skeleton · reindex_file   |   CLI: init · doctor
+        │ reads
+        ▼
+ .reposkein/*.jsonl   ← the code graph, committed to git (zero-infra, in-memory store)
+        ▲ writes
+        │
+ reposkein-indexer    Tree-sitter parse → stable IDs → canonical JSONL
+   (Rust)             + git hooks & a 3-way merge driver for conflict-free summaries
+```
+
+- **Structure is static.** The skeleton comes only from parsing — identical code produces a byte-identical graph (a CI-tested invariant), independent of who runs it.
+- **Meaning is just-in-time.** Your agent writes 1–3 sentence summaries onto nodes as it visits them; they're stamped with a content hash (so they go stale when code changes) and committed to git.
+- **Optional Neo4j backend** for very large graphs and raw Cypher at scale — see [below](#neo4j-backend-optional). Most users never need it.
+
+### Cross-repo federation
+
+Got nested repositories (e.g. a monorepo of indexed repos)? RepoSkein discovers them, links them with `FEDERATES_TO`, and stitches **cross-repo call and import edges** at load time. Pass `federated: true` to the tools to traverse across repo boundaries. Federation edges are derived at load (never committed), so each repo stays independently deterministic.
+
+---
 
 ## MCP tools
 
-- **`init_cpg_skeleton`** — index a repo and load it into the graph.
-- **`get_context_profile`** — resolve a function/class and return its caller/callee neighborhood as pre-inlined prose + an `enrichment_needed` list (the JIT loop driver). `federated: true` spans nested repos.
-- **`write_semantic_summary`** — attach a hash-stamped, validated plain-text summary to a node.
-- **`read_cypher`** — read-only Cypher (write clauses rejected; default-deny procedure allowlist; results capped). `federated: true` scopes to the federation.
-- **`reindex_file`** — refresh the graph after editing a file (extract-cache accelerated).
+| Tool | What it does |
+| --- | --- |
+| `get_context_profile` | resolve a function/class → its caller/callee neighborhood as ready-to-read prose |
+| `read_cypher` | read-only graph queries (writes rejected, results capped) |
+| `write_semantic_summary` | attach a hash-stamped summary to a node |
+| `init_cpg_skeleton` | build/rebuild the graph |
+| `reindex_file` | refresh after editing a file |
 
-The `reposkein-mcp` binary also has two CLI subcommands: **`init`** (set up a repo) and **`doctor`** (health check).
-
----
-
-## Benchmarks
-
-RepoSkein is measured on two tracks, both under [`mcp/bench/`](mcp/bench/).
-
-- **Track 1 — retrieval efficiency (deterministic, no LLM).** Compares RepoSkein's structural retrieval against a grep agent on hand-labeled code-navigation tasks, scoring precision-weighted F0.5 + context-token cost. On structural/impact queries RepoSkein surfaces exactly the right functions (F0.5 = 1.00 vs grep 0.11–0.71) with a **mean ~8.4× fewer context tokens** — using a cost model deliberately generous to grep (counting only matched function bodies, not whole files). See [`mcp/bench/README.md`](mcp/bench/README.md).
-- **Track 2 — end-task benchmark (SWE-bench-Verified).** A minimal Anthropic tool-use agent loop where the *only* difference between arms is the navigation toolset — **A (RepoSkein MCP)** vs **B (grep/ripgrep)** — graded by the official `swebench` harness on resolve-rate + total tokens + turns. The loop, tools, and MCP client are unit-tested locally; the actual API+Docker run is opt-in/user-side. See [`mcp/bench/track2/README.md`](mcp/bench/track2/README.md).
+The `reposkein-mcp` CLI adds **`init`** (set up a repo) and **`doctor`** (health check).
 
 ---
 
 ## Neo4j backend (optional)
 
-Most users never need this — the zero-infra JSONL store serves the graph directly. Neo4j is useful for very large graphs and raw Cypher at scale.
+The zero-infra JSONL store is the default and needs nothing extra. Neo4j is an optional projection for very large graphs and raw Cypher at scale:
 
 ```sh
-cd indexer && docker compose up -d        # neo4j on bolt://localhost:7687 (neo4j/reposkeintest)
-NEO4J_PASSWORD=reposkeintest reposkein-indexer load /path/to/repo
+cd indexer && docker compose up -d                          # neo4j on bolt://localhost:7687
+NEO4J_PASSWORD=reposkeintest reposkein-indexer load .
 ```
 
-Then point the MCP server at it with `REPOSKEIN_STORE=neo4j` and the `NEO4J_*` env vars (see [build from source](#build-from-source-contributors)).
+Then set `REPOSKEIN_STORE=neo4j` and the `NEO4J_*` env vars on the MCP server. (`REPOSKEIN_STORE=auto`, the default, uses JSONL when present and falls back to Neo4j only if configured.)
 
 ---
 
-## Build from source (contributors)
+## Build from source
 
-Prerequisites: Rust (stable), Node 24, Docker (only for the Neo4j backend / round-trip tests).
+Requirements: Rust (stable), Node 24. Docker only for the optional Neo4j backend.
 
 ```sh
-# 1. Build the native indexer
-cd indexer && cargo build --release      # binary at indexer/target/release/reposkein-indexer
+# native indexer
+cd indexer && cargo build --release        # → indexer/target/release/reposkein-indexer
 
-# 2. Index a repository (zero-infra — no Neo4j needed to serve)
-reposkein-indexer init --hooks /path/to/repo          # installs git hooks + merge driver
-reposkein-indexer index --name myrepo /path/to/repo   # writes .reposkein/*.jsonl + meta.json
-
-# 3. Build the MCP server
+# MCP server
 cd mcp && npm install && npm run build
-
-# 4. (optional) Neo4j backend
-cd indexer && docker compose up -d
-NEO4J_PASSWORD=reposkeintest reposkein-indexer load /path/to/repo
 ```
 
-Wire the MCP server into your agent. **Zero-infra** (JSONL store, default):
+Wire it into your agent with `command: node`, `args: [".../mcp/dist/index.js"]`, and env `REPOSKEIN_REPO_PATH` + `REPOSKEIN_INDEXER_BIN`. Run the tests:
 
-```jsonc
-{ "mcpServers": { "reposkein": {
-  "command": "node",
-  "args": ["/abs/path/reposkein/mcp/dist/index.js"],
-  "env": {
-    "REPOSKEIN_REPO_PATH": "/path/to/repo",
-    "REPOSKEIN_INDEXER_BIN": "/abs/path/reposkein/indexer/target/release/reposkein-indexer"
-  } } } }
+```sh
+cd indexer && cargo test && cargo clippy --all-targets -- -D warnings
+cd mcp && npm test
 ```
-
-Or with the **Neo4j backend**, add `"REPOSKEIN_STORE": "neo4j"`, `"NEO4J_URI": "neo4j://localhost:7687"`, `"NEO4J_USER": "neo4j"`, `"NEO4J_PASSWORD": "reposkeintest"`, and `"REPOSKEIN_REPO_ID": "<from .reposkein/meta.json>"`.
-
-Then install the skills (`skills/`) so the agent navigates the graph instead of grepping.
 
 ---
 
 ## Repository layout
 
 ```
-indexer/    Rust workspace: core · lang-common · lang-python · lang-ts · lang-rust · neo4j-io · cli
-mcp/        @reposkein/mcp — TypeScript MCP server (tools, GraphStore backends, read-only guard)
-mcp/bench/  retrieval benchmark (Track 1) + end-task SWE-bench harness (Track 2)
-skills/     reposkein-graph-rag + reposkein-setup agent skills (skills.sh layout)
-docs/       design docs
+indexer/   Rust workspace: core, lang-{python,ts,rust,go,java,csharp}, lang-common, neo4j-io, cli
+mcp/       @reposkein/mcp — the TypeScript MCP server (tools + graph-store backends)
+mcp/bench/ benchmarks: retrieval efficiency (Track 1) + end-task SWE-bench harness (Track 2)
+skills/    reposkein-graph-rag + reposkein-setup — cross-agent skills (skills.sh)
 ```
-
-## Development
-
-```sh
-cd indexer && cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings
-cd mcp && npm test          # DB-gated suites skip without NEO4J_PASSWORD
-```
-
-CI (GitHub Actions) runs the indexer test/fmt/clippy, the mcp build/test, and the Neo4j `load → export` byte-identical round-trip on every push and PR. Releases are cut by pushing a `v*` tag (builds the prebuilt binaries, creates a GitHub Release, and publishes `@reposkein/mcp` to npm).
 
 ## License
 
