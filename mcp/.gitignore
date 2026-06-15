@@ -1,2 +1,10 @@
 node_modules
 dist
+
+# Track 2 benchmark (Python)
+bench/track2/.venv/
+bench/track2/**/__pycache__/
+bench/track2/*.egg-info/
+bench/track2/predictions*.jsonl
+bench/track2/run_results/
+bench/track2/logs/

@@ -1,0 +1,11 @@
+[project]
+name = "reposkein-track2"
+version = "0.0.0"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["track2*"]
+
+[tool.ruff]
+line-length = 100

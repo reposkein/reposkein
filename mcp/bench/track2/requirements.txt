@@ -1,0 +1,6 @@
+anthropic>=0.40
+mcp>=1.2
+datasets>=2.19
+swebench>=3.0
+pytest>=8
+# resolved: swebench==4.1.0
