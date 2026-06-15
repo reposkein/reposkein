@@ -95,6 +95,7 @@ fn resolve_one(
     by_file_freefn: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> module-level fn ids only
     by_file_qual: &BTreeMap<(String, String), String>,        // (path,qualified) -> id
     import_targets: &ImportTargets, // (importing_file_id, local) -> (path, original)
+    by_id_dir: &BTreeMap<String, String>, // func id -> directory of its file
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
@@ -120,6 +121,32 @@ fn resolve_one(
         {
             if let Some(ids) = by_file_freefn.get(&(target_path.clone(), original.clone())) {
                 return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
+            }
+        }
+        // Rung 3.5: scope-aware — prefer same-directory candidates before
+        // going repo-wide (reduces false repo-wide `ambiguous` fan-out).
+        // Only applies when the caller is in a non-root directory (caller_dir
+        // non-empty) to avoid spurious matches among root-level files.
+        if let Some(ids) = by_name.get(&c.callee_name) {
+            if ids.len() > 1 {
+                let caller_dir = c.caller_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+                if !caller_dir.is_empty() {
+                    let local: Vec<&String> = ids
+                        .iter()
+                        .filter(|id| by_id_dir.get(*id).map(|d| d.as_str()) == Some(caller_dir))
+                        .collect();
+                    match local.len() {
+                        1 => return vec![(local[0].clone(), "name_match", 0.8)],
+                        n if n > 1 => {
+                            let conf = round2(0.8 / n as f64);
+                            return local
+                                .iter()
+                                .map(|id| ((*id).clone(), "ambiguous", conf))
+                                .collect();
+                        }
+                        _ => {} // fall through to repo-wide rungs 4/5 (unchanged)
+                    }
+                }
             }
         }
         // Rungs 4/5: repo-wide name match.
@@ -183,6 +210,7 @@ pub fn resolve_full(
     let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut by_file_freefn: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
     for f in &funcs {
         by_name
             .entry(f.name.clone())
@@ -195,6 +223,8 @@ pub fn resolve_full(
                 .push(f.id.clone());
         }
         by_file_qual.insert((f.file_path.clone(), f.qualified.clone()), f.id.clone());
+        let dir = f.file_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("").to_string();
+        by_id_dir.insert(f.id.clone(), dir);
     }
     for v in by_name.values_mut() {
         v.sort();
@@ -214,6 +244,7 @@ pub fn resolve_full(
             &by_file_freefn,
             &by_file_qual,
             &import_targets,
+            &by_id_dir,
             &caller_file_id,
         );
         if resolved.is_empty() && c.receiver.is_none() {
@@ -607,5 +638,64 @@ mod tests {
             Some(1.0)
         );
         assert_eq!(e.props.get("call_sites").and_then(|v| v.as_u64()), Some(2));
+    }
+
+    #[test]
+    fn scope_aware_prefers_same_directory_unique() {
+        // caller in src/auth/x.rs calls helper(); two helpers exist: one in the
+        // caller's dir (src/auth/y.rs) and one elsewhere (src/util/z.rs).
+        let nodes = vec![
+            Node::new("rs1:r:func:src/auth/x.rs#run@0".to_string(), "Function")
+                .set("name", json!("run")).set("qualified_name", json!("run"))
+                .set("file_path", json!("src/auth/x.rs")),
+            Node::new("rs1:r:func:src/auth/y.rs#helper@0".to_string(), "Function")
+                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("file_path", json!("src/auth/y.rs")),
+            Node::new("rs1:r:func:src/util/z.rs#helper@0".to_string(), "Function")
+                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("file_path", json!("src/util/z.rs")),
+        ];
+        let calls = vec![RawCall {
+            caller_id: "rs1:r:func:src/auth/x.rs#run@0".into(),
+            caller_qualified: "run".into(),
+            caller_path: "src/auth/x.rs".into(),
+            callee_name: "helper".into(),
+            receiver: None,
+        }];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let calls_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "CALLS").collect();
+        assert_eq!(calls_edges.len(), 1, "should resolve to the single same-dir helper");
+        let e = calls_edges[0];
+        assert_eq!(e.to, "rs1:r:func:src/auth/y.rs#helper@0");
+        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("name_match"));
+        assert_eq!(e.props.get("confidence").and_then(|v| v.as_f64()), Some(0.8));
+    }
+
+    #[test]
+    fn scope_aware_falls_through_when_no_same_dir() {
+        // caller in src/app/x.rs; both helpers elsewhere → unchanged repo-wide ambiguous.
+        let nodes = vec![
+            Node::new("rs1:r:func:src/app/x.rs#run@0".to_string(), "Function")
+                .set("name", json!("run")).set("qualified_name", json!("run"))
+                .set("file_path", json!("src/app/x.rs")),
+            Node::new("rs1:r:func:src/a/y.rs#helper@0".to_string(), "Function")
+                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("file_path", json!("src/a/y.rs")),
+            Node::new("rs1:r:func:src/b/z.rs#helper@0".to_string(), "Function")
+                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("file_path", json!("src/b/z.rs")),
+        ];
+        let calls = vec![RawCall {
+            caller_id: "rs1:r:func:src/app/x.rs#run@0".into(),
+            caller_qualified: "run".into(),
+            caller_path: "src/app/x.rs".into(),
+            callee_name: "helper".into(),
+            receiver: None,
+        }];
+        let edges = resolve(&nodes, &[], &calls, "r");
+        let amb: Vec<&Edge> = edges.iter()
+            .filter(|e| e.typ == "CALLS" && e.props.get("resolution").and_then(|v| v.as_str()) == Some("ambiguous"))
+            .collect();
+        assert_eq!(amb.len(), 2, "repo-wide ambiguous fan-out unchanged when no same-dir candidate");
     }
 }
