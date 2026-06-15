@@ -1,0 +1,47 @@
+# git-cliff configuration — generates CHANGELOG.md from conventional commits.
+# Install: `brew install git-cliff` (or `cargo install git-cliff`). Then either
+# `git-cliff -o CHANGELOG.md` or let scripts/release.sh regenerate it on a bump.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to RepoSkein. Generated from [Conventional Commits]\
+(https://www.conventionalcommits.org). Format roughly follows \
+[Keep a Changelog](https://keepachangelog.com).
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}\
+- {{ commit.message | split(pat="\n") | first | upper_first }}\
+{% endfor %}
+{% endfor %}\n
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+# Map conventional types → changelog sections (drop chore/style/ci noise).
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactor" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Tests" },
+  { message = "^build", group = "Build" },
+  { message = "^ci", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^style", skip = true },
+]
