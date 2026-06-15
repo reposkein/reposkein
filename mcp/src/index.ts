@@ -15,6 +15,7 @@ import { makeGetContextProfile } from "./tools/getContextProfile.js";
 import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
 import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
 import { makeSemanticFind } from "./tools/semanticFind.js";
+import { makeTemporalContext } from "./tools/temporalContext.js";
 import { resolveRepoId } from "./store/repoId.js";
 
 /** Selects the store backend.
@@ -176,6 +177,24 @@ export async function main(): Promise<void> {
         return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
       }
       return semanticFind(args);
+    }
+  );
+
+  // get_temporal_context is gated on repoPath (not the store — it reads from .git directly).
+  const temporalContext = repoPath ? makeTemporalContext(repoPath) : null;
+  server.registerTool(
+    "get_temporal_context",
+    {
+      title: "Git temporal context",
+      description:
+        "Git-derived signals for a file: how often/recently it changes, who owns it, and which files most often change together with it (co-change) — answers \"what else should I touch?\". Advisory (derived from git history, not the committed graph). Before a cross-cutting change, use this to find files that historically change together.",
+      inputSchema: { path: z.string() },
+    },
+    async (args) => {
+      if (!temporalContext) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return temporalContext(args);
     }
   );
 
