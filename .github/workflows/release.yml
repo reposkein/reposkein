@@ -50,7 +50,7 @@ jobs:
             ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -66,7 +66,7 @@ jobs:
           mkdir -p bin-dist
           cp "indexer/target/${{ matrix.target }}/release/reposkein-indexer${{ matrix.ext }}" \
              "bin-dist/reposkein-indexer-${{ matrix.platform_key }}${{ matrix.ext }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: indexer-${{ matrix.platform_key }}
           path: bin-dist/reposkein-indexer-${{ matrix.platform_key }}${{ matrix.ext }}
@@ -81,7 +81,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: bin-dist
           pattern: indexer-*
@@ -106,8 +106,8 @@ jobs:
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
