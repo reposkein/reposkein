@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/reposkein/reposkein.svg?logo=github)](https://github.com/reposkein/reposkein/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed.svg)](https://modelcontextprotocol.io)
-[![skills.sh](https://img.shields.io/badge/skills.sh-install-000.svg)](https://www.skills.sh/)
+[![skills.sh](https://skills.sh/b/reposkein/reposkein)](https://skills.sh/reposkein/reposkein)
 
 RepoSkein builds a deterministic **graph of your code** — files, classes, functions, imports, and call edges — with [Tree-sitter](https://tree-sitter.github.io/), and serves it to any MCP-capable agent (Claude Code, Cursor, Codex, …). Your agent navigates structure instead of guessing, then writes short summaries onto the graph as it learns — and those summaries are versioned in git, so understanding becomes **shared team memory**.
 
