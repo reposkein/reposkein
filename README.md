@@ -44,6 +44,19 @@ reposkein-indexer index /path/to/your/repo
 
 Commit the generated `.reposkein/` directory so the graph and summaries are shared with your team.
 
+### Install the agent skills (skills.sh)
+
+RepoSkein ships cross-agent skills. To teach any compatible agent (Claude Code,
+Cursor, Codex, …) how to set up and use RepoSkein:
+
+```bash
+npx skills add reposkein/reposkein --all
+```
+
+Then ask your agent to run the `reposkein-setup` skill — it installs the
+`@reposkein/mcp` server, builds the graph, and verifies everything with
+`reposkein-mcp doctor` + a probe tool call. See [`skills/`](skills/).
+
 ## How it works
 
 ```
@@ -130,14 +143,14 @@ Wire the MCP server into your agent (e.g. Claude Code `.mcp.json`):
   } } } }
 ```
 
-Then install the skill (`skill/SKILL.md`) so the agent navigates the graph instead of grepping.
+Then install the skills (`skills/`) so the agent navigates the graph instead of grepping.
 
 ## Repository layout
 
 ```
 indexer/   Rust workspace: core · lang-python · lang-ts · lang-rust · neo4j-io · cli
 mcp/        @reposkein/mcp — TypeScript MCP server (tools, GraphStore, read-only guard)
-skill/      reposkein-graph-rag SKILL.md
+skills/     reposkein-graph-rag + reposkein-setup agent skills (skills.sh layout)
 docs/       design docs
 ```
 
