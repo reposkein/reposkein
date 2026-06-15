@@ -277,13 +277,16 @@ impl<'a> Walk<'a> {
                 "interface_declaration" => {
                     let name = name_of(child, self.source);
                     let id = self.iface_id(&name);
+                    let id = self.unique(id);
+                    let span = &self.source[child.byte_range()];
                     self.nodes.push(
                         Node::new(id.clone(), "Interface")
                             .set("name", json!(name))
                             .set("qualified_name", json!(name))
                             .set("file_path", json!(self.rel_path))
                             .set("start_line", json!(child.start_position().row + 1))
-                            .set("end_line", json!(child.end_position().row + 1)),
+                            .set("end_line", json!(child.end_position().row + 1))
+                            .set("content_hash", json!(content_hash(span))),
                     );
                     self.declared.insert(name.clone(), id.clone());
                     self.edges
@@ -292,13 +295,16 @@ impl<'a> Walk<'a> {
                 "enum_declaration" => {
                     let name = name_of(child, self.source);
                     let id = self.enum_id(&name);
+                    let id = self.unique(id);
+                    let span = &self.source[child.byte_range()];
                     self.nodes.push(
                         Node::new(id.clone(), "Enum")
                             .set("name", json!(name))
                             .set("qualified_name", json!(name))
                             .set("file_path", json!(self.rel_path))
                             .set("start_line", json!(child.start_position().row + 1))
-                            .set("end_line", json!(child.end_position().row + 1)),
+                            .set("end_line", json!(child.end_position().row + 1))
+                            .set("content_hash", json!(content_hash(span))),
                     );
                     self.declared.insert(name.clone(), id.clone());
                     self.edges
@@ -449,5 +455,37 @@ mod tests {
             find("rs1:r:var:m.ts#C.label").unwrap().props["kind"],
             json!("class")
         );
+    }
+
+    #[test]
+    fn duplicate_interface_and_enum_get_unique_ids_and_hash() {
+        let w = run(b"interface Foo {}\ninterface Foo {}\nenum E {}\nenum E {}\n");
+        let iface_ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Interface"])
+            .map(|n| n.id.as_str())
+            .collect();
+        // both interfaces survive with distinct ids (no silent dedup)
+        assert_eq!(iface_ids.len(), 2, "both interfaces must survive");
+        assert!(iface_ids.contains(&"rs1:r:iface:m.ts#Foo"));
+        assert!(iface_ids.contains(&"rs1:r:iface:m.ts#Foo.1"));
+        let enum_ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Enum"])
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(enum_ids.len(), 2);
+        assert!(enum_ids.contains(&"rs1:r:enum:m.ts#E"));
+        assert!(enum_ids.contains(&"rs1:r:enum:m.ts#E.1"));
+        // content_hash present on both kinds
+        for n in w.nodes.iter().filter(|n| n.labels == ["Interface"] || n.labels == ["Enum"]) {
+            assert!(
+                n.props.get("content_hash").and_then(|v| v.as_str()).is_some(),
+                "type node {} must carry content_hash",
+                n.id
+            );
+        }
     }
 }
