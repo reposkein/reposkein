@@ -21,15 +21,13 @@ pub fn language_for(ext: &str) -> &'static str {
 /// lowercase extension (no leading dot).
 pub fn role_for(rel_path: &str, ext: &str) -> &'static str {
     let p = rel_path.to_ascii_lowercase();
-    let is_test = p.contains("/tests/")
-        || p.contains("/test/")
-        || p.starts_with("tests/")
-        || p.starts_with("test/")
-        || p.contains("test_")
-        || p.contains("_test.")
-        || p.contains(".test.")
-        || p.contains(".spec.");
-    if is_test {
+    let basename = p.rsplit('/').next().unwrap_or(&p);
+    let in_test_dir = p.split('/').any(|seg| seg == "test" || seg == "tests");
+    let test_file = basename.starts_with("test_")
+        || basename.contains("_test.")
+        || basename.contains(".test.")
+        || basename.contains(".spec.");
+    if in_test_dir || test_file {
         return "testing";
     }
     match ext {
@@ -55,9 +53,14 @@ mod tests {
     fn role_mapping() {
         assert_eq!(role_for("src/auth/session.py", "py"), "doing");
         assert_eq!(role_for("tests/test_session.py", "py"), "testing");
-        // "session_test.rs" contains the "_test." substring → testing.
+        // "session_test.rs" basename contains "_test." → testing.
         assert_eq!(role_for("src/auth/session_test.rs", "rs"), "testing");
         assert_eq!(role_for("README.md", "md"), "docs");
         assert_eq!(role_for("Cargo.toml", "toml"), "config");
+        // NOT a test despite containing the substring "test_".
+        assert_eq!(role_for("src/contest_results.py", "py"), "doing");
+        // basename test_ prefix → testing; directory segment "tests" → testing.
+        assert_eq!(role_for("src/test_utils.py", "py"), "testing");
+        assert_eq!(role_for("pkg/tests/helpers.py", "py"), "testing");
     }
 }
