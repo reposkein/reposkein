@@ -43,4 +43,21 @@ export async function assertConformance(store: GraphStore): Promise<void> {
     const profile = await assembleProfile(store, repo, h.target, 1);
     expect(profile.upstream.map((u) => u.name).sort()).toEqual(["Svc.mid", "Svc.run"]);
   }
+
+  // searchCorpus: returns all Function nodes for the repo, sorted by id
+  const corpus = await store.searchCorpus([repo]);
+  expect(corpus.length).toBeGreaterThanOrEqual(3);
+  // all returned nodes must be from the correct repo
+  expect(corpus.every((c) => c.repo_id === repo)).toBe(true);
+  // all must be Function/Class/Interface/Enum
+  const VALID_KINDS = new Set(["Function", "Class", "Interface", "Enum"]);
+  expect(corpus.every((c) => VALID_KINDS.has(c.kind))).toBe(true);
+  // sorted ascending by id
+  for (let i = 1; i < corpus.length; i++) {
+    expect(corpus[i]!.id >= corpus[i - 1]!.id).toBe(true);
+  }
+  // helper node must appear
+  const helperNode = corpus.find((c) => c.name === "helper");
+  expect(helperNode).toBeDefined();
+  expect(helperNode?.kind).toBe("Function");
 }

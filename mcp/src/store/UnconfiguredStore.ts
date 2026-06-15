@@ -1,4 +1,5 @@
 import type {
+  CorpusNode,
   GraphStore,
   NeighborRow,
   SummaryFields,
@@ -39,6 +40,9 @@ export class UnconfiguredStore implements GraphStore {
   }
   async federatedRepoIds(): Promise<string[]> {
     throw new Error(MSG);
+  }
+  async searchCorpus(_repoIds: string[]): Promise<CorpusNode[]> {
+    return [];
   }
   async runRead(): Promise<Record<string, unknown>[]> {
     throw new Error(MSG);

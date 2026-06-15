@@ -2,6 +2,7 @@ import { statSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve, isAbsolute, sep } from "node:path";
 import {
   CypherUnsupportedError,
+  type CorpusNode,
   type GraphStore,
   type NeighborRow,
   type SummaryFields,
@@ -272,6 +273,30 @@ export class JsonlGraphStore implements GraphStore {
       }
     }
     return ids;
+  }
+
+  async searchCorpus(repoIds: string[]): Promise<CorpusNode[]> {
+    this.ensureFresh();
+    const CORPUS_LABELS = new Set(["Function", "Class", "Interface", "Enum"]);
+    const rows: CorpusNode[] = [];
+    for (const n of this.graph.nodes) {
+      if (!repoIds.includes(n.repoId)) continue;
+      const kind = n.labels.find((l) => CORPUS_LABELS.has(l));
+      if (!kind) continue;
+      const name = str(n.props.name) ?? "";
+      rows.push({
+        id: n.id,
+        kind,
+        name,
+        qualified_name: str(n.props.qualified_name) ?? name,
+        signature: str(n.props.signature) ?? "",
+        summary: str(n.props.semantic_summary) ?? "",
+        file_path: str(n.props.file_path) ?? "",
+        repo_id: n.repoId,
+      });
+    }
+    rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return rows;
   }
 
   async runRead(): Promise<Record<string, unknown>[]> {

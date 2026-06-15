@@ -1,5 +1,17 @@
 import type { TargetRow } from "../profile/types.js";
 
+/** A node eligible for BM25F lexical search (Function/Class/Interface/Enum). */
+export interface CorpusNode {
+  id: string;
+  kind: string;           // "Function" | "Class" | "Interface" | "Enum"
+  name: string;
+  qualified_name: string;
+  signature: string;      // "" if absent
+  summary: string;        // "" if no committed semantic_summary
+  file_path: string;
+  repo_id: string;
+}
+
 /** Thrown by stores that cannot execute raw Cypher (e.g. the JSONL store).
  *  read_cypher surfaces the message to the agent. */
 export class CypherUnsupportedError extends Error {
@@ -78,6 +90,10 @@ export interface GraphStore {
 
   /** Transitively federated repo_ids (NOT including repoId itself). */
   federatedRepoIds(repoId: string): Promise<string[]>;
+
+  /** Function/Class/Interface/Enum corpus nodes for all repoIds, sorted by id.
+   *  Used by the shared BM25F scorer for semantic_find. */
+  searchCorpus(repoIds: string[]): Promise<CorpusNode[]>;
 
   /** Raw read-only Cypher (read_cypher tool only). Stores without a Cypher
    *  engine throw CypherUnsupportedError. */

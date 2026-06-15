@@ -1,5 +1,6 @@
 import neo4j, { type Driver } from "neo4j-driver";
 import type {
+  CorpusNode,
   GraphStore,
   NeighborRow,
   SummaryFields,
@@ -155,6 +156,28 @@ export class Neo4jGraphStore implements GraphStore {
       { id, repo: repoId, s: fields.summary, m: fields.model, at: fields.at, by: fields.by }
     );
     return { kind: "ok", stale_replaced };
+  }
+
+  async searchCorpus(repoIds: string[]): Promise<CorpusNode[]> {
+    const rows = await this.runRead(
+      `MATCH (n:Rs) WHERE (n:Function OR n:Class OR n:Interface OR n:Enum) AND n.repo_id IN $repo_ids
+       RETURN n.id AS id, [l IN labels(n) WHERE l <> 'Rs' AND l IN ['Function','Class','Interface','Enum']][0] AS kind,
+              n.name AS name, n.qualified_name AS qualified_name,
+              coalesce(n.signature, '') AS signature, coalesce(n.semantic_summary, '') AS summary,
+              n.file_path AS file_path, n.repo_id AS repo_id
+       ORDER BY n.id`,
+      { repo_ids: repoIds }
+    );
+    return rows.map((r) => ({
+      id: r.id as string,
+      kind: (r.kind as string) ?? "Function",
+      name: (r.name as string) ?? "",
+      qualified_name: (r.qualified_name as string) ?? (r.name as string) ?? "",
+      signature: (r.signature as string) ?? "",
+      summary: (r.summary as string) ?? "",
+      file_path: (r.file_path as string) ?? "",
+      repo_id: (r.repo_id as string) ?? "",
+    }));
   }
 
   async federatedRepoIds(repoId: string): Promise<string[]> {

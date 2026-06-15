@@ -15,6 +15,7 @@ export function fakeStore(overrides: Partial<GraphStore> = {}): GraphStore {
     calleesAt2Hops: unimpl("calleesAt2Hops"),
     writeSummary: unimpl("writeSummary"),
     federatedRepoIds: unimpl("federatedRepoIds"),
+    searchCorpus: async () => [],
     runRead: unimpl("runRead"),
     close: async () => {},
     ...overrides,
