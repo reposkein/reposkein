@@ -33,7 +33,7 @@ store) serving an LLM agent over MCP.
 - **Distribution.** `npx @reposkein/mcp init` installs the prebuilt indexer
   binary (postinstall fetch), git hooks + merge driver, and the navigation
   skill, then prints the MCP config. Release pipeline builds binaries for
-  darwin-arm64/x64, linux-x64/arm64, and win32-x64.
+  darwin-arm64, linux-x64/arm64, and win32-x64 (Apple Silicon only on macOS).
 
 ### Security & determinism
 

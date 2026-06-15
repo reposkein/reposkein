@@ -3,10 +3,12 @@ import { get } from "node:https";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Supported platform keys → must match the release asset suffixes (D2). */
+/** Supported platform keys → must match the release asset suffixes (D2).
+ *  Intel macOS (darwin-x64) is intentionally unsupported: all Macs have shipped
+ *  Apple Silicon since 2020, and GitHub's macos-13 Intel runners are scarce and
+ *  deprecated. darwin-x64 hosts fall through to PATH resolution (or a clear error). */
 const SUPPORTED = new Set([
   "darwin-arm64",
-  "darwin-x64",
   "linux-x64",
   "linux-arm64",
   "win32-x64",

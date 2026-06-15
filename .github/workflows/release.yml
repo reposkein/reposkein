@@ -2,16 +2,20 @@ name: Release
 
 # Cut a release by pushing a tag like `v0.1.0`:
 #   git tag v0.1.0 && git push origin v0.1.0
-# This builds prebuilt reposkein-indexer binaries for the 5 supported platforms,
+# This builds prebuilt reposkein-indexer binaries for the 4 supported platforms,
 # attaches them to a GitHub Release for the tag, then publishes @reposkein/mcp to
 # npm at the matching version (postinstall fetches the binary for that version).
+#
+# Intel macOS (darwin-x64) is intentionally NOT built: all Macs ship Apple Silicon
+# since 2020, and GitHub's macos-13 Intel runners are scarce/deprecated (they can
+# stall in the queue indefinitely). darwin-arm64 covers current Macs.
 #
 # PREREQUISITES (one-time, repo owner):
 #   - Own/claim the @reposkein npm scope and create an automation token.
 #   - Add it as the `NPM_TOKEN` repo secret (the publish job is skipped without it).
 #   - The asset names here MUST match mcp/src/indexer/fetchBinary.ts (M4-D1):
 #       reposkein-indexer-<platformKey>[.exe], platformKey ∈
-#       darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64.
+#       darwin-arm64, linux-x64, linux-arm64, win32-x64.
 
 on:
   push:
@@ -31,10 +35,6 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             platform_key: darwin-arm64
-            ext: ""
-          - os: macos-13
-            target: x86_64-apple-darwin
-            platform_key: darwin-x64
             ext: ""
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu

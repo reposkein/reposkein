@@ -15,6 +15,8 @@ describe("fetchBinary mapping", () => {
   it("returns null for unsupported platforms", () => {
     expect(platformKey("linux", "ppc64")).toBeNull();
     expect(platformKey("freebsd", "x64")).toBeNull();
+    // Intel macOS is intentionally unsupported (Apple Silicon only).
+    expect(platformKey("darwin", "x64")).toBeNull();
   });
   it("asset name adds .exe only for windows", () => {
     expect(assetName("darwin-arm64")).toBe("reposkein-indexer-darwin-arm64");
