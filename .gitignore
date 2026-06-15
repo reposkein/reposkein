@@ -9,3 +9,6 @@ docs/superpowers/
 
 # Cached indexer binary (postinstall fetch, M4-D1) — never commit.
 mcp/bin/
+
+# Local agent/session artifacts — never commit.
+.claude/
