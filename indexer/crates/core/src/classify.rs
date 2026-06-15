@@ -9,6 +9,7 @@ pub fn language_for(ext: &str) -> &'static str {
         "js" | "jsx" | "mjs" | "cjs" => "javascript",
         "rs" => "rust",
         "go" => "go",
+        "java" => "java",
         "md" | "markdown" => "markdown",
         "json" => "json",
         "toml" => "toml",
@@ -23,11 +24,15 @@ pub fn language_for(ext: &str) -> &'static str {
 pub fn role_for(rel_path: &str, ext: &str) -> &'static str {
     let p = rel_path.to_ascii_lowercase();
     let basename = p.rsplit('/').next().unwrap_or(&p);
+    let orig_basename = rel_path.rsplit('/').next().unwrap_or(rel_path);
     let in_test_dir = p.split('/').any(|seg| seg == "test" || seg == "tests");
     let test_file = basename.starts_with("test_")
         || basename.contains("_test.")
         || basename.contains(".test.")
-        || basename.contains(".spec.");
+        || basename.contains(".spec.")
+        || orig_basename.ends_with("Test.java")   // FooTest.java (case-sensitive, not Contest.java)
+        || orig_basename.ends_with("Tests.java")  // FooTests.java
+        || orig_basename.ends_with("Tests.cs"); // C# convention (harmless)
     if in_test_dir || test_file {
         return "testing";
     }
@@ -48,6 +53,7 @@ mod tests {
         assert_eq!(language_for("tsx"), "typescript");
         assert_eq!(language_for("rs"), "rust");
         assert_eq!(language_for("go"), "go");
+        assert_eq!(language_for("java"), "java");
         assert_eq!(language_for("xyz"), "unknown");
     }
 
@@ -65,5 +71,22 @@ mod tests {
         assert_eq!(role_for("src/test_utils.py", "py"), "testing");
         assert_eq!(role_for("pkg/tests/helpers.py", "py"), "testing");
         assert_eq!(role_for("pkg/svc_test.go", "go"), "testing");
+        // Java: PascalCase *Test.java / *Tests.java → testing (case-sensitive check).
+        assert_eq!(
+            role_for("src/main/java/com/acme/FooTest.java", "java"),
+            "testing"
+        );
+        assert_eq!(
+            role_for("src/test/java/com/acme/Bar.java", "java"),
+            "testing"
+        ); // test dir
+        assert_eq!(
+            role_for("src/main/java/com/acme/Service.java", "java"),
+            "doing"
+        );
+        assert_eq!(
+            role_for("src/main/java/com/acme/Contest.java", "java"),
+            "doing"
+        ); // NOT testing
     }
 }

@@ -1,0 +1,12 @@
+[package]
+name = "reposkein-lang-java"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reposkein-core = { path = "../core" }
+reposkein-lang-common = { path = "../lang-common" }
+tree-sitter.workspace = true
+tree-sitter-java.workspace = true
+serde_json.workspace = true

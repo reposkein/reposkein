@@ -21,6 +21,10 @@
 //!   the `parameters` list; a zero-name (type-only) declaration counts as 1;
 //!   receiver, result, and generic type parameters are excluded.
 //!   `func f(a, b int)` → 2; `func f(int, string)` → 2; `func (s *S) M(a int)` → 1.
+//! - **Java** (`lang-java`): named children of the `formal_parameters` node of
+//!   kind `formal_parameter` or `spread_parameter`; `receiver_parameter` excluded;
+//!   generics in a param type and varargs each count as one param.
+//!   `void m(int a, String... r)` → 2.
 //!
 //! These intentionally differ per language; do not "normalize" them.
 
