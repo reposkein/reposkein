@@ -223,7 +223,12 @@ pub fn resolve_full(
                 .push(f.id.clone());
         }
         by_file_qual.insert((f.file_path.clone(), f.qualified.clone()), f.id.clone());
-        let dir = f.file_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("").to_string();
+        let dir = f
+            .file_path
+            .rsplit_once('/')
+            .map(|(d, _)| d)
+            .unwrap_or("")
+            .to_string();
         by_id_dir.insert(f.id.clone(), dir);
     }
     for v in by_name.values_mut() {
@@ -646,13 +651,16 @@ mod tests {
         // caller's dir (src/auth/y.rs) and one elsewhere (src/util/z.rs).
         let nodes = vec![
             Node::new("rs1:r:func:src/auth/x.rs#run@0".to_string(), "Function")
-                .set("name", json!("run")).set("qualified_name", json!("run"))
+                .set("name", json!("run"))
+                .set("qualified_name", json!("run"))
                 .set("file_path", json!("src/auth/x.rs")),
             Node::new("rs1:r:func:src/auth/y.rs#helper@0".to_string(), "Function")
-                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("name", json!("helper"))
+                .set("qualified_name", json!("helper"))
                 .set("file_path", json!("src/auth/y.rs")),
             Node::new("rs1:r:func:src/util/z.rs#helper@0".to_string(), "Function")
-                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("name", json!("helper"))
+                .set("qualified_name", json!("helper"))
                 .set("file_path", json!("src/util/z.rs")),
         ];
         let calls = vec![RawCall {
@@ -664,11 +672,21 @@ mod tests {
         }];
         let edges = resolve(&nodes, &[], &calls, "r");
         let calls_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "CALLS").collect();
-        assert_eq!(calls_edges.len(), 1, "should resolve to the single same-dir helper");
+        assert_eq!(
+            calls_edges.len(),
+            1,
+            "should resolve to the single same-dir helper"
+        );
         let e = calls_edges[0];
         assert_eq!(e.to, "rs1:r:func:src/auth/y.rs#helper@0");
-        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("name_match"));
-        assert_eq!(e.props.get("confidence").and_then(|v| v.as_f64()), Some(0.8));
+        assert_eq!(
+            e.props.get("resolution").and_then(|v| v.as_str()),
+            Some("name_match")
+        );
+        assert_eq!(
+            e.props.get("confidence").and_then(|v| v.as_f64()),
+            Some(0.8)
+        );
     }
 
     #[test]
@@ -676,13 +694,16 @@ mod tests {
         // caller in src/app/x.rs; both helpers elsewhere → unchanged repo-wide ambiguous.
         let nodes = vec![
             Node::new("rs1:r:func:src/app/x.rs#run@0".to_string(), "Function")
-                .set("name", json!("run")).set("qualified_name", json!("run"))
+                .set("name", json!("run"))
+                .set("qualified_name", json!("run"))
                 .set("file_path", json!("src/app/x.rs")),
             Node::new("rs1:r:func:src/a/y.rs#helper@0".to_string(), "Function")
-                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("name", json!("helper"))
+                .set("qualified_name", json!("helper"))
                 .set("file_path", json!("src/a/y.rs")),
             Node::new("rs1:r:func:src/b/z.rs#helper@0".to_string(), "Function")
-                .set("name", json!("helper")).set("qualified_name", json!("helper"))
+                .set("name", json!("helper"))
+                .set("qualified_name", json!("helper"))
                 .set("file_path", json!("src/b/z.rs")),
         ];
         let calls = vec![RawCall {
@@ -693,9 +714,17 @@ mod tests {
             receiver: None,
         }];
         let edges = resolve(&nodes, &[], &calls, "r");
-        let amb: Vec<&Edge> = edges.iter()
-            .filter(|e| e.typ == "CALLS" && e.props.get("resolution").and_then(|v| v.as_str()) == Some("ambiguous"))
+        let amb: Vec<&Edge> = edges
+            .iter()
+            .filter(|e| {
+                e.typ == "CALLS"
+                    && e.props.get("resolution").and_then(|v| v.as_str()) == Some("ambiguous")
+            })
             .collect();
-        assert_eq!(amb.len(), 2, "repo-wide ambiguous fan-out unchanged when no same-dir candidate");
+        assert_eq!(
+            amb.len(),
+            2,
+            "repo-wide ambiguous fan-out unchanged when no same-dir candidate"
+        );
     }
 }

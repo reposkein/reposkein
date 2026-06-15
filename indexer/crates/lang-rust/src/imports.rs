@@ -156,7 +156,12 @@ type UseLeaf = (String, Vec<String>, String, String);
 /// Parse a use_declaration's argument subtree into leaves.
 /// `prefix_segs`: accumulated path segments so far, INCLUDING the root token at index 0.
 /// When prefix_segs is empty we are at the top level.
-fn parse_use_tree_with_prefix(node: TsNode, source: &[u8], prefix_segs: &[String], out: &mut Vec<UseLeaf>) {
+fn parse_use_tree_with_prefix(
+    node: TsNode,
+    source: &[u8],
+    prefix_segs: &[String],
+    out: &mut Vec<UseLeaf>,
+) {
     match node.kind() {
         "scoped_use_list" => {
             // path field = the path prefix; list field = the use_list with items.
@@ -267,7 +272,12 @@ fn emit_leaf(full: &[String], local: &str, out: &mut Vec<UseLeaf>) {
         (root, segs)
     };
 
-    out.push((resolved_root, resolved_segs, item.clone(), local.to_string()));
+    out.push((
+        resolved_root,
+        resolved_segs,
+        item.clone(),
+        local.to_string(),
+    ));
 }
 
 pub fn extract_imports(
@@ -334,14 +344,18 @@ mod tests {
     fn super_item_targets_parent_module_file() {
         let v = imps(b"use super::x;\n", "src/auth/session.rs");
         assert!(v[0].candidate_paths.contains(&"src/auth.rs".to_string()));
-        assert!(v[0].candidate_paths.contains(&"src/auth/mod.rs".to_string()));
+        assert!(v[0]
+            .candidate_paths
+            .contains(&"src/auth/mod.rs".to_string()));
         assert_eq!(v[0].symbols, vec![("x".to_string(), "x".to_string())]);
     }
 
     #[test]
     fn self_item_targets_current_file() {
         let v = imps(b"use self::y;\n", "src/auth/session.rs");
-        assert!(v[0].candidate_paths.contains(&"src/auth/session.rs".to_string()));
+        assert!(v[0]
+            .candidate_paths
+            .contains(&"src/auth/session.rs".to_string()));
         assert_eq!(v[0].symbols, vec![("y".to_string(), "y".to_string())]);
     }
 
@@ -378,8 +392,14 @@ mod tests {
 
     #[test]
     fn deterministic() {
-        let a = imps(b"use crate::a::b::{c, d};\nuse super::x;\n", "src/auth/session.rs");
-        let b = imps(b"use crate::a::b::{c, d};\nuse super::x;\n", "src/auth/session.rs");
+        let a = imps(
+            b"use crate::a::b::{c, d};\nuse super::x;\n",
+            "src/auth/session.rs",
+        );
+        let b = imps(
+            b"use crate::a::b::{c, d};\nuse super::x;\n",
+            "src/auth/session.rs",
+        );
         assert_eq!(a, b);
     }
 }

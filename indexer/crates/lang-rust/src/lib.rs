@@ -22,7 +22,8 @@ impl Extractor for RustExtractor {
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
         w.walk(tree.root_node(), ctx.file_id);
         w.finalize_heritage();
-        let imports = imports::extract_imports(tree.root_node(), ctx.source, ctx.file_id, ctx.rel_path);
+        let imports =
+            imports::extract_imports(tree.root_node(), ctx.source, ctx.file_id, ctx.rel_path);
         ExtractOutput {
             nodes: w.nodes,
             edges: w.edges,
@@ -100,10 +101,10 @@ mod tests {
         };
         let out = RustExtractor.extract(&ctx);
         assert!(
-            out.imports.iter().any(|i| i
-                .candidate_paths
-                .contains(&"src/a.rs".to_string())
-                && i.symbols.iter().any(|(l, _)| l == "helper")),
+            out.imports
+                .iter()
+                .any(|i| i.candidate_paths.contains(&"src/a.rs".to_string())
+                    && i.symbols.iter().any(|(l, _)| l == "helper")),
             "use crate::a::helper must yield a RawImport to src/a.rs"
         );
         assert!(out.calls.iter().any(|c| c.callee_name == "helper"));
