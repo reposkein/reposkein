@@ -252,7 +252,40 @@ fn parse_use_tree_with_prefix(
             out.push((name.clone(), Vec::new(), name.clone(), name));
         }
         "use_wildcard" => {
-            // Skip globs entirely.
+            // Emit a glob sentinel: original=="*", local=="" means "expand all at resolve time".
+            // The use_wildcard node in tree-sitter-rust has a scoped_identifier child that
+            // provides the module path (e.g. `crate::a::b` in `use crate::a::b::*`).
+            // Build the effective prefix: use the scoped_identifier child if present,
+            // otherwise use prefix_segs accumulated from outer scoped_use_list.
+            let effective_prefix: Vec<String> = if !prefix_segs.is_empty() {
+                prefix_segs.to_vec()
+            } else {
+                // Extract path from use_wildcard's named child (scoped_identifier/crate/identifier)
+                let mut cc = node.walk();
+                let child_segs: Vec<String> = node
+                    .named_children(&mut cc)
+                    .flat_map(|c| flatten_scoped_id(c, source))
+                    .collect();
+                child_segs
+            };
+            if effective_prefix.is_empty() {
+                return;
+            }
+            let root = effective_prefix[0].clone();
+            let inner: Vec<String> = effective_prefix[1..].to_vec();
+            let (resolved_root, resolved_segs) = if matches!(root.as_str(), "crate" | "super" | "self") {
+                (root, inner)
+            } else {
+                let mut segs = vec![root.clone()];
+                segs.extend(inner);
+                (root, segs)
+            };
+            out.push((
+                resolved_root,
+                resolved_segs,
+                "*".to_string(),  // original = "*" sentinel
+                "".to_string(),   // local = "" (empty local binding for glob)
+            ));
         }
         _ => {}
     }
@@ -390,8 +423,12 @@ mod tests {
     }
 
     #[test]
-    fn glob_is_skipped() {
-        assert!(imps(b"use crate::a::*;\n", "src/svc.rs").is_empty());
+    fn glob_emits_sentinel_with_module_candidates() {
+        let v = imps(b"use crate::a::b::*;\n", "src/svc.rs");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].symbols, vec![(String::new(), "*".to_string())]);
+        assert!(v[0].candidate_paths.contains(&"src/a/b.rs".to_string()));
+        assert!(v[0].candidate_paths.contains(&"src/a/b/mod.rs".to_string()));
     }
 
     #[test]
@@ -427,4 +464,5 @@ mod tests {
         );
         assert_eq!(a, b);
     }
+
 }

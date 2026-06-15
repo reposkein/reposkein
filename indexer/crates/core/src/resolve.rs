@@ -52,6 +52,7 @@ fn resolve_imports(
     imports: &[RawImport],
     files: &BTreeSet<String>,
     repo: &str,
+    by_file_funcs: &BTreeMap<String, Vec<(String, String)>>,
 ) -> (Vec<Edge>, ImportTargets) {
     // (from_id, to_id) -> sorted-unique local names (for the edge's symbols property)
     let mut agg: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
@@ -62,14 +63,29 @@ fn resolve_imports(
         };
         let to_id = id::file_id(repo, target);
         let entry = agg
-            .entry((imp.importing_file_id.clone(), to_id))
+            .entry((imp.importing_file_id.clone(), to_id.clone()))
             .or_default();
-        for (local, original) in &imp.symbols {
-            entry.insert(local.clone());
-            sym_map.insert(
-                (imp.importing_file_id.clone(), local.clone()),
-                (target.clone(), original.clone()),
-            );
+
+        // Check if this is a glob sentinel (symbols == [("", "*")])
+        if imp.symbols == [(String::new(), "*".to_string())] {
+            // Expand: add each free fn of the target file as a binding
+            if let Some(fns) = by_file_funcs.get(target) {
+                for (name, _id) in fns {
+                    entry.insert(name.clone());
+                    sym_map.insert(
+                        (imp.importing_file_id.clone(), name.clone()),
+                        (target.clone(), name.clone()),
+                    );
+                }
+            }
+        } else {
+            for (local, original) in &imp.symbols {
+                entry.insert(local.clone());
+                sym_map.insert(
+                    (imp.importing_file_id.clone(), local.clone()),
+                    (target.clone(), original.clone()),
+                );
+            }
         }
     }
     let mut edges = Vec::new();
@@ -193,24 +209,15 @@ pub fn resolve_full(
     repo: &str,
 ) -> (Vec<Edge>, Vec<(String, Vec<String>)>) {
     let files = file_paths(nodes);
-    let (mut edges, import_targets) = resolve_imports(imports, &files, repo);
 
-    // ALL imported local→original bindings (incl. cross-repo imports that
-    // resolve_imports filtered out, since their target file isn't in-repo).
-    let mut imported_originals: HashMap<(String, String), String> = HashMap::new();
-    for imp in imports {
-        for (local, original) in &imp.symbols {
-            imported_originals
-                .entry((imp.importing_file_id.clone(), local.clone()))
-                .or_insert_with(|| original.clone());
-        }
-    }
-
+    // Build function indexes FIRST (needed for glob expansion in resolve_imports).
     let funcs = functions(nodes);
     let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut by_file_freefn: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
     let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
+    // path -> sorted (name, id) of module-level fns defined in that file
+    let mut by_file_funcs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for f in &funcs {
         by_name
             .entry(f.name.clone())
@@ -221,6 +228,10 @@ pub fn resolve_full(
                 .entry((f.file_path.clone(), f.name.clone()))
                 .or_default()
                 .push(f.id.clone());
+            by_file_funcs
+                .entry(f.file_path.clone())
+                .or_default()
+                .push((f.name.clone(), f.id.clone()));
         }
         by_file_qual.insert((f.file_path.clone(), f.qualified.clone()), f.id.clone());
         let dir = f
@@ -236,6 +247,22 @@ pub fn resolve_full(
     }
     for v in by_file_freefn.values_mut() {
         v.sort();
+    }
+    for v in by_file_funcs.values_mut() {
+        v.sort();
+    }
+
+    let (mut edges, import_targets) = resolve_imports(imports, &files, repo, &by_file_funcs);
+
+    // ALL imported local→original bindings (incl. cross-repo imports that
+    // resolve_imports filtered out, since their target file isn't in-repo).
+    let mut imported_originals: HashMap<(String, String), String> = HashMap::new();
+    for imp in imports {
+        for (local, original) in &imp.symbols {
+            imported_originals
+                .entry((imp.importing_file_id.clone(), local.clone()))
+                .or_insert_with(|| original.clone());
+        }
     }
 
     let mut agg: BTreeMap<(String, String), (u64, &'static str, f64)> = BTreeMap::new();
@@ -510,6 +537,37 @@ mod tests {
         let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
         assert_eq!(e.to, target_fn.id);
         assert_eq!(e.props["resolution"], json!("exact"));
+    }
+
+    #[test]
+    fn glob_import_expands_to_target_file_free_fns() {
+        // a.rs defines helper + other; b.rs glob-imports a and calls helper().
+        let nodes = vec![
+            Node::new("rs1:r:func:a.rs#helper@0", "Function").set("name", json!("helper")).set("qualified_name", json!("helper")).set("file_path", json!("a.rs")),
+            Node::new("rs1:r:func:a.rs#other@0", "Function").set("name", json!("other")).set("qualified_name", json!("other")).set("file_path", json!("a.rs")),
+            Node::new("rs1:r:func:b.rs#run@0", "Function").set("name", json!("run")).set("qualified_name", json!("run")).set("file_path", json!("b.rs")),
+            Node::new("rs1:r:file:a.rs", "File").set("path", json!("a.rs")),
+        ];
+        let imports = vec![RawImport {
+            importing_file_id: "rs1:r:file:b.rs".to_string(),
+            importing_path: "b.rs".to_string(),
+            symbols: vec![(String::new(), "*".to_string())],
+            candidate_paths: vec!["a.rs".to_string()],
+            reexport: false,
+        }];
+        let calls = vec![RawCall {
+            caller_id: "rs1:r:func:b.rs#run@0".to_string(),
+            caller_qualified: "run".to_string(),
+            caller_path: "b.rs".to_string(),
+            callee_name: "helper".to_string(),
+            receiver: None,
+        }];
+        let edges = resolve(&nodes, &imports, &calls, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS" && e.to == "rs1:r:func:a.rs#helper@0").expect("glob-imported helper resolves");
+        assert_eq!(e.props.get("resolution").and_then(|v| v.as_str()), Some("exact"));
+        assert_eq!(e.props.get("confidence").and_then(|v| v.as_f64()), Some(1.0));
+        // IMPORTS edge b->a present
+        assert!(edges.iter().any(|e| e.typ == "IMPORTS" && e.to == "rs1:r:file:a.rs"));
     }
 
     #[test]
