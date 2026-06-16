@@ -6,6 +6,37 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-16
+
+### Added
+
+- **`reposkein-mcp view` — an interactive 3D "constellation" graph viewer.** A
+  zero-infra, read-only React + three.js SPA over the committed `.reposkein`
+  JSONL (no Neo4j, no external services; served on `127.0.0.1`). Renders the code
+  graph as an astronomy-style star map with level-of-detail clustering
+  (repo → directory → file → symbol = galaxy → constellation → solar-system → star),
+  deterministic seeded layout (cached in IndexedDB for instant reload), bloom /
+  depth-fog / nebula halos / constellation lines / supernova expand, and
+  brand-styled visuals.
+  - **Legible:** per-edge-type colors + legend, importance-sized stars, adaptive
+    labels, breadcrumb, per-language galaxy coloring.
+  - **Analytical (leans on RepoSkein's graph):** one-click **lenses** (call graph /
+    type hierarchy / imports / tests), **impact overlay** (transitive callers +
+    covering tests), **confidence-audit** mode (see where the type-free resolver
+    guesses), **temporal-coupling** overlay (git co-change), and edges encoded by
+    `resolution`/`confidence`.
+  - **Explorable:** ranked search-to-fly, **neighborhood focus** (N-hop), **source
+    peek** in the detail panel (path-guarded read-only slice + `vscode://` open),
+    flow particles showing call direction, keyboard navigation, and a minimap.
+  - **Guided tour:** a cinematic, deterministically-derived flythrough (overview →
+    largest modules → busiest hub → type hierarchy → entry point) with captions.
+  - **Shareable:** PNG screenshot export, and a **static embeddable export**
+    (`reposkein-mcp view --export <dir>`) that bakes the graph into a
+    self-contained site (works from `file://` or any static host — e.g. a landing
+    page) with no server.
+- The npm package now bundles the prebuilt viewer; CI gates the `viz` package
+  (typecheck/build/test/lint).
+
 ## [0.1.7] - 2026-06-16
 
 ### Added
