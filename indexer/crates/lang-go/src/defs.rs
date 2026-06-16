@@ -740,4 +740,136 @@ mod tests {
         assert_eq!(a.heritage[0].base_name, "A");
         assert_eq!(a.heritage[1].base_name, "B");
     }
+
+    // ── Grammar verification: composite_literal node shapes ─────────────────
+
+    #[test]
+    fn grammar_composite_literal_type_identifier() {
+        // Verify: `Foo{}` is composite_literal with type=type_identifier "Foo"
+        let src = b"package p\nfunc caller() { _ = Foo{} }";
+        let tree = parse(src).unwrap();
+
+        fn find_composite(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "composite_literal" {
+                return Some(node);
+            }
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                if let Some(found) = find_composite(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let cl = find_composite(tree.root_node()).expect("composite_literal not found");
+        let ty = cl
+            .child_by_field_name("type")
+            .expect("composite_literal must have type field");
+        assert_eq!(
+            ty.kind(),
+            "type_identifier",
+            "bare Foo{{}} type must be type_identifier"
+        );
+        assert_eq!(reposkein_lang_common::text(ty, src), "Foo");
+    }
+
+    #[test]
+    fn grammar_composite_literal_ref_wraps_in_unary() {
+        // Verify: `&Foo{}` is unary_expression(&) wrapping composite_literal
+        let src = b"package p\nfunc caller() { _ = &Foo{} }";
+        let tree = parse(src).unwrap();
+
+        fn find_unary(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "unary_expression" {
+                return Some(node);
+            }
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                if let Some(found) = find_unary(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let unary =
+            find_unary(tree.root_node()).expect("unary_expression not found for &Foo{}");
+        // The operand field should be composite_literal
+        let operand = unary
+            .child_by_field_name("operand")
+            .expect("unary_expression must have operand field");
+        assert_eq!(
+            operand.kind(),
+            "composite_literal",
+            "&Foo{{}} operand must be composite_literal, got {}",
+            operand.kind()
+        );
+    }
+
+    #[test]
+    fn grammar_composite_literal_qualified_type() {
+        // Verify: `pkg.Foo{}` is composite_literal with type=qualified_type
+        // qualified_type has package=type_identifier and name=type_identifier
+        let src = b"package p\nfunc caller() { _ = pkg.Foo{} }";
+        let tree = parse(src).unwrap();
+
+        fn find_composite(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "composite_literal" {
+                return Some(node);
+            }
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                if let Some(found) = find_composite(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let cl = find_composite(tree.root_node())
+            .expect("composite_literal not found for pkg.Foo{}");
+        let ty = cl.child_by_field_name("type").expect("must have type field");
+        assert_eq!(
+            ty.kind(),
+            "qualified_type",
+            "pkg.Foo{{}} type must be qualified_type, got {}",
+            ty.kind()
+        );
+        // The name segment (last) should be "Foo"
+        let name_seg = ty
+            .child_by_field_name("name")
+            .expect("qualified_type must have name field");
+        assert_eq!(reposkein_lang_common::text(name_seg, src), "Foo");
+    }
+
+    #[test]
+    fn grammar_slice_literal_is_slice_type() {
+        // Verify: `[]int{}` is composite_literal with type=slice_type (not type_identifier)
+        let src = b"package p\nfunc caller() { _ = []int{} }";
+        let tree = parse(src).unwrap();
+
+        fn find_composite(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+            if node.kind() == "composite_literal" {
+                return Some(node);
+            }
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                if let Some(found) = find_composite(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let cl = find_composite(tree.root_node())
+            .expect("composite_literal not found for []int{}");
+        let ty = cl.child_by_field_name("type").expect("must have type field");
+        assert_eq!(
+            ty.kind(),
+            "slice_type",
+            "[]int{{}} type must be slice_type, got {}",
+            ty.kind()
+        );
+    }
 }
