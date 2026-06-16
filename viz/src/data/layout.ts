@@ -23,8 +23,19 @@ import type { ClusterTree } from "./cluster";
 import { flattenTree } from "./cluster";
 import { idToPosition, mulberry32, fnv1a } from "./hash";
 
-const FIXED_ITERATIONS = 200;
 const LAYOUT_SEED = 0x5eed_1234;
+
+/** Force-layout iteration count, adaptive to node count but DETERMINISTIC: a
+ *  fixed number of ticks for a given size, so the same graph always lays out
+ *  identically. Small graphs converge with the full 200 ticks; huge graphs
+ *  (the ~12k design target) step down to a cheaper-but-stable count rather than
+ *  paying 200 quadtree ticks. The thresholds are constants → byte-stable. */
+export function layoutIterations(nodeCount: number): number {
+  if (nodeCount <= 2000) return 200;
+  if (nodeCount <= 5000) return 150;
+  if (nodeCount <= 10000) return 100;
+  return 70;
+}
 
 interface SimNode extends SimulationNodeDatum {
   key: string;
@@ -87,8 +98,10 @@ export function computeLayout(tree: ClusterTree): LayoutResult {
   const simAny = sim as unknown as { randomSource?: (fn: () => number) => unknown };
   if (typeof simAny.randomSource === "function") simAny.randomSource(rng);
 
-  // Run a fixed number of ticks (no animation/timer-driven randomness).
-  sim.tick(FIXED_ITERATIONS);
+  // Run a fixed (size-adaptive) number of ticks — no animation/timer-driven
+  // randomness. The count is a pure function of node count, so it stays
+  // byte-deterministic for any given graph.
+  sim.tick(layoutIterations(nodes.length));
 
   const positions = new Float32Array(nodes.length * 3);
   for (let i = 0; i < nodes.length; i++) {
