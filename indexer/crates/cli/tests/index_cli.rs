@@ -244,7 +244,30 @@ fn index_resolves_imports_and_calls_across_files() {
 fn index_is_idempotent_byte_identical() {
     let dir = tempdir().unwrap();
     let root = dir.path();
+
+    // Python — original fixture file
     fs::write(root.join("a.py"), b"print(1)\n").unwrap();
+
+    // Go — a func + a type
+    fs::write(
+        root.join("a.go"),
+        b"package main\n\ntype Point struct{ X, Y int }\n\nfunc New(x, y int) Point { return Point{x, y} }\n",
+    )
+    .unwrap();
+
+    // Java — a class + a method
+    fs::write(
+        root.join("A.java"),
+        b"public class A {\n    public int add(int x, int y) { return x + y; }\n}\n",
+    )
+    .unwrap();
+
+    // C# — a class + a method
+    fs::write(
+        root.join("A.cs"),
+        b"public class Calculator {\n    public int Add(int x, int y) => x + y;\n}\n",
+    )
+    .unwrap();
 
     let run = || {
         Command::cargo_bin("reposkein-indexer")
