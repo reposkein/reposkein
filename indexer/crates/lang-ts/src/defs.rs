@@ -575,7 +575,7 @@ mod tests {
             .iter()
             .find(|n| n.id == "rs1:r:iface:m.ts#A")
             .expect("interface A");
-        let b = w
+        let _b = w
             .nodes
             .iter()
             .find(|n| n.id == "rs1:r:iface:m.ts#B")
@@ -613,7 +613,7 @@ mod tests {
             .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("C"))
             .map(|n| n.id.clone())
             .expect("class C");
-        let base_id = w
+        let _base_id = w
             .nodes
             .iter()
             .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("Base"))

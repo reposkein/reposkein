@@ -455,7 +455,7 @@ mod tests {
             .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("A"))
             .map(|n| n.id.clone())
             .expect("trait A");
-        let b = w
+        let _b = w
             .nodes
             .iter()
             .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("B"))
@@ -479,13 +479,13 @@ mod tests {
             .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("A"))
             .map(|n| n.id.clone())
             .expect("trait A");
-        let c_id = w
+        let _c_id = w
             .nodes
             .iter()
             .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("C"))
             .map(|n| n.id.clone())
             .expect("trait C");
-        let d_id = w
+        let _d_id = w
             .nodes
             .iter()
             .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("D"))

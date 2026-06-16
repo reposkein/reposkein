@@ -448,7 +448,7 @@ mod tests {
             .iter()
             .find(|n| n.props.get("qualified_name") == Some(&json!("Outer.B")))
             .unwrap();
-        let a = w
+        let _a = w
             .nodes
             .iter()
             .find(|n| n.props.get("qualified_name") == Some(&json!("Outer.A")))

@@ -18,12 +18,13 @@ impl Extractor for GoExtractor {
         };
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
         w.walk(tree.root_node(), ctx.file_id);
-        w.finalize_heritage();
+        w.lower_heritage();
         ExtractOutput {
             nodes: w.nodes,
             edges: w.edges,
             calls: w.calls,
             imports: vec![],
+            heritage: w.heritage,
         }
     }
 }

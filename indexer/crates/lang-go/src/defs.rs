@@ -16,6 +16,7 @@ pub struct Walk<'a> {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub calls: Vec<reposkein_core::extractor::RawCall>,
+    pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
     used: HashMap<String, u32>,
     /// name → id for types declared in this file (for DEFINES from receiver type).
     declared: HashMap<String, String>,
@@ -99,6 +100,7 @@ impl<'a> Walk<'a> {
             nodes: Vec::new(),
             edges: Vec::new(),
             calls: Vec::new(),
+            heritage: Vec::new(),
             used: HashMap::new(),
             declared: HashMap::new(),
             pending_heritage: Vec::new(),
@@ -294,10 +296,15 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// Resolves deferred heritage edges (call once after the top-level walk).
-    pub fn finalize_heritage(&mut self) {
-        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
-        self.edges.extend(e);
+    /// Lowers pending heritage into RawHeritage facts (call once after the top-level walk).
+    pub fn lower_heritage(&mut self) {
+        self.heritage = reposkein_core::heritage::lower(
+            &self.pending_heritage,
+            &self.declared,
+            self.rel_path,
+            &format!("rs1:{}:file:{}", self.repo, self.rel_path),
+            false,
+        );
     }
 }
 
@@ -310,7 +317,7 @@ mod tests {
         let tree = parse(src).unwrap();
         let mut w = Walk::new("r", "pkg/m.go", src);
         w.walk(tree.root_node(), "rs1:r:file:pkg/m.go");
-        w.finalize_heritage();
+        w.lower_heritage();
         w
     }
 

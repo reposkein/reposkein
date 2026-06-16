@@ -608,4 +608,128 @@ mod tests {
             "no external_import_targets without federated children"
         );
     }
+
+    /// Two-file Python scenario:
+    ///   base.py   defines class Animal
+    ///   svc.py    imports Animal from .base and defines class Dog(Animal)
+    /// Produces one RawHeritage (Dog INHERITS Animal) + one RawImport.
+    /// The resolver should fire rung-2 (import-followed) and emit an INHERITS
+    /// edge with resolution="exact", confidence=1.0.
+    struct HeritageStub;
+    impl extractor::Extractor for HeritageStub {
+        fn language(&self) -> &'static str {
+            "python"
+        }
+        fn extract(&self, ctx: &extractor::FileContext) -> extractor::ExtractOutput {
+            let mut out = extractor::ExtractOutput::default();
+            match ctx.rel_path {
+                "base.py" => {
+                    // Class node for Animal
+                    let animal_id = format!("rs1:{}:class:base.py#Animal@0", ctx.repo);
+                    out.nodes.push(
+                        Node::new(animal_id.clone(), "Class")
+                            .set("name", json!("Animal"))
+                            .set("qualified_name", json!("Animal"))
+                            .set("file_path", json!("base.py"))
+                            .set("start_line", json!(1))
+                            .set("end_line", json!(2))
+                            .set("content_hash", json!("h")),
+                    );
+                    out.edges
+                        .push(Edge::new(ctx.file_id, "DEFINES", &animal_id));
+                }
+                "svc.py" => {
+                    // Class node for Dog
+                    let dog_id = format!("rs1:{}:class:svc.py#Dog@0", ctx.repo);
+                    out.nodes.push(
+                        Node::new(dog_id.clone(), "Class")
+                            .set("name", json!("Dog"))
+                            .set("qualified_name", json!("Dog"))
+                            .set("file_path", json!("svc.py"))
+                            .set("start_line", json!(1))
+                            .set("end_line", json!(3))
+                            .set("content_hash", json!("h")),
+                    );
+                    out.edges.push(Edge::new(ctx.file_id, "DEFINES", &dog_id));
+                    // Import of Animal from base.py
+                    out.imports.push(extractor::RawImport {
+                        importing_file_id: ctx.file_id.to_string(),
+                        importing_path: ctx.rel_path.to_string(),
+                        symbols: vec![("Animal".to_string(), "Animal".to_string())],
+                        candidate_paths: vec!["base.py".to_string()],
+                        reexport: false,
+                    });
+                    // Heritage fact: Dog INHERITS Animal (base not yet resolved)
+                    out.heritage.push(extractor::RawHeritage {
+                        from_id: dog_id,
+                        from_path: ctx.rel_path.to_string(),
+                        from_file_id: ctx.file_id.to_string(),
+                        edge_type: "INHERITS".to_string(),
+                        base_name: "Animal".to_string(),
+                        label_refine: false,
+                    });
+                }
+                _ => {}
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn cross_file_heritage_inherits_resolves() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("base.py"), b"class Animal:\n    pass\n").unwrap();
+        fs::write(
+            root.join("svc.py"),
+            b"from .base import Animal\nclass Dog(Animal):\n    pass\n",
+        )
+        .unwrap();
+
+        let stub = HeritageStub;
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let g = index_tree(root, "r", "demo", extractors).unwrap();
+
+        let animal_id = "rs1:r:class:base.py#Animal@0";
+        let dog_id = "rs1:r:class:svc.py#Dog@0";
+
+        // Both class nodes must exist.
+        assert!(
+            g.nodes.iter().any(|n| n.id == animal_id),
+            "Animal node missing"
+        );
+        assert!(g.nodes.iter().any(|n| n.id == dog_id), "Dog node missing");
+
+        // An INHERITS edge from Dog → Animal must exist (cross-file heritage resolved).
+        let inh = g
+            .edges
+            .iter()
+            .find(|e| e.from == dog_id && e.typ == "INHERITS" && e.to == animal_id)
+            .expect("cross-file INHERITS edge Dog→Animal must be emitted");
+
+        // Resolution must be rung-2 (import-followed): exact, confidence 1.0.
+        assert_eq!(
+            inh.props.get("resolution"),
+            Some(&json!("exact")),
+            "import-followed resolution should be exact"
+        );
+        assert_eq!(
+            inh.props.get("confidence"),
+            Some(&json!(1.0)),
+            "import-followed confidence should be 1.0"
+        );
+
+        // Warm==cold determinism: running twice must yield byte-identical output.
+        let g2 = index_tree(root, "r", "demo", extractors).unwrap();
+        assert_eq!(
+            jsonl::nodes_to_jsonl(&g.nodes),
+            jsonl::nodes_to_jsonl(&g2.nodes),
+            "heritage nodes must be deterministic across runs"
+        );
+        assert_eq!(
+            jsonl::edges_to_jsonl(&g.edges),
+            jsonl::edges_to_jsonl(&g2.edges),
+            "heritage edges must be deterministic across runs"
+        );
+    }
 }
