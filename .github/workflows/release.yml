@@ -133,6 +133,17 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      # Build the viz/ SPA (pnpm) BEFORE the mcp build/publish so `bundle-viz.mjs`
+      # (run by mcp's `prepare`) can copy viz/dist into dist/viz — otherwise the
+      # published tarball would ship without the `reposkein-mcp view` bundle.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.15.0" # keep in sync with viz/package.json packageManager
+      - name: Build viz SPA bundle
+        working-directory: viz
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
       - name: Derive version from tag
         id: ver
         shell: bash
@@ -149,10 +160,11 @@ jobs:
             echo "ERROR: package.json version (${PKG_VERSION}) does not match tag (${{ steps.ver.outputs.version }})" >&2
             exit 1
           fi
-      - name: Install + build
+      - name: Install + build (+ bundle viz)
         run: |
           npm ci
           npm run build
+          node scripts/bundle-viz.mjs
       - name: Download SHA256SUMS and bake binary-digests.json
         shell: bash
         env:
