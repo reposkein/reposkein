@@ -17,6 +17,7 @@ pub struct Walk<'a> {
     pub edges: Vec<Edge>,
     pub calls: Vec<reposkein_core::extractor::RawCall>,
     pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
+    pub constructions: Vec<reposkein_core::extractor::RawConstruction>,
     used: HashMap<String, u32>,
     /// name → id for types declared in this file (for DEFINES from receiver type).
     declared: HashMap<String, String>,
@@ -128,6 +129,7 @@ impl<'a> Walk<'a> {
             edges: Vec::new(),
             calls: Vec::new(),
             heritage: Vec::new(),
+            constructions: Vec::new(),
             used: HashMap::new(),
             declared: HashMap::new(),
             pending_heritage: Vec::new(),
@@ -184,6 +186,15 @@ impl<'a> Walk<'a> {
                 qualified,
                 self.rel_path,
                 &mut self.calls,
+            );
+            let caller_file_id = format!("rs1:{}:file:{}", self.repo, self.rel_path);
+            crate::calls::collect_constructions(
+                body,
+                self.source,
+                &id,
+                self.rel_path,
+                &caller_file_id,
+                &mut self.constructions,
             );
         }
     }
