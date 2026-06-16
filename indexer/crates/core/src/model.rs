@@ -1,6 +1,9 @@
 //! In-memory node/edge records. Properties live in a serde_json::Map
 //! (a BTreeMap when serde_json's `preserve_order` feature is OFF), which
 //! gives sorted property keys for free — the canonical writer depends on this.
+//! The `determinism_serde_json_map_is_btree` test in `jsonl.rs` guards this
+//! assumption: it inserts keys in scrambled order and asserts sorted output,
+//! failing loudly if `preserve_order` ever leaks into `reposkein-core`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

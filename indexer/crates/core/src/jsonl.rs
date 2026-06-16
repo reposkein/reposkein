@@ -308,4 +308,37 @@ mod tests {
         let out = graft_summaries(&fresh, &sidecar);
         assert_eq!(out[0].props["semantic_summary"], json!("does f"));
     }
+
+    /// Guard: serde_json::Map must be a BTreeMap (sorted keys).
+    ///
+    /// The byte-identical determinism invariant relies on `serde_json::Map`
+    /// iterating in key-sorted order.  This is only true when serde_json is
+    /// compiled WITHOUT the `preserve_order` feature (which switches it to an
+    /// IndexMap, breaking the invariant).  This test inserts keys in reverse
+    /// alphabetical order and asserts the serialized output has them sorted.
+    ///
+    /// If this test ever fails, check that no dependency (directly or
+    /// transitively) enables serde_json/preserve_order in Cargo.lock under
+    /// resolver v2 — see `determinism_serde_json_map_is_btree` for the guard.
+    #[test]
+    fn determinism_serde_json_map_is_btree() {
+        use serde_json::{Map, Value};
+
+        // Insert keys in scrambled (reverse) order: z, m, a.
+        let mut map: Map<String, Value> = Map::new();
+        map.insert("z".to_string(), Value::Number(3.into()));
+        map.insert("m".to_string(), Value::Number(2.into()));
+        map.insert("a".to_string(), Value::Number(1.into()));
+
+        let serialized = serde_json::to_string(&map).unwrap();
+        // Keys must appear in sorted order: a < m < z.
+        let a_pos = serialized.find("\"a\"").expect("key 'a' must be present");
+        let m_pos = serialized.find("\"m\"").expect("key 'm' must be present");
+        let z_pos = serialized.find("\"z\"").expect("key 'z' must be present");
+        assert!(
+            a_pos < m_pos && m_pos < z_pos,
+            "serde_json::Map must serialize keys in sorted (BTreeMap) order — \
+             preserve_order feature must NOT be active. Got: {serialized}"
+        );
+    }
 }
