@@ -1,19 +1,12 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useStore } from "../state/store";
-import type { NodeRecord } from "../data/model";
+import { rankSearch, fieldLabel } from "../data/search";
 
-function matches(query: string, rec: NodeRecord): boolean {
-  const q = query.toLowerCase();
-  return (
-    rec.name.toLowerCase().includes(q) ||
-    rec.qualifiedName.toLowerCase().includes(q) ||
-    rec.filePath.toLowerCase().includes(q)
-  );
-}
-
-/** Search panel (top area, next to HeaderBar). Fuzzy substring match across
- *  node names / qualified names / file paths. Clicking a result expands its
- *  ancestor chain, selects it, and flies the camera to it. */
+/** Search panel (top area, next to HeaderBar). DETERMINISTIC ranked search
+ *  (weighted-field scoring over name / qualified_name / file_path /
+ *  semantic_summary). Results are ordered by relevance and show the matched
+ *  field. Clicking a result expands its ancestor chain, selects it, and flies
+ *  the camera to it. */
 export function SearchPanel() {
   const store = useStore();
   const [query, setQuery] = useState("");
@@ -23,12 +16,7 @@ export function SearchPanel() {
 
   const results = React.useMemo(() => {
     if (!model || query.trim().length < 2) return [];
-    const out: NodeRecord[] = [];
-    for (const r of model.records.values()) {
-      if (matches(query, r)) out.push(r);
-      if (out.length >= 10) break;
-    }
-    return out;
+    return rankSearch(model.records.values(), query, 10);
   }, [model, query]);
 
   useEffect(() => {
@@ -60,7 +48,7 @@ export function SearchPanel() {
       setQuery("");
       setOpen(false);
     }
-    if (e.key === "Enter" && results.length > 0) selectResult(results[0]!.id);
+    if (e.key === "Enter" && results.length > 0) selectResult(results[0]!.rec.id);
   }
 
   if (!model) return null;
@@ -104,10 +92,10 @@ export function SearchPanel() {
               overflowY: "auto",
             }}
           >
-            {results.map((r) => (
+            {results.map(({ rec, topField }) => (
               <div
-                key={r.id}
-                onClick={() => selectResult(r.id)}
+                key={rec.id}
+                onClick={() => selectResult(rec.id)}
                 style={{
                   padding: "6px 10px",
                   cursor: "pointer",
@@ -122,7 +110,27 @@ export function SearchPanel() {
                   (e.currentTarget.style.background = "transparent")
                 }
               >
-                <div style={{ color: "#fff", fontWeight: 500 }}>{r.name}</div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    justifyContent: "space-between",
+                    gap: 6,
+                  }}
+                >
+                  <span style={{ color: "#fff", fontWeight: 500 }}>{rec.name}</span>
+                  <span
+                    style={{
+                      color: "rgba(150,180,230,0.7)",
+                      fontSize: 9,
+                      flexShrink: 0,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.4,
+                    }}
+                  >
+                    {fieldLabel(topField)}
+                  </span>
+                </div>
                 <div
                   style={{
                     color: "rgba(255,255,255,0.4)",
@@ -132,7 +140,7 @@ export function SearchPanel() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {r.filePath}
+                  {rec.filePath}
                 </div>
               </div>
             ))}
