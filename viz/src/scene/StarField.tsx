@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { type ThreeEvent, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { useStore } from "../state/store";
@@ -6,6 +6,7 @@ import { representativeFor, visibleClusters } from "../data/clientModel";
 import { nodeColor, nodeSize, BRAND_RGB } from "./encoding";
 import { isTestNode } from "../data/classify";
 import { TYPE_EMPHASIS_KINDS } from "../data/lens";
+import { diffExpanded, easeOutCubic, MORPH_MS } from "./supernova";
 import type { RGB } from "./encoding";
 
 /** Accent colors for the impact overlay (design: impacted vs covering tests).
@@ -199,25 +200,241 @@ export function StarField() {
     return { geometry: geo, keysAt };
   }, [visible, model, highlightKeys, store.filters, impactReps, testReps, store.emphasis, selectedRep, hoveredRep]);
 
+  // --- Supernova expand/collapse morph -------------------------------------
+  // Children emerge FROM their parent cluster's position outward to their
+  // laid-out positions on expand, and recede INTO the parent on collapse.
+  // GPU-friendly: we only animate the Points position buffer in useFrame
+  // toward the (unchanged, deterministic) target positions. Interruptible: a
+  // new toggle re-seeds origins from the current animated positions.
+  //
+  // morph holds the expand animation that runs IN the live buffer (origins per
+  // visible key + a start time). lastPos tracks each rendered key's current
+  // animated position so an interrupted morph blends smoothly.
+  const morphRef = useRef<{ origin: Map<string, [number, number, number]>; start: number } | null>(
+    null
+  );
+  const lastPosRef = useRef<Map<string, [number, number, number]>>(new Map());
+  const prevExpandedRef = useRef<Set<string>>(new Set(store.expanded));
+  // Departing points (collapse recession), rendered in a transient buffer that
+  // lives only for the duration of the morph.
+  const departRef = useRef<THREE.Points>(null);
+  const departMorphRef = useRef<{
+    positions: Float32Array; // mutated each frame (origin → target)
+    origin: Float32Array;
+    target: Float32Array; // parent core positions
+    colors: Float32Array;
+    start: number;
+  } | null>(null);
+  // Bumped whenever a new collapse morph is seeded, so the binding effect below
+  // re-runs and rebinds the transient geometry's attributes (refs alone don't
+  // trigger a render).
+  const [departNonce, setDepartNonce] = useState(0);
+
+  useEffect(() => {
+    const prev = prevExpandedRef.current;
+    const next = store.expanded;
+    const { expanded: newlyExpanded, collapsed: newlyCollapsed } = diffExpanded(prev, next);
+    prevExpandedRef.current = new Set(next);
+    if (newlyExpanded.length === 0 && newlyCollapsed.length === 0) return;
+
+    const now = performance.now();
+    const expandedSet = new Set(newlyExpanded);
+
+    // EXPAND: every currently-visible key whose nearest ancestor among the
+    // just-expanded clusters exists bursts out from that cluster's position.
+    if (newlyExpanded.length > 0) {
+      const nowVisible = visibleClusters(model, next);
+      const origin = new Map<string, [number, number, number]>();
+      for (const key of nowVisible) {
+        const chain = model.ancestors.get(key);
+        if (!chain) continue;
+        // Nearest expanded ancestor (deepest first), excluding the key itself.
+        let burstFrom: string | null = null;
+        for (let i = chain.length - 1; i >= 0; i--) {
+          const ak = chain[i]!;
+          if (ak === key) continue;
+          if (expandedSet.has(ak)) {
+            burstFrom = ak;
+            break;
+          }
+        }
+        if (!burstFrom) continue;
+        // Start from the current animated position if mid-flight, else the
+        // parent core position (the supernova origin).
+        const cur = lastPosRef.current.get(key);
+        if (cur) {
+          origin.set(key, cur);
+        } else {
+          const pIdx = model.indexByKey.get(burstFrom);
+          if (pIdx === undefined) continue;
+          origin.set(key, [
+            model.positions[pIdx * 3]!,
+            model.positions[pIdx * 3 + 1]!,
+            model.positions[pIdx * 3 + 2]!,
+          ]);
+        }
+      }
+      morphRef.current = origin.size > 0 ? { origin, start: now } : null;
+    }
+
+    // COLLAPSE: keys that left the visible set recede into the parent core they
+    // collapsed into. Rendered in the transient departing buffer.
+    if (newlyCollapsed.length > 0) {
+      const prevVisible = visibleClusters(model, prev);
+      const nowVisible = visibleClusters(model, next);
+      const collapsedSet = new Set(newlyCollapsed);
+      const departing: { key: string; into: string }[] = [];
+      for (const key of prevVisible) {
+        if (nowVisible.has(key)) continue; // still visible
+        const chain = model.ancestors.get(key);
+        if (!chain) continue;
+        let into: string | null = null;
+        for (let i = chain.length - 1; i >= 0; i--) {
+          const ak = chain[i]!;
+          if (ak === key) continue;
+          if (collapsedSet.has(ak)) {
+            into = ak;
+            break;
+          }
+        }
+        if (into) departing.push({ key, into });
+      }
+      if (departing.length > 0) {
+        const n = departing.length;
+        const origin = new Float32Array(n * 3);
+        const target = new Float32Array(n * 3);
+        const positions = new Float32Array(n * 3);
+        const colors = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) {
+          const { key, into } = departing[i]!;
+          const idx = model.indexByKey.get(key);
+          const pIdx = model.indexByKey.get(into);
+          if (idx === undefined || pIdx === undefined) continue;
+          const cur = lastPosRef.current.get(key) ?? [
+            model.positions[idx * 3]!,
+            model.positions[idx * 3 + 1]!,
+            model.positions[idx * 3 + 2]!,
+          ];
+          origin[i * 3] = cur[0];
+          origin[i * 3 + 1] = cur[1];
+          origin[i * 3 + 2] = cur[2];
+          positions[i * 3] = cur[0];
+          positions[i * 3 + 1] = cur[1];
+          positions[i * 3 + 2] = cur[2];
+          target[i * 3] = model.positions[pIdx * 3]!;
+          target[i * 3 + 1] = model.positions[pIdx * 3 + 1]!;
+          target[i * 3 + 2] = model.positions[pIdx * 3 + 2]!;
+          const c = model.byKey.get(key);
+          const col = c ? nodeColor(c.kind, c.symbolKind) : ([0.8, 0.85, 0.95] as RGB);
+          colors[i * 3] = col[0] * EMISSIVE_GAIN;
+          colors[i * 3 + 1] = col[1] * EMISSIVE_GAIN;
+          colors[i * 3 + 2] = col[2] * EMISSIVE_GAIN;
+        }
+        departMorphRef.current = { positions, origin, target, colors, start: now };
+        setDepartNonce((n) => n + 1);
+      }
+    }
+  }, [store.expanded, model]);
+
   // Entrance animation: ease opacity + point size from 0 on first appearance.
   const entranceStart = useRef<number | null>(null);
   useEffect(() => {
     entranceStart.current = performance.now();
   }, []);
 
-  useFrame(() => {
+  // Geometry for the transient departing (collapse) buffer.
+  const departGeo = useMemo(() => new THREE.BufferGeometry(), []);
+
+  useFrame(({ invalidate }) => {
     const mat = materialRef.current;
-    if (!mat) return;
-    const start = entranceStart.current;
-    let t = 1;
-    if (start !== null) {
-      t = Math.min(1, (performance.now() - start) / 1000 / ENTRANCE_SEC);
-      // ease-out cubic
-      t = 1 - Math.pow(1 - t, 3);
+    if (mat) {
+      const start = entranceStart.current;
+      let t = 1;
+      if (start !== null) {
+        t = Math.min(1, (performance.now() - start) / 1000 / ENTRANCE_SEC);
+        // ease-out cubic
+        t = 1 - Math.pow(1 - t, 3);
+      }
+      mat.opacity = 0.95 * t;
+      mat.size = 3 * (0.3 + 0.7 * t);
     }
-    mat.opacity = 0.95 * t;
-    mat.size = 3 * (0.3 + 0.7 * t);
+
+    const now = performance.now();
+
+    // --- Expand morph: lerp the live Points buffer from origins toward targets.
+    const pts = pointsRef.current;
+    const posAttr = pts?.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
+    const lastPos = lastPosRef.current;
+    if (pts && posAttr) {
+      const arr = posAttr.array as Float32Array;
+      const morph = morphRef.current;
+      const e = morph ? easeOutCubic((now - morph.start) / MORPH_MS) : 1;
+      let active = false;
+      lastPos.clear();
+      for (let i = 0; i < keysAt.length; i++) {
+        const key = keysAt[i]!;
+        const tIdx = model.indexByKey.get(key);
+        if (tIdx === undefined) continue;
+        const tx = model.positions[tIdx * 3]!;
+        const ty = model.positions[tIdx * 3 + 1]!;
+        const tz = model.positions[tIdx * 3 + 2]!;
+        const o = morph && e < 1 ? morph.origin.get(key) : undefined;
+        let x = tx;
+        let y = ty;
+        let z = tz;
+        if (o) {
+          x = o[0] + (tx - o[0]) * e;
+          y = o[1] + (ty - o[1]) * e;
+          z = o[2] + (tz - o[2]) * e;
+          active = true;
+        }
+        arr[i * 3] = x;
+        arr[i * 3 + 1] = y;
+        arr[i * 3 + 2] = z;
+        lastPos.set(key, [x, y, z]);
+      }
+      posAttr.needsUpdate = true;
+      if (e >= 1) morphRef.current = null;
+      if (active) invalidate();
+    }
+
+    // --- Collapse morph: lerp the transient departing buffer toward the parent
+    // core, then drop it when finished.
+    const dm = departMorphRef.current;
+    const dpts = departRef.current;
+    if (dm && dpts) {
+      const e = easeOutCubic((now - dm.start) / MORPH_MS);
+      const n = dm.positions.length / 3;
+      for (let i = 0; i < n; i++) {
+        dm.positions[i * 3] = dm.origin[i * 3]! + (dm.target[i * 3]! - dm.origin[i * 3]!) * e;
+        dm.positions[i * 3 + 1] =
+          dm.origin[i * 3 + 1]! + (dm.target[i * 3 + 1]! - dm.origin[i * 3 + 1]!) * e;
+        dm.positions[i * 3 + 2] =
+          dm.origin[i * 3 + 2]! + (dm.target[i * 3 + 2]! - dm.origin[i * 3 + 2]!) * e;
+      }
+      const dPos = dpts.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
+      if (dPos) dPos.needsUpdate = true;
+      const dMat = dpts.material as THREE.PointsMaterial;
+      dMat.opacity = 0.95 * (1 - e); // fade out as they recede
+      if (e >= 1) {
+        departMorphRef.current = null;
+        dMat.opacity = 0;
+      } else {
+        invalidate();
+      }
+    }
   });
+
+  // Bind the transient departing geometry whenever a new collapse morph starts
+  // (departNonce bumps so this re-runs even though the morph lives in a ref).
+  useEffect(() => {
+    const dm = departMorphRef.current;
+    if (!dm) return;
+    const posAttr = new THREE.BufferAttribute(dm.positions, 3);
+    departGeo.setAttribute("position", posAttr);
+    departGeo.setAttribute("color", new THREE.BufferAttribute(dm.colors, 3));
+    posAttr.needsUpdate = true;
+  }, [departNonce, departGeo]);
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
@@ -251,26 +468,42 @@ export function StarField() {
   const glow = useMemo(() => glowTexture(), []);
 
   return (
-    <points
-      ref={pointsRef}
-      geometry={geometry}
-      onClick={handleClick}
-      onPointerMove={handleMove}
-      onPointerOut={handleOut}
-      raycast={pointsRaycast}
-    >
-      <pointsMaterial
-        ref={materialRef}
-        size={3}
-        sizeAttenuation
-        vertexColors
-        transparent
-        opacity={0.95}
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-        map={glow}
-      />
-    </points>
+    <>
+      <points
+        ref={pointsRef}
+        geometry={geometry}
+        onClick={handleClick}
+        onPointerMove={handleMove}
+        onPointerOut={handleOut}
+        raycast={pointsRaycast}
+      >
+        <pointsMaterial
+          ref={materialRef}
+          size={3}
+          sizeAttenuation
+          vertexColors
+          transparent
+          opacity={0.95}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          map={glow}
+        />
+      </points>
+      {/* Transient departing stars (collapse recession). Non-interactive; the
+          frame loop fades + lerps it into the parent core, then sets opacity 0. */}
+      <points ref={departRef} geometry={departGeo} raycast={() => null}>
+        <pointsMaterial
+          size={3}
+          sizeAttenuation
+          vertexColors
+          transparent
+          opacity={0}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          map={glow}
+        />
+      </points>
+    </>
   );
 }
 
