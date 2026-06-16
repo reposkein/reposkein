@@ -4,6 +4,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  type Dispatch,
   type ReactNode,
 } from "react";
 import GraphWorker from "../data/worker/graph.worker.ts?worker";
@@ -19,6 +20,12 @@ type Status =
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
+interface Filters {
+  kinds: Set<string>;      // hidden symbol kinds; empty = show all
+  edgeTypes: Set<string>;  // hidden edge types; empty = show all
+  minConfidence: number;   // 0..1, default 0
+}
+
 interface State {
   status: Status;
   model: ClientModel | null;
@@ -28,6 +35,9 @@ interface State {
   /** Bumped whenever the visible set changes (load / expand / collapse) or a
    *  star is framed, so the camera-fit hook can refit to what's on screen. */
   fitNonce: number;
+  filters: Filters;
+  /** Node id to fly-to: set by search, consumed by Controls. Bumps fitNonce. */
+  focusTarget: string | null;
 }
 
 type Action =
@@ -38,7 +48,12 @@ type Action =
   | { t: "collapseLevel" }
   | { t: "select"; id: string | null }
   | { t: "hover"; id: string | null }
-  | { t: "requestFit" };
+  | { t: "requestFit" }
+  | { t: "setKindFilter"; kind: string; hidden: boolean }
+  | { t: "setEdgeTypeFilter"; type: string; hidden: boolean }
+  | { t: "setMinConfidence"; value: number }
+  | { t: "clearFilters" }
+  | { t: "setFocusTarget"; id: string | null };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
  *  shut the deepest-expanded branch first ("one level up"). */
@@ -98,6 +113,32 @@ function reducer(state: State, a: Action): State {
       return { ...state, hovered: a.id };
     case "requestFit":
       return { ...state, fitNonce: state.fitNonce + 1 };
+    case "setKindFilter": {
+      const kinds = new Set(state.filters.kinds);
+      if (a.hidden) kinds.add(a.kind);
+      else kinds.delete(a.kind);
+      return { ...state, filters: { ...state.filters, kinds } };
+    }
+    case "setEdgeTypeFilter": {
+      const edgeTypes = new Set(state.filters.edgeTypes);
+      if (a.hidden) edgeTypes.add(a.type);
+      else edgeTypes.delete(a.type);
+      return { ...state, filters: { ...state.filters, edgeTypes } };
+    }
+    case "setMinConfidence":
+      return { ...state, filters: { ...state.filters, minConfidence: a.value } };
+    case "clearFilters":
+      return {
+        ...state,
+        filters: { kinds: new Set(), edgeTypes: new Set(), minConfidence: 0 },
+      };
+    case "setFocusTarget":
+      return {
+        ...state,
+        focusTarget: a.id,
+        // Bump fitNonce when setting a non-null target so Controls.tsx picks it up.
+        fitNonce: a.id !== null ? state.fitNonce + 1 : state.fitNonce,
+      };
   }
 }
 
@@ -107,18 +148,27 @@ interface Store extends State {
   select(id: string | null): void;
   hover(id: string | null): void;
   requestFit(): void;
+  setKindFilter(kind: string, hidden: boolean): void;
+  setEdgeTypeFilter(type: string, hidden: boolean): void;
+  setMinConfidence(value: number): void;
+  clearFilters(): void;
+  setFocusTarget(id: string | null): void;
 }
 
 const Ctx = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, {
+  const [state, dispatch]: [State, Dispatch<Action>] = useReducer<
+    (state: State, action: Action) => State
+  >(reducer, {
     status: { kind: "loading", phase: "starting" },
     model: null,
     expanded: new Set<string>(),
     selected: null,
     hovered: null,
     fitNonce: 0,
+    filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
+    focusTarget: null,
   });
 
   useEffect(() => {
@@ -145,6 +195,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       select: (id) => dispatch({ t: "select", id }),
       hover: (id) => dispatch({ t: "hover", id }),
       requestFit: () => dispatch({ t: "requestFit" }),
+      setKindFilter: (kind, hidden) => dispatch({ t: "setKindFilter", kind, hidden }),
+      setEdgeTypeFilter: (type, hidden) => dispatch({ t: "setEdgeTypeFilter", type, hidden }),
+      setMinConfidence: (value) => dispatch({ t: "setMinConfidence", value }),
+      clearFilters: () => dispatch({ t: "clearFilters" }),
+      setFocusTarget: (id) => dispatch({ t: "setFocusTarget", id }),
     }),
     [state]
   );

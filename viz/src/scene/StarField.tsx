@@ -50,13 +50,22 @@ export function StarField() {
   }, [hovered, model, visible]);
 
   const { geometry, keysAt } = useMemo(() => {
-    const n = visible.length;
+    // Apply kind filter: exclude clusters whose symbolKind is in the hidden set.
+    const filtered =
+      store.filters.kinds.size > 0
+        ? visible.filter((key) => {
+            const c = model.byKey.get(key);
+            return !(c?.symbolKind && store.filters.kinds.has(c.symbolKind.toLowerCase()));
+          })
+        : visible;
+
+    const n = filtered.length;
     const positions = new Float32Array(n * 3);
     const colors = new Float32Array(n * 3);
     const sizes = new Float32Array(n);
     const keysAt: string[] = new Array(n);
     for (let i = 0; i < n; i++) {
-      const key = visible[i]!;
+      const key = filtered[i]!;
       const idx = model.indexByKey.get(key);
       keysAt[i] = key;
       if (idx === undefined) continue;
@@ -83,7 +92,7 @@ export function StarField() {
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
     return { geometry: geo, keysAt };
-  }, [visible, model, highlightKeys]);
+  }, [visible, model, highlightKeys, store.filters]);
 
   // Entrance animation: ease opacity + point size from 0 on first appearance.
   const entranceStart = useRef<number | null>(null);
