@@ -50,6 +50,7 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 | Tool | What it does |
 | --- | --- |
 | `get_context_profile` | resolve a function/class → its caller/callee neighborhood as ready-to-read prose |
+| `impact` | transitive callers of a function/class — split into impacted code vs covering tests — with counts and truncated flag |
 | `read_cypher` | read-only graph queries (writes rejected, results capped) |
 | `write_semantic_summary` | attach a hash-stamped summary to a node |
 | `init_cpg_skeleton` | build/rebuild the graph |
