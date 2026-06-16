@@ -8,6 +8,8 @@ import { StarField } from "../scene/StarField";
 import { EdgeLines } from "../scene/EdgeLines";
 import { Labels } from "../scene/Labels";
 import { Controls } from "../scene/Controls";
+import { TemporalLinks } from "../scene/TemporalLinks";
+import { fetchTemporal } from "../data/temporal";
 import { DetailPanel } from "../panels/DetailPanel";
 import { FilterHUD } from "../panels/FilterHUD";
 import { SearchPanel } from "../panels/SearchPanel";
@@ -58,6 +60,20 @@ function View() {
     store.setFocusTarget(id);
   }, [store.model, nodeFromUrl]); // intentional: only re-run when model or URL node changes
 
+  // Lazily fetch the temporal co-change map the first time the Coupling overlay
+  // is enabled. Best-effort: fetchTemporal never throws (returns {} on failure),
+  // so the overlay degrades to "no temporal data" without breaking the render.
+  useEffect(() => {
+    if (!store.coupling || store.cochange !== null) return;
+    let cancelled = false;
+    void fetchTemporal().then((map) => {
+      if (!cancelled) store.setCochange(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [store.coupling, store.cochange]); // re-run when the toggle flips on
+
   // When selected changes, update the URL.
   useEffect(() => {
     navigate({
@@ -94,6 +110,7 @@ function View() {
           <>
             <StarField />
             <EdgeLines />
+            <TemporalLinks />
             <Labels />
           </>
         )}

@@ -4,6 +4,7 @@ import { join, resolve, normalize, extname } from "node:path";
 import { gzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { packageRoot } from "../indexer/fetchBinary.js";
+import { getTemporal } from "../temporal/temporal.js";
 
 /** The prebuilt viz/ SPA bundle, copied into the mcp package at build time
  *  (scripts/bundle-viz.mjs copies viz/dist -> mcp/dist/viz). */
@@ -108,6 +109,23 @@ export function makeViewHandler(repoPath: string, repoId: string) {
       } catch {
         send404(res);
       }
+      return;
+    }
+
+    // Temporal-coupling overlay (best-effort). Returns the git-derived
+    // file co-change map, or {} when git/temporal is unavailable. NEVER 5xx —
+    // the overlay is additive and must never break the structural render.
+    if (url === "/api/temporal") {
+      getTemporal(repoPath)
+        .then((result) => {
+          // getTemporal never throws; on unavailable we still answer 200 {}.
+          const cochange = "cochange" in result ? result.cochange : {};
+          sendGzip(res, JSON.stringify(cochange), "application/json; charset=utf-8");
+        })
+        .catch(() => {
+          // Defensive: should be unreachable (getTemporal is fail-safe).
+          sendGzip(res, "{}", "application/json; charset=utf-8");
+        });
       return;
     }
 

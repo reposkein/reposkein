@@ -16,6 +16,7 @@ import type {
 } from "../data/worker/graph.worker";
 import { resolveLens, type Emphasis, type LensId } from "../data/lens";
 import { computeImpact, type ImpactResult } from "../data/impact";
+import type { CochangeMap } from "../data/temporal";
 
 type Status =
   | { kind: "loading"; phase: string }
@@ -51,6 +52,10 @@ interface State {
   /** Impact overlay: transitive reverse-CALLS callers + covering tests of the
    *  selected node. null = inactive. */
   impact: ImpactResult | null;
+  /** Temporal-coupling overlay toggle (best-effort git co-change links). */
+  coupling: boolean;
+  /** Fetched co-change map (null = not yet fetched; {} = fetched, no data). */
+  cochange: CochangeMap | null;
 }
 
 /** Confidence-audit preset: which low-confidence buckets to keep visible. */
@@ -73,6 +78,8 @@ type Action =
   | { t: "setLens"; lens: LensId }
   | { t: "setAudit"; mode: AuditMode }
   | { t: "toggleImpact" }
+  | { t: "toggleCoupling" }
+  | { t: "setCochange"; map: CochangeMap }
   | { t: "resetView" };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
@@ -187,6 +194,10 @@ function reducer(state: State, a: Action): State {
     case "setAudit":
       // Toggling audit must not move the camera (no fitNonce bump).
       return { ...state, audit: a.mode };
+    case "toggleCoupling":
+      return { ...state, coupling: !state.coupling };
+    case "setCochange":
+      return { ...state, cochange: a.map };
     case "toggleImpact": {
       if (state.impact) return { ...state, impact: null };
       if (!state.model || !state.selected) return state;
@@ -228,6 +239,7 @@ function reducer(state: State, a: Action): State {
         emphasis: "none",
         audit: "off",
         impact: null,
+        coupling: false,
         filters: { kinds: new Set(), edgeTypes: new Set(), minConfidence: 0 },
         fitNonce: state.fitNonce + 1,
       };
@@ -249,6 +261,8 @@ interface Store extends State {
   setLens(lens: LensId): void;
   setAudit(mode: AuditMode): void;
   toggleImpact(): void;
+  toggleCoupling(): void;
+  setCochange(map: CochangeMap): void;
   resetView(): void;
 }
 
@@ -270,6 +284,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     emphasis: "none",
     audit: "off",
     impact: null,
+    coupling: false,
+    cochange: null,
   });
 
   useEffect(() => {
@@ -304,6 +320,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setLens: (lens) => dispatch({ t: "setLens", lens }),
       setAudit: (mode) => dispatch({ t: "setAudit", mode }),
       toggleImpact: () => dispatch({ t: "toggleImpact" }),
+      toggleCoupling: () => dispatch({ t: "toggleCoupling" }),
+      setCochange: (map) => dispatch({ t: "setCochange", map }),
       resetView: () => dispatch({ t: "resetView" }),
     }),
     [state]

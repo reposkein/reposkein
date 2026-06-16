@@ -165,6 +165,11 @@ export function FilterHUD() {
             style={{ width: "100%", marginBottom: 8, accentColor: "#61afef" }}
           />
 
+          {/* Temporal-coupling overlay (best-effort git co-change). Additive;
+              degrades gracefully when no temporal data is available. */}
+          <div style={{ fontSize: 10, opacity: 0.5, margin: "4px 0" }}>OVERLAYS</div>
+          <CouplingToggle />
+
           {/* Reset button (only shown when any filter is active) */}
           {hasFilters && (
             <button
@@ -183,6 +188,44 @@ export function FilterHUD() {
               Reset filters
             </button>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CouplingToggle() {
+  const store = useStore();
+  const on = store.coupling;
+  // "no data": fetched (cochange !== null) but the map is empty.
+  const fetched = store.cochange !== null;
+  const noData = on && fetched && Object.keys(store.cochange!).length === 0;
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <button
+        onClick={() => store.toggleCoupling()}
+        title="Draw git co-change links between files that change together (dashed magenta)"
+        style={{
+          width: "100%",
+          padding: "4px 0",
+          borderRadius: 6,
+          background: on ? "rgba(255,61,240,0.18)" : "rgba(255,255,255,0.05)",
+          border: `1px solid ${on ? "#ff3df0" : "rgba(255,255,255,0.12)"}`,
+          color: on ? "#ffb6f7" : "rgba(255,255,255,0.65)",
+          cursor: "pointer",
+          fontSize: 11,
+          fontWeight: on ? 600 : 400,
+        }}
+      >
+        {on ? "Coupling ON" : "Coupling (co-change)"}
+      </button>
+      {on && !fetched && (
+        <div style={{ fontSize: 10, opacity: 0.5, marginTop: 4 }}>Loading temporal data…</div>
+      )}
+      {noData && (
+        <div style={{ fontSize: 10, color: "#ffb454", marginTop: 4, lineHeight: 1.4 }}>
+          No temporal data (git history unavailable for this repo).
         </div>
       )}
     </div>
