@@ -7,6 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/reposkein/reposkein/blob/main/LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed.svg)](https://modelcontextprotocol.io)
 [![skills.sh](https://skills.sh/b/reposkein/reposkein)](https://skills.sh/reposkein/reposkein)
+[![mcpservers.org](https://img.shields.io/badge/mcpservers.org-listed-1f6feb.svg)](https://mcpservers.org/servers/reposkein/reposkein)
 
 This is the [Model Context Protocol](https://modelcontextprotocol.io) server for [**RepoSkein**](https://github.com/reposkein/reposkein) — a deterministic **code graph** (functions, classes, imports, call edges) built from your repo with [Tree-sitter](https://tree-sitter.github.io/) and served to any MCP-capable agent (Claude Code, Cursor, Codex, …). Your agent navigates structure instead of guessing, and writes short summaries onto the graph as it learns — versioned in git as shared team memory.
 
@@ -50,6 +51,7 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 | Tool | What it does |
 | --- | --- |
 | `get_context_profile` | resolve a function/class → its caller/callee neighborhood as ready-to-read prose |
+| `semantic_find` | find where to start — rank functions/classes by meaning (lexical BM25F; optional pluggable embeddings), seeding `get_context_profile` |
 | `impact` | transitive callers of a function/class — split into impacted code vs covering tests — with counts and truncated flag |
 | `read_cypher` | read-only graph queries (writes rejected, results capped) |
 | `write_semantic_summary` | attach a hash-stamped summary to a node |

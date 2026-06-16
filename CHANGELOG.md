@@ -4,6 +4,52 @@ All notable changes to RepoSkein. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com); generated/maintained from
 [Conventional Commits](https://www.conventionalcommits.org) (see `cliff.toml`).
 
+## [Unreleased]
+
+### Added
+
+- **`semantic_find`** — find where to start: rank functions/classes by a
+  deterministic lexical BM25F score over qualified names, signatures, and
+  summaries; seeds `get_context_profile`. Optional **pluggable embeddings** tier
+  (default off) — `voyage` (`voyage-code-3` API), `http` (local/open model, e.g.
+  `voyage-4-nano`), hybrid via Reciprocal Rank Fusion; vectors cached
+  non-committed in `.reposkein/local/`, automatic fallback to lexical.
+- **`get_temporal_context`** — git-derived co-change (files that change
+  together), churn/recency, and ownership for a file. Derived, advisory, never
+  committed.
+- **`impact`** — transitive callers of a function/class, split into impacted
+  code vs covering tests, in one call.
+
+## [0.1.1] - 2026-06-15
+
+### Added
+
+- **Go, Java, and C# language support** — now 7 languages (Python, TS/JS, Rust,
+  Go, Java, C#).
+- **`reposkein-mcp doctor`** — host-agnostic health check (binary, index, repo id).
+- **Rust `use`→`IMPORTS`** incl. groups, aliases, globs, and `pub use` re-export
+  chains; workspace-aware crate-root detection.
+- **Scope-aware resolver rung** — prefers same-directory candidates before
+  repo-wide name matches, reducing false-ambiguous fan-out.
+- npm package README; a `Dockerfile` for MCP-registry introspection (Glama);
+  cross-agent skills via skills.sh.
+
+### Changed
+
+- Release binaries are **Apple-Silicon-only on macOS** (4 platforms:
+  darwin-arm64, linux-x64/arm64, win32-x64) — Intel macOS dropped.
+- GitHub Actions bumped to Node 24 (`actions/*@v5`).
+
+### Fixed
+
+- TS Interface/Enum id collision (silent dedup data loss) → `unique()` +
+  `content_hash`.
+- `role_for` substring match (`contest_*.py` mis-flagged as a test) →
+  path-segment matching.
+- One unreadable file aborted the whole index → skip with a warning.
+- Resolver downgraded `exact` edges via last-write-wins → keep the
+  best (highest-confidence) resolution per `(caller, target)` pair.
+
 ## [0.1.0] - 2026-06-15
 
 First public release: a local-first, deterministic GraphRAG-over-code tool — a
