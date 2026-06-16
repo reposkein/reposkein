@@ -1,5 +1,7 @@
 /** Client for the `reposkein-mcp view` HTTP API (design §2.2). */
 
+import { isStaticMode } from "./staticMode";
+
 export interface GraphManifest {
   root: { repoId: string; nodesUrl: string; edgesUrl: string; repoRoot?: string };
   federated: { repoId: string; rootPath: string; nodesUrl: string; edgesUrl: string }[];
@@ -23,6 +25,8 @@ export async function fetchSource(
   start: number,
   end: number,
 ): Promise<SourceSlice | null> {
+  // Static export: no server to read source from — degrade to "no source".
+  if (isStaticMode()) return null;
   try {
     const qs = new URLSearchParams({ path, start: String(start), end: String(end) });
     const res = await fetch(`/api/source?${qs.toString()}`);

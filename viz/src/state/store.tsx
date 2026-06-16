@@ -24,6 +24,7 @@ import {
 } from "../data/neighborhood";
 import { ALL_EDGE_TYPES } from "../data/lens";
 import type { CochangeMap } from "../data/temporal";
+import { buildStaticResult, staticPayload } from "../data/staticMode";
 
 type Status =
   | { kind: "loading"; phase: string }
@@ -358,6 +359,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
+    // Static export mode (graph-data.js baked window.__REPOSKEIN_GRAPH__):
+    // build the model on the main thread (the worker can't see `window`) and
+    // skip all network fetches. Deferred a microtask so the loader paints.
+    const baked = staticPayload();
+    if (baked) {
+      let cancelled = false;
+      Promise.resolve().then(() => {
+        if (cancelled) return;
+        try {
+          dispatch({ t: "progress", phase: "parsing baked graph" });
+          const result = buildStaticResult(baked);
+          if (!cancelled) dispatch({ t: "ready", model: fromWorker(result) });
+        } catch (err) {
+          if (!cancelled)
+            dispatch({
+              t: "error",
+              message: err instanceof Error ? err.message : String(err),
+            });
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const worker = new GraphWorker();
     worker.onmessage = (
       e: MessageEvent<WorkerResult | WorkerError | WorkerProgress>

@@ -1,5 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync, existsSync, statSync, createReadStream } from "node:fs";
+import {
+  readFileSync,
+  existsSync,
+  statSync,
+  createReadStream,
+  mkdirSync,
+  cpSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve, normalize, extname } from "node:path";
 import { gzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
@@ -238,11 +246,17 @@ export async function runView(repoPath: string, repoId: string, opts: ViewOption
   });
 }
 
-/** Parses `view` CLI args (after the `view` subcommand). */
-export function parseViewArgs(argv: string[]): { repoPath: string; opts: ViewOptions } {
+/** Parses `view` CLI args (after the `view` subcommand). When `--export <dir>`
+ *  is present, returns `exportDir` set (and the server opts are ignored). */
+export function parseViewArgs(argv: string[]): {
+  repoPath: string;
+  opts: ViewOptions;
+  exportDir: string | null;
+} {
   let port = 4317;
   let host = "127.0.0.1";
   let open = true;
+  let exportDir: string | null = null;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -251,8 +265,119 @@ export function parseViewArgs(argv: string[]): { repoPath: string; opts: ViewOpt
     else if (a.startsWith("--port=")) port = parseInt(a.slice(7), 10) || 4317;
     else if (a === "--host") host = argv[++i] ?? "127.0.0.1";
     else if (a.startsWith("--host=")) host = a.slice(7);
+    else if (a === "--export") exportDir = argv[++i] ?? null;
+    else if (a.startsWith("--export=")) exportDir = a.slice(9);
     else if (!a.startsWith("-")) positional.push(a);
   }
   const repoPath = positional[0] ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
-  return { repoPath, opts: { port, host, open } };
+  return { repoPath, opts: { port, host, open }, exportDir };
+}
+
+/** Builds the contents of `graph-data.js` for a static export: a single
+ *  assignment of `window.__REPOSKEIN_GRAPH__` with the manifest + the inlined
+ *  JSONL text. The viewer's static-mode path parses this on the main thread.
+ *
+ *  Pure (string in → string out) so the baked shape is unit-testable. The
+ *  payload is a JSON.stringify'd object assigned in an external .js file (NOT
+ *  inline HTML), so `</script>` sequences in the JSONL need no escaping. */
+export function buildGraphDataJs(
+  repoId: string,
+  nodesText: string,
+  edgesText: string,
+): string {
+  // Static export bakes a single repo (no federation) and intentionally OMITS
+  // repoRoot — the export is shared/hosted, so a local absolute path is both
+  // meaningless and a leak; server-only features degrade in the viewer.
+  const payload = {
+    manifest: {
+      root: {
+        repoId,
+        // These URLs are unused in static mode (the worker is skipped); kept
+        // for shape parity with the live manifest.
+        nodesUrl: "/api/jsonl/nodes.jsonl",
+        edgesUrl: "/api/jsonl/edges.jsonl",
+      },
+      federated: [],
+      counts: { nodes: 0, edges: 0 },
+    },
+    nodesText,
+    edgesText,
+  };
+  return `window.__REPOSKEIN_GRAPH__ = ${JSON.stringify(payload)};\n`;
+}
+
+/** Injects `<script src="./graph-data.js"></script>` into `html` BEFORE the
+ *  first app bundle `<script ... src=...>` (or before </head> / </body> as a
+ *  fallback) so the global is set prior to the app booting. Pure. Idempotent:
+ *  returns `html` unchanged if the inject is already present. */
+export function injectGraphDataScript(html: string): string {
+  const tag = `<script src="./graph-data.js"></script>`;
+  if (html.includes("graph-data.js")) return html;
+  // Vite emits a module script for the app bundle; inject before the first one.
+  const m = html.match(/<script\b[^>]*\bsrc=/i);
+  if (m && m.index !== undefined) {
+    return html.slice(0, m.index) + tag + "\n    " + html.slice(m.index);
+  }
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `  ${tag}\n  </head>`);
+  if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `  ${tag}\n  </body>`);
+  return html + tag;
+}
+
+/** `reposkein-mcp view --export <outDir> [repoPath]`.
+ *  Writes a SELF-CONTAINED static site to `<outDir>`: the viz bundle plus the
+ *  repo's graph baked into `graph-data.js`, so it loads with NO server (works
+ *  from file:// and from any static-host subpath). Returns the exit code. */
+export async function runExport(
+  repoPath: string,
+  repoId: string,
+  outDir: string,
+): Promise<number> {
+  const reposkeinDir = join(repoPath, ".reposkein");
+  const nodesPath = join(reposkeinDir, "nodes.jsonl");
+  const edgesPath = join(reposkeinDir, "edges.jsonl");
+  if (!existsSync(nodesPath)) {
+    console.error(
+      `reposkein: no .reposkein/nodes.jsonl at ${repoPath}.\n` +
+        "  Build the graph first: `reposkein-mcp index` (or `reposkein-mcp init`).",
+    );
+    return 1;
+  }
+  const distDir = vizDistDir();
+  if (!existsSync(join(distDir, "index.html"))) {
+    console.error(
+      `reposkein: the viewer bundle is missing (${distDir}).\n` +
+        "  Rebuild the package: `npm run build` in mcp/ (which copies viz/dist).",
+    );
+    return 1;
+  }
+
+  const absOut = resolve(outDir);
+  try {
+    // 1) Copy the prebuilt viz bundle into the output directory.
+    mkdirSync(absOut, { recursive: true });
+    cpSync(distDir, absOut, { recursive: true });
+
+    // 2) Bake the repo graph into graph-data.js.
+    const nodesText = readFileSync(nodesPath, "utf8");
+    const edgesText = existsSync(edgesPath) ? readFileSync(edgesPath, "utf8") : "";
+    writeFileSync(
+      join(absOut, "graph-data.js"),
+      buildGraphDataJs(repoId, nodesText, edgesText),
+      "utf8",
+    );
+
+    // 3) Inject the graph-data.js script into index.html before the app bundle.
+    const indexPath = join(absOut, "index.html");
+    const html = readFileSync(indexPath, "utf8");
+    writeFileSync(indexPath, injectGraphDataScript(html), "utf8");
+  } catch (err) {
+    console.error(
+      `reposkein: export failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
+
+  console.error(`reposkein: exported static constellation for ${repoId} -> ${absOut}`);
+  console.error(`  open ${join(absOut, "index.html")} or host this folder.`);
+  return 0;
 }

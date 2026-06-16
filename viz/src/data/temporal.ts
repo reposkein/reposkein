@@ -11,6 +11,7 @@
 
 import type { ClientModel } from "./clientModel";
 import { representativeFor } from "./clientModel";
+import { isStaticMode } from "./staticMode";
 
 /** Server shape: file path -> co-changed files with support/confidence. */
 export type CochangeMap = Record<
@@ -30,6 +31,8 @@ export interface CouplingLink {
 /** Fetch the co-change map from the view server. Best-effort: any failure
  *  yields an empty map so the overlay degrades to "no temporal data". */
 export async function fetchTemporal(): Promise<CochangeMap> {
+  // Static export: no server to derive git temporal data — degrade to empty.
+  if (isStaticMode()) return {};
   try {
     const res = await fetch("/api/temporal");
     if (!res.ok) return {};

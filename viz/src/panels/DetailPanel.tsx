@@ -13,6 +13,7 @@ import { useStore } from "../state/store";
 import { MIN_FOCUS_DEPTH, MAX_FOCUS_DEPTH } from "../data/neighborhood";
 import { BRAND } from "../scene/encoding";
 import { fetchSource, type SourceSlice } from "../data/api";
+import { isStaticMode } from "../data/staticMode";
 import type { NodeRecord } from "../data/model";
 
 interface IncidentRow {
@@ -202,7 +203,9 @@ function SourcePeek({ rec, repoRoot }: { rec: NodeRecord; repoRoot: string | nul
   const [slice, setSlice] = useState<SourceSlice | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "missing">("idle");
 
-  const hasSlice = !!rec.filePath && rec.startLine > 0;
+  // Static export: no live server for source slices or editor links — hide the
+  // whole peek so it doesn't flash "unavailable".
+  const hasSlice = !isStaticMode() && !!rec.filePath && rec.startLine > 0;
 
   useEffect(() => {
     if (!hasSlice) {
