@@ -1,0 +1,98 @@
+/** Deterministic 3D force layout (design §4).
+ *
+ *  Runs d3-force-3d to a FIXED iteration count with:
+ *   - every node's initial x/y/z pre-set from idToPosition(stableKey)
+ *     (a hash → seeded position; NO Math.random),
+ *   - a seeded random source on the simulation (kills d3's internal jitter),
+ *   - structural CONTAINS/DEFINES springs derived from the cluster tree.
+ *
+ *  Result: byte-stable Float32Array positions for the same graph, every run.
+ *  Positions are render-time only and never written back to JSONL.
+ *
+ *  This module is pure (no DOM / no worker globals) so it is directly unit
+ *  testable and is also imported by the layout web worker. */
+
+import {
+  forceSimulation,
+  forceManyBody,
+  forceLink,
+  forceCenter,
+  type SimulationNodeDatum,
+} from "d3-force-3d";
+import type { ClusterTree } from "./cluster";
+import { flattenTree } from "./cluster";
+import { idToPosition, mulberry32, fnv1a } from "./hash";
+
+const FIXED_ITERATIONS = 200;
+const LAYOUT_SEED = 0x5eed_1234;
+
+interface SimNode extends SimulationNodeDatum {
+  key: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface LayoutResult {
+  /** Cluster keys in the canonical (flattened) order. */
+  keys: string[];
+  /** Flat [x0,y0,z0, x1,y1,z1, ...] aligned with `keys`. */
+  positions: Float32Array;
+  /** key -> index into `keys` / position triples. */
+  indexByKey: Map<string, number>;
+}
+
+/** Computes the deterministic layout for an entire cluster tree.
+ *
+ *  Single-pass force layout over all clusters with parent→child structural
+ *  links (the spec's hierarchical-freeze refinement is deferred; M1 needs a
+ *  stable, navigable map and this is fully deterministic). */
+export function computeLayout(tree: ClusterTree): LayoutResult {
+  const flat = flattenTree(tree);
+  const keys = flat.map((c) => c.key);
+  const indexByKey = new Map<string, number>();
+  keys.forEach((k, i) => indexByKey.set(k, i));
+
+  const nodes: SimNode[] = flat.map((c) => {
+    const [x, y, z] = idToPosition(c.key);
+    return { key: c.key, x, y, z };
+  });
+
+  // Structural links: parent → child (CONTAINS/DEFINES skeleton). These are
+  // NOT drawn; they only shape the layout.
+  const links = flat
+    .filter((c) => c.parent !== null)
+    .map((c) => ({ source: c.parent as string, target: c.key }));
+
+  // Seeded RNG: d3-force-3d uses the simulation's randomSource for any jitter.
+  const rng = mulberry32(fnv1a("randomSource") ^ LAYOUT_SEED);
+
+  const sim = forceSimulation(nodes, 3)
+    .force("charge", forceManyBody().strength(-12))
+    .force(
+      "link",
+      forceLink(links)
+        .id((d: SimNode) => d.key)
+        .distance(8)
+        .strength(0.6)
+    )
+    .force("center", forceCenter(0, 0, 0))
+    .stop();
+
+  // Kill internal nondeterminism where the API allows it.
+  const simAny = sim as unknown as { randomSource?: (fn: () => number) => unknown };
+  if (typeof simAny.randomSource === "function") simAny.randomSource(rng);
+
+  // Run a fixed number of ticks (no animation/timer-driven randomness).
+  sim.tick(FIXED_ITERATIONS);
+
+  const positions = new Float32Array(nodes.length * 3);
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!;
+    positions[i * 3] = n.x ?? 0;
+    positions[i * 3 + 1] = n.y ?? 0;
+    positions[i * 3 + 2] = n.z ?? 0;
+  }
+
+  return { keys, positions, indexByKey };
+}
