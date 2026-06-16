@@ -19,7 +19,10 @@ use std::path::{Path, PathBuf};
 /// Bumped 9→10: heritage moved to resolver-time RawHeritage; cross-file
 /// INHERITS/IMPLEMENTS edges added; heritage edges gain resolution/confidence
 /// props; Python dotted bases captured; C# label-refine is now cross-file.
-pub const EXTRACT_CACHE_SCHEMA: u32 = 10;
+/// Bumped 10→11: Go struct/interface embedding → RawHeritage; Python module
+/// aliases (`import foo as f`) → RawModuleAlias; constructor sites → new
+/// RawConstruction (INSTANTIATES edges). All three change extractor output.
+pub const EXTRACT_CACHE_SCHEMA: u32 = 11;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {
