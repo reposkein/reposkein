@@ -73,17 +73,45 @@ describe("parseGitLog", () => {
     expect(commits[0]!.files.sort()).toEqual(["src/bar.ts", "src/foo.ts"]);
   });
 
+  it("parses correctly when author name contains \\x1f (odd byte) without misidentifying files as headers", () => {
+    // An author name that contains the field separator \x1f — the old heuristic
+    // (tok.includes("\x1f")) would falsely treat a subsequent file token containing
+    // \x1f as a commit header. The new shape-anchored check (40-hex + \x1f) must
+    // correctly ignore it.
+    //
+    // We construct a commit where the path looks like it could contain \x1f.
+    // Since we split on \x00, the path token after a status is a plain string.
+    // We verify the commit is parsed with the correct file and no extra spurious commit.
+    const sha = "abcdef1234567890abcdef1234567890abcdef12";
+    // Author name with an embedded \x1f — git would percent-encode this in practice,
+    // but our parser should handle it without misparse.
+    const raw =
+      `\x00${sha}\x1f2026-06-16\x1fAlice\x1fwith\x1fextra\x1ffields@x.io\x00\n` +
+      `M\x00src/odd\x1fbyte_file.ts\x00`;
+    const commits = parseGitLog(raw);
+    // Should still produce exactly one commit
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.sha).toBe(sha);
+    // The file token (after the M status) should be parsed correctly
+    // (the \x1f inside the path token is NOT treated as a header because it lacks the 40-hex prefix)
+    expect(commits[0]!.files.length).toBe(1);
+  });
+
   it("reconstructs rename chains — old path maps to current canonical path", () => {
     // sha1 (newest): foo.ts changes (current name)
     // sha2: R old.ts → foo.ts  (rename happened)
     // sha3 (oldest): old.ts changes (before rename)
+    // Use valid 40-hex SHAs (a-f, 0-9 only)
+    const sha1r = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+    const sha2r = "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2";
+    const sha3r = "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3";
     const raw =
-      mkHeader("sha1_" + "0".repeat(35), "2026-06-10") +
+      mkHeader(sha1r, "2026-06-10") +
       mkFile("M", "src/foo.ts") +
-      mkHeader("sha2_" + "0".repeat(35), "2026-06-09") +
+      mkHeader(sha2r, "2026-06-09") +
       mkRename("src/old.ts", "src/foo.ts") +
       mkFile("M", "src/bar.ts") +
-      mkHeader("sha3_" + "0".repeat(35), "2026-06-08") +
+      mkHeader(sha3r, "2026-06-08") +
       mkFile("M", "src/old.ts") +
       mkFile("M", "src/bar.ts");
 
@@ -93,24 +121,23 @@ describe("parseGitLog", () => {
     // All references to src/old.ts should be canonicalized to src/foo.ts
     const allFiles = commits.flatMap((c) => c.files);
     expect(allFiles).not.toContain("src/old.ts");
-    // sha3 should show src/foo.ts (the canonical name after rename)
-    const sha3 = commits.find((c) => c.sha.startsWith("sha3_"))!;
-    expect(sha3.files).toContain("src/foo.ts");
+    // sha3r commit should show src/foo.ts (the canonical name after rename)
+    const sha3commit = commits.find((c) => c.sha === sha3r)!;
+    expect(sha3commit.files).toContain("src/foo.ts");
   });
 });
 
 describe("computeTemporal", () => {
   // Build the synthetic corpus described above
-  const sha40 = (s: string) => s + "0".repeat(40 - s.length);
+  // Use valid 40-hex SHAs (a-f, 0-9 only — HEADER_RE requires /^[0-9a-f]{40}\x1f/)
+  const sha1 = "1111111111111111111111111111111111111111";
+  const sha2 = "2222222222222222222222222222222222222222";
+  const sha3 = "3333333333333333333333333333333333333333";
+  const sha4 = "4444444444444444444444444444444444444444";
+  const sha5 = "5555555555555555555555555555555555555555";
 
   // 52 extra files for the bulk commit
   const bulkFiles = Array.from({ length: 51 }, (_, i) => `src/generated_${i.toString().padStart(3, "0")}.ts`);
-
-  const sha1 = sha40("sha1");
-  const sha2 = sha40("sha2");
-  const sha3 = sha40("sha3");
-  const sha4 = sha40("sha4bulk");
-  const sha5 = sha40("sha5");
 
   // Build raw git log string (newest first)
   const raw = [

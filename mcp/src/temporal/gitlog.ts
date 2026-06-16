@@ -75,17 +75,21 @@ export function parseGitLog(raw: string): CommitRecord[] {
     current = null;
   };
 
+  /** Regex that matches a commit header token: 40 hex chars then \x1f */
+  const HEADER_RE = /^[0-9a-f]{40}\x1f/;
+
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i]!;
     // Commit headers start with \x00 then SHA\x1fDATE\x1fNAME\x1fEMAIL
     // Since we split on \x00, the header token itself (after the leading NUL
     // is consumed by split) may look like: \nSHA\x1f... or SHA\x1f...
     // The very first token before any NUL may be empty or contain a newline.
-    // A header token contains \x1f (field separator).
-    if (tok.includes("\x1f")) {
-      // This is a commit header (possibly with leading whitespace/newlines)
+    // We use a shape match (40-hex + \x1f) rather than just \x1f presence so
+    // that filenames or author fields containing \x1f don't trigger a false header.
+    const clean = tok.replace(/^\s+/, "");
+    if (HEADER_RE.test(clean)) {
+      // This is a commit header
       flush();
-      const clean = tok.replace(/^\s+/, "");
       const parts = clean.split("\x1f");
       if (parts.length >= 4) {
         current = {
@@ -259,7 +263,8 @@ export function computeTemporal(
     list.sort((a, b) => {
       if (b.confidence !== a.confidence) return b.confidence - a.confidence;
       if (b.support !== a.support) return b.support - a.support;
-      return a.path.localeCompare(b.path);
+      // Codepoint comparison for cross-locale determinism
+      return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
     });
     cochange[f] = list.slice(0, topCoChanged);
   }
@@ -274,7 +279,8 @@ export function computeTemporal(
     const authors = [...am.entries()]
       .sort(([na, ca], [nb, cb]) => {
         if (cb !== ca) return cb - ca;
-        return na.localeCompare(nb);
+        // Codepoint comparison for cross-locale determinism
+        return na < nb ? -1 : na > nb ? 1 : 0;
       })
       .slice(0, topAuthors)
       .map(([name, commits]) => ({ name, commits }));
