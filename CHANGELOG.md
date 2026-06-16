@@ -6,6 +6,46 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-16
+
+A four-reviewer security + quality audit pass, plus a hardened cold-start.
+
+### Security
+
+- **Prebuilt indexer binary is now integrity-verified** — the release publishes
+  `SHA256SUMS`, the npm package bundles per-platform digests, and the postinstall
+  fetch verifies sha256 before executing (fail-closed; never runs a mismatched
+  binary). HTTPS-only + host-allowlisted redirects, atomic temp→verify→rename, and
+  `npm publish --provenance`.
+- Indexer child process gets an explicit env allow-list (no secret leakage).
+- `init` no longer overwrites existing user git hooks (marker-gated); the JSONL
+  merge driver is registered with an absolute binary path.
+
+### Added
+
+- **Bulletproof cold-start:** `reposkein-mcp init` now **builds the initial graph**
+  (use `--no-index` to skip), and a new **`reposkein-mcp index [path]`** subcommand
+  indexes via the bundled binary (npx users no longer need `reposkein-indexer` on PATH).
+- **TS/JS barrel re-exports** (`export … from`, `export *`) → IMPORTS edges.
+- **In-file heritage:** Rust supertraits and TS `interface extends` → INHERITS.
+
+### Fixed
+
+- **Federation parity:** the zero-infra store now exposes the full transitive repo
+  set (grandchildren were silently excluded from federated reads).
+- **`semantic_find`** neutralizes summaries (closes an injection path).
+- **C#** uses the last segment of a qualified base type (`Ns.Base` → `Base`).
+- Embedding/`git log`/indexer calls are now **timeout-bounded** (no hangs; embeddings
+  fall back to lexical); embedding cache rows are validated on load + filenames
+  sanitized; `git log` header parsing is shape-anchored; the temporal cache is atomic
+  + versioned; `impact`'s test-path classifier matches the indexer.
+- TS base type-args stripped (`extends Foo<T>` resolves); Python Variable ids deduped.
+
+### Hardened
+
+- `embed-server` image runs as non-root and binds `127.0.0.1` by default.
+- A permanent guard test protects the `serde_json` sorted-keys determinism assumption.
+
 ## [0.1.3] - 2026-06-16
 
 ### Docs & packaging
