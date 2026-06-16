@@ -2,7 +2,8 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
 import { visibleClusters } from "../data/clientModel";
-import { BRAND_RGB, nodeColor } from "./encoding";
+import { BRAND_RGB, nodeColor, languageColor } from "./encoding";
+import { dominantLanguageByCluster } from "../data/language";
 import type { ClientModel } from "../data/clientModel";
 
 /** Faint additive glow behind each visible cluster so a region reads as a
@@ -26,6 +27,10 @@ export function NebulaHalos() {
   // so it's computed once per model and cached — independent of expansion.
   const extentByKey = useMemo(() => computeExtents(model), [model]);
 
+  // Per-cluster dominant language → halo tint, so multi-language repos read as
+  // language regions. Computed once per model (independent of expansion).
+  const langByKey = useMemo(() => dominantLanguageByCluster(model), [model]);
+
   const geometry = useMemo(() => {
     const visible = visibleClusters(model, store.expanded);
 
@@ -46,9 +51,16 @@ export function NebulaHalos() {
       const floor = c.kind === "galaxy" ? 26 : c.kind === "dir" ? 16 : 9;
       const size = Math.max(floor, extent * 2.2);
 
-      // Region tint: the cluster kind hue (galaxy uses brand amber) pulled
-      // toward navy so the halo is a deep glow, not a bright disc.
-      const base = c.kind === "galaxy" ? BRAND_RGB.amber : nodeColor(c.kind, c.symbolKind);
+      // Region tint: prefer the cluster's DOMINANT LANGUAGE hue so a region
+      // reads as a language region. Falls back to the cluster kind hue (galaxy
+      // uses brand amber) when no descendant file has a recognizable language.
+      // Pulled toward navy so the halo is a deep glow, not a bright disc.
+      const lang = langByKey.get(key);
+      const base = lang
+        ? languageColor(lang)
+        : c.kind === "galaxy"
+        ? BRAND_RGB.amber
+        : nodeColor(c.kind, c.symbolKind);
       const TINT = 0.34; // how much of the hue survives vs. sinking into navy
       const r = base[0] * TINT;
       const g = base[1] * TINT;
@@ -68,7 +80,7 @@ export function NebulaHalos() {
     geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     geo.setAttribute("aSize", new THREE.Float32BufferAttribute(sizes, 1));
     return geo;
-  }, [model, store.expanded, extentByKey]);
+  }, [model, store.expanded, extentByKey, langByKey]);
 
   const map = useMemo(() => haloTexture(), []);
 

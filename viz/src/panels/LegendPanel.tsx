@@ -1,10 +1,24 @@
-import { useState } from "react";
-import { EDGE_TYPE_META, NODE_KIND_META } from "../scene/encoding";
+import { useMemo, useState } from "react";
+import {
+  EDGE_TYPE_META,
+  NODE_KIND_META,
+  LANGUAGE_LABEL,
+  languageHex,
+} from "../scene/encoding";
+import { presentLanguages } from "../data/language";
+import { useStore } from "../state/store";
 
 /** Collapsible legend panel (bottom-left). Single source of truth for colors
  *  comes from encoding.ts constants so legend + scene always agree. */
 export function LegendPanel() {
   const [open, setOpen] = useState(true);
+  const store = useStore();
+  // Only the languages actually present in this graph (sorted asc). Computed
+  // once per model. The hue map (single source of truth) lives in encoding.ts.
+  const languages = useMemo(
+    () => (store.model ? presentLanguages(store.model) : []),
+    [store.model],
+  );
 
   return (
     <div
@@ -76,6 +90,35 @@ export function LegendPanel() {
             </div>
           ))}
 
+          {languages.length > 0 && (
+            <>
+              <div style={{ fontSize: 10, opacity: 0.5, marginTop: 8, marginBottom: 4 }}>
+                LANGUAGES
+              </div>
+              {languages.map((lang) => (
+                <div
+                  key={lang}
+                  style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}
+                  title="Galaxy / nebula halos are tinted by their dominant language"
+                >
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 10,
+                      height: 10,
+                      borderRadius: "50%",
+                      background: languageHex(lang),
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ color: "rgba(255,255,255,0.75)" }}>
+                    {LANGUAGE_LABEL[lang] ?? lang}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+
           <div
             style={{
               marginTop: 8,
@@ -86,7 +129,7 @@ export function LegendPanel() {
               paddingTop: 6,
             }}
           >
-            Edge opacity = confidence
+            Edge opacity = confidence · halo tint = language
           </div>
         </div>
       )}

@@ -57,6 +57,43 @@ export function nodeColor(clusterKind: ClusterKind, symbolKind?: string): RGB {
   }
 }
 
+/** Per-language hue map — the SINGLE SOURCE OF TRUTH for language coloring.
+ *  Each known programming language gets a distinct, legible hue used to tint
+ *  cluster nebula halos so multi-language repos read as language regions. Keys
+ *  are the normalized language names emitted by the engine (lower-case). An
+ *  unknown language falls back to LANGUAGE_DEFAULT (a neutral slate). */
+export const LANGUAGE_HEX: Record<string, string> = {
+  rust: "#ff7a45",       // ember orange
+  python: "#4b8bff",     // python blue
+  typescript: "#3aa0ff", // TS azure
+  javascript: "#f4d03f", // JS yellow
+  go: "#39c5cf",         // gopher cyan
+  java: "#e76f51",       // terracotta
+  csharp: "#9b6dff",     // .NET violet
+};
+export const LANGUAGE_DEFAULT_HEX = "#8a93a8"; // neutral slate for unknowns
+
+/** Human labels for the legend (only those actually present are shown). */
+export const LANGUAGE_LABEL: Record<string, string> = {
+  rust: "Rust",
+  python: "Python",
+  typescript: "TypeScript",
+  javascript: "JavaScript",
+  go: "Go",
+  java: "Java",
+  csharp: "C#",
+};
+
+/** Hex (string) hue for a normalized language name, with the neutral fallback. */
+export function languageHex(language: string): string {
+  return LANGUAGE_HEX[language] ?? LANGUAGE_DEFAULT_HEX;
+}
+
+/** Pre-parsed RGB hue for a language (for the GPU halo buffer). */
+export function languageColor(language: string): RGB {
+  return hex(languageHex(language));
+}
+
 const EDGE_HUE: Record<string, RGB> = {
   CALLS: hex("#ffd166"),
   IMPORTS: hex("#6ea8ff"),
