@@ -78,7 +78,7 @@ In the repo you want your agent to understand:
 npx @reposkein/mcp init
 ```
 
-This downloads the indexer for your platform, installs git hooks + the navigation skill, and prints an MCP config block. Then:
+This downloads the indexer for your platform, installs git hooks + the navigation skill, **builds the initial code graph**, and prints an MCP config block. Then:
 
 1. **Add the printed config to your agent** (e.g. Claude Code's `.mcp.json`):
    ```jsonc
@@ -91,12 +91,12 @@ This downloads the indexer for your platform, installs git hooks + the navigatio
      }
    }
    ```
-2. **Build the graph and commit it:**
+2. **Verify and commit the graph** (`init` already built it):
    ```sh
-   reposkein-indexer index .      # writes .reposkein/
    reposkein-mcp doctor .         # ✓ binary  ✓ indexed (N nodes)  ✓ ready
    git add .reposkein && git commit -m "add RepoSkein code graph"
    ```
+   Re-index after big changes with `reposkein-mcp index .` (or the agent's `reindex_file` tool).
 3. **Ask your agent** *"what calls this function?"* or *"what breaks if I change X?"* — it answers from the graph.
 
 > **Prefer to let your agent set it up?** Install the [skills](#agent-skills) and tell it to **run the `reposkein-setup` skill** — it installs, indexes, and verifies everything:

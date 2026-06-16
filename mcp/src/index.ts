@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { runInit } from "./cli/init.js";
+import { runInit, runIndex } from "./cli/init.js";
 import { runDoctor } from "./cli/doctor.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -236,7 +236,15 @@ export async function main(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1]!).href) {
   const sub = process.argv[2];
   if (sub === "init") {
-    runInit(process.argv[3] ?? ".")
+    const rest = process.argv.slice(3);
+    const noIndex = rest.includes("--no-index");
+    const path = rest.find((a) => !a.startsWith("-")) ?? ".";
+    runInit(path, { index: !noIndex })
+      .then((code) => process.exit(code))
+      .catch((err) => { console.error(err); process.exit(1); });
+  } else if (sub === "index") {
+    const path = process.argv.slice(3).find((a) => !a.startsWith("-")) ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+    runIndex(path)
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
   } else if (sub === "doctor") {

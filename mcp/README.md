@@ -43,12 +43,12 @@ That downloads the indexer, sets up git hooks, installs the agent skill, and pri
 }
 ```
 
-Build the graph, verify, and commit it:
+`init` already built the graph — verify and commit it:
 
 ```sh
-reposkein-indexer index .     # writes .reposkein/
 reposkein-mcp doctor .        # ✓ binary  ✓ indexed (N nodes)  ✓ ready
 git add .reposkein && git commit -m "add RepoSkein code graph"
+# re-index after big changes:  reposkein-mcp index .
 ```
 
 Then ask your agent *"what calls this function?"* or *"what breaks if I change X?"* — it answers from the graph.
