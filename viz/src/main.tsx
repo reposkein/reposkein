@@ -12,8 +12,8 @@ import { Root } from "./routes/Root";
 
 const queryClient = new QueryClient();
 
-// TanStack Router: a root layout + the index route. Node deep-links
-// (/n/$nodeId) are reserved for M2 search-to-fly; M1 routes to the viewer.
+// TanStack Router: a root layout + the index route.
+// The ?node=<id> search param enables deep-linking to a specific node.
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
@@ -21,6 +21,9 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  validateSearch: (search: Record<string, unknown>) => ({
+    node: typeof search.node === "string" ? search.node : undefined,
+  }),
   component: Root,
 });
 
