@@ -265,11 +265,14 @@ export class JsonlGraphStore implements GraphStore {
   async federatedRepoIds(repoId: string): Promise<string[]> {
     this.ensureFresh();
     if (repoId !== this.repoId) return [];
+    // Return ALL loaded repo ids except the root — collectRepos already walks
+    // the full transitive closure (root → children → grandchildren …), so the
+    // set of distinct repoIds present in graph.nodes is exactly the transitive
+    // federated set.  This matches Neo4jGraphStore's FEDERATES_TO*1..8 semantics.
     const ids: string[] = [];
     for (const n of this.graph.nodes) {
-      if (n.repoId === this.repoId && hasLabel(n, "Repository")) {
-        const fid = str(n.props.federated_repo_id);
-        if (fid) ids.push(fid);
+      if (n.repoId !== this.repoId && !ids.includes(n.repoId)) {
+        ids.push(n.repoId);
       }
     }
     return ids;
