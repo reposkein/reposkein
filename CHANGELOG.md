@@ -6,6 +6,29 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-06-16
+
+### Added
+
+- **`INSTANTIATES` now covers Rust and Go construction idioms.** Rust
+  associated-function constructors (`Foo::new()`, when `Foo` resolves to a
+  repo class — `Vec::new()` and other external types are correctly skipped) and
+  Go composite literals (`Foo{}`, `&Foo{}`, `pkg.Foo{}`) emit `INSTANTIATES`
+  edges, alongside the existing `new Foo()` (TS/JS/Java/C#), Rust struct
+  literals, and Python class-name calls. Anonymous composite literals
+  (`[]int{}`, `map[string]int{}`) are not construction and emit nothing.
+
+### Changed
+
+- Extract-cache schema bumped 11 → 12 (Rust `Foo::new()` + Go composite-literal
+  construction sites changed extractor output).
+
+### CI
+
+- The CI workflow declares least-privilege `permissions: contents: read`
+  (resolves the CodeQL "workflow does not contain permissions" findings), and
+  all workflows opt node20-declaring actions into the Node 24 runtime.
+
 ## [0.1.5] - 2026-06-16
 
 Deeper structural resolution: heritage now crosses files **and** repos, plus a new
