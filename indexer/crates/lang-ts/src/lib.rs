@@ -19,12 +19,13 @@ pub fn extract_module(ctx: &FileContext) -> ExtractOutput {
     let imports = imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
     let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.source);
     w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
-    w.finalize_heritage();
+    w.lower_heritage();
     ExtractOutput {
         nodes: w.nodes,
         edges: w.edges,
         imports,
         calls: w.calls,
+        heritage: w.heritage,
     }
 }
 

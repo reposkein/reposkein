@@ -24,6 +24,7 @@ pub struct Walk<'a> {
     used: HashMap<String, u32>,
     declared: std::collections::HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
+    pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
 }
 
 /// TS/JS `@arity`: named children of `parameters` whose kind ends in
@@ -93,6 +94,7 @@ impl<'a> Walk<'a> {
             used: HashMap::new(),
             declared: std::collections::HashMap::new(),
             pending_heritage: Vec::new(),
+            heritage: Vec::new(),
         }
     }
 
@@ -374,10 +376,18 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// Resolves deferred heritage edges (call once after the top-level walk).
-    pub fn finalize_heritage(&mut self) {
-        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
-        self.edges.extend(e);
+    /// Lowers pending heritage → RawHeritage (from-side resolved in-file; base
+    /// resolved repo-wide by core::resolve). Call once after the top-level walk.
+    pub fn lower_heritage(&mut self) {
+        let from_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
+        let mut raw = reposkein_core::heritage::lower(
+            &self.pending_heritage,
+            &self.declared,
+            self.rel_path,
+            &from_file_id,
+            false,
+        );
+        self.heritage.append(&mut raw);
     }
 }
 
@@ -390,7 +400,7 @@ mod tests {
         let tree = parse(src, false).unwrap(); // .ts grammar
         let mut w = Walk::new("r", "m.ts", src);
         w.walk(tree.root_node(), &[], "rs1:r:file:m.ts", ScopeKind::Module);
-        w.finalize_heritage();
+        w.lower_heritage();
         w
     }
 
@@ -424,12 +434,18 @@ mod tests {
         let src =
             b"class Base {}\ninterface Greeter {}\nclass Svc extends Base implements Greeter {}\n";
         let w = run(src);
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc"
-            && e.typ == "INHERITS"
-            && e.to == "rs1:r:class:m.ts#Base"));
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.ts#Svc"
-            && e.typ == "IMPLEMENTS"
-            && e.to == "rs1:r:iface:m.ts#Greeter"));
+        assert!(w
+            .heritage
+            .iter()
+            .any(|h| h.from_id == "rs1:r:class:m.ts#Svc"
+                && h.edge_type == "INHERITS"
+                && h.base_name == "Base"));
+        assert!(w
+            .heritage
+            .iter()
+            .any(|h| h.from_id == "rs1:r:class:m.ts#Svc"
+                && h.edge_type == "IMPLEMENTS"
+                && h.base_name == "Greeter"));
     }
 
     #[test]
@@ -482,11 +498,10 @@ mod tests {
                 .map(|n| n.id.clone())
         };
         let leaf = id("Leaf").unwrap();
-        let mid = id("Mid").unwrap();
         assert!(w
-            .edges
+            .heritage
             .iter()
-            .any(|e| e.from == leaf && e.typ == "INHERITS" && e.to == mid));
+            .any(|h| h.from_id == leaf && h.edge_type == "INHERITS" && h.base_name == "Mid"));
     }
 
     #[test]
@@ -566,9 +581,9 @@ mod tests {
             .find(|n| n.id == "rs1:r:iface:m.ts#B")
             .expect("interface B");
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.from == a.id && e.typ == "INHERITS" && e.to == b.id),
+                .any(|h| h.from_id == a.id && h.edge_type == "INHERITS" && h.base_name == "B"),
             "A must INHERITS B"
         );
     }
@@ -578,16 +593,14 @@ mod tests {
         // `interface A extends B, C {}` → INHERITS A→B, A→C
         let w = run(b"interface B {}\ninterface C {}\ninterface A extends B, C {}\n");
         let a_id = "rs1:r:iface:m.ts#A";
-        let b_id = "rs1:r:iface:m.ts#B";
-        let c_id = "rs1:r:iface:m.ts#C";
         assert!(w
-            .edges
+            .heritage
             .iter()
-            .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == b_id));
+            .any(|h| h.from_id == a_id && h.edge_type == "INHERITS" && h.base_name == "B"));
         assert!(w
-            .edges
+            .heritage
             .iter()
-            .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == c_id));
+            .any(|h| h.from_id == a_id && h.edge_type == "INHERITS" && h.base_name == "C"));
     }
 
     #[test]
@@ -607,9 +620,9 @@ mod tests {
             .map(|n| n.id.clone())
             .expect("class Base");
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.from == c_id && e.typ == "INHERITS" && e.to == base_id),
+                .any(|h| h.from_id == c_id && h.edge_type == "INHERITS" && h.base_name == "Base"),
             "C must INHERITS Base (type args stripped)"
         );
     }
