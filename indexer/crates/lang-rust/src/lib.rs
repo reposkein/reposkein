@@ -134,8 +134,7 @@ mod tests {
     #[test]
     fn foo_new_construction_extraction_is_deterministic() {
         use reposkein_core::extractor::{Extractor, FileContext};
-        let src =
-            b"struct A; impl A { fn new() -> A { A } } fn run() { let _ = A::new(); }";
+        let src = b"struct A; impl A { fn new() -> A { A } } fn run() { let _ = A::new(); }";
         let ctx = FileContext {
             repo: "r",
             rel_path: "m.rs",
@@ -175,7 +174,10 @@ mod tests {
             "r",
         );
         let has_instantiates = edges.iter().any(|e| e.typ == "INSTANTIATES");
-        assert!(has_instantiates, "Foo::new() must resolve to INSTANTIATES edge");
+        assert!(
+            has_instantiates,
+            "Foo::new() must resolve to INSTANTIATES edge"
+        );
         // CALLS edge to Foo.new() method should also exist (complementary).
         let has_calls_to_new = edges.iter().any(|e| e.typ == "CALLS");
         assert!(

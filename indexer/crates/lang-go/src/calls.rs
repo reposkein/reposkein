@@ -154,7 +154,11 @@ mod tests {
         let body = func.child_by_field_name("body").unwrap();
         let mut constructions: Vec<RawConstruction> = Vec::new();
         collect_constructions(body, src, "cid", "pkg/m.go", "fid", &mut constructions);
-        assert_eq!(constructions.len(), 1, "Foo{{}} must emit 1 RawConstruction");
+        assert_eq!(
+            constructions.len(),
+            1,
+            "Foo{{}} must emit 1 RawConstruction"
+        );
         assert_eq!(constructions[0].class_name, "Foo");
     }
 

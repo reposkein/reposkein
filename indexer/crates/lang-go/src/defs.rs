@@ -804,8 +804,7 @@ mod tests {
             None
         }
 
-        let unary =
-            find_unary(tree.root_node()).expect("unary_expression not found for &Foo{}");
+        let unary = find_unary(tree.root_node()).expect("unary_expression not found for &Foo{}");
         // The operand field should be composite_literal
         let operand = unary
             .child_by_field_name("operand")
@@ -838,9 +837,11 @@ mod tests {
             None
         }
 
-        let cl = find_composite(tree.root_node())
-            .expect("composite_literal not found for pkg.Foo{}");
-        let ty = cl.child_by_field_name("type").expect("must have type field");
+        let cl =
+            find_composite(tree.root_node()).expect("composite_literal not found for pkg.Foo{}");
+        let ty = cl
+            .child_by_field_name("type")
+            .expect("must have type field");
         assert_eq!(
             ty.kind(),
             "qualified_type",
@@ -873,9 +874,10 @@ mod tests {
             None
         }
 
-        let cl = find_composite(tree.root_node())
-            .expect("composite_literal not found for []int{}");
-        let ty = cl.child_by_field_name("type").expect("must have type field");
+        let cl = find_composite(tree.root_node()).expect("composite_literal not found for []int{}");
+        let ty = cl
+            .child_by_field_name("type")
+            .expect("must have type field");
         assert_eq!(
             ty.kind(),
             "slice_type",

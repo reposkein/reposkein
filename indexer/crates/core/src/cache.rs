@@ -175,8 +175,7 @@ mod tests {
         // Bumped 11→12: Rust Foo::new() associated-function constructors +
         // Go composite-literal INSTANTIATES sites change extractor output.
         assert_eq!(
-            EXTRACT_CACHE_SCHEMA,
-            12,
+            EXTRACT_CACHE_SCHEMA, 12,
             "bump cache schema when extractor output changes"
         );
     }

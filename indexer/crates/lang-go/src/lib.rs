@@ -125,7 +125,10 @@ mod resolve_tests {
         let inst = edges.iter().find(|e| e.typ == "INSTANTIATES");
         assert!(inst.is_some(), "Foo{{}} must resolve to INSTANTIATES edge");
         let inst = inst.unwrap();
-        assert!(inst.to.contains("Foo"), "INSTANTIATES must point to Foo class node");
+        assert!(
+            inst.to.contains("Foo"),
+            "INSTANTIATES must point to Foo class node"
+        );
     }
 
     #[test]
@@ -166,8 +169,7 @@ mod resolve_tests {
             source: b"package p\nfunc caller() { _ = []int{1, 2} }\n",
         };
         let out = GoExtractor.extract(&ctx);
-        let (edges, _, _) =
-            resolve_full(&out.nodes, &[], &[], &[], &[], &out.constructions, "r");
+        let (edges, _, _) = resolve_full(&out.nodes, &[], &[], &[], &[], &out.constructions, "r");
         assert!(
             !edges.iter().any(|e| e.typ == "INSTANTIATES"),
             "[]int{{}} must NOT produce INSTANTIATES edge"

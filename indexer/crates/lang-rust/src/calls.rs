@@ -216,7 +216,8 @@ mod tests {
     #[test]
     fn foo_new_emits_raw_construction() {
         // Foo::new() in a function body must emit RawConstruction{class_name:"Foo"}.
-        let src = b"struct Foo; impl Foo { fn new() -> Foo { Foo } } fn caller() { let x = Foo::new(); }";
+        let src =
+            b"struct Foo; impl Foo { fn new() -> Foo { Foo } } fn caller() { let x = Foo::new(); }";
         let tree = parse(src).unwrap();
         // caller() is the last top-level function_item
         let root = tree.root_node();
@@ -227,7 +228,14 @@ mod tests {
             .unwrap();
         let body = caller.child_by_field_name("body").unwrap();
         let mut constructions = Vec::new();
-        collect_constructions(body, src, "caller_id", "m.rs", "file_id", &mut constructions);
+        collect_constructions(
+            body,
+            src,
+            "caller_id",
+            "m.rs",
+            "file_id",
+            &mut constructions,
+        );
         assert_eq!(
             constructions.len(),
             1,
@@ -241,7 +249,8 @@ mod tests {
     fn foo_new_does_not_suppress_raw_call() {
         // Foo::new() must ALSO produce a RawCall (CALLS edge to the method); we verify
         // that collect_calls still sees it alongside the RawConstruction.
-        let src = b"struct Foo; impl Foo { fn new() -> Foo { Foo } } fn caller() { let x = Foo::new(); }";
+        let src =
+            b"struct Foo; impl Foo { fn new() -> Foo { Foo } } fn caller() { let x = Foo::new(); }";
         let tree = parse(src).unwrap();
         let root = tree.root_node();
         let caller = root
@@ -284,8 +293,7 @@ mod tests {
 
     #[test]
     fn construction_new_is_deterministic() {
-        let src =
-            b"struct A; impl A { fn new() -> A { A } } fn run() { let _ = A::new(); }";
+        let src = b"struct A; impl A { fn new() -> A { A } } fn run() { let _ = A::new(); }";
         let tree = parse(src).unwrap();
         let root = tree.root_node();
         let func = root
