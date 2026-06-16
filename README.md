@@ -146,17 +146,17 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
 
 ## Supported languages
 
-| Language | Definitions | Imports | Calls |
+| Language | Definitions | Imports → edges | Cross-file calls |
 | --- | --- | --- | --- |
-| Python | classes, functions (decorators, nested) | ✅ (aliased) | ✅ |
-| TypeScript / TSX | classes, interfaces, enums | ✅ (aliased) | ✅ |
-| JavaScript / JSX | ✅ | ✅ | ✅ |
-| Rust | structs, traits, enums, `impl` methods | ✅ `use` (groups, aliases, globs, `pub use` re-exports; workspace-aware) | ✅ |
-| Go | funcs, methods (`Type.method`), structs, interfaces | intra-package; cross-package planned | ✅ |
-| Java | classes, interfaces, enums, methods, constructors | ✅ package-path | ✅ |
-| C# | classes, interfaces, structs, records, enums, methods, properties | intra-dir; cross-namespace planned | ✅ |
+| Python | functions, classes, methods, nested defs, vars | ✅ relative / absolute / aliased | import-resolved (`exact`) |
+| TypeScript / TSX | classes, interfaces, enums, methods, arrows | ✅ named / default / aliased / `* as ns` | import-resolved (`exact`) |
+| JavaScript / JSX | *(via the TS grammar)* | ✅ ES imports *(no CommonJS yet)* | import-resolved (`exact`) |
+| Rust | fns, structs, traits, enums, `impl` methods | ✅ `use` (groups, aliases, globs, `pub use` chains; workspace-aware) | import-resolved (`exact`) |
+| Go | funcs, methods (`Type.method`), structs, interfaces | *not yet (cross-package planned)* | same-package (same-dir); cross-package by name |
+| Java | classes, records, interfaces, enums, methods, constructors, fields | ✅ package-path *(no wildcard/static yet)* | import-resolved (`exact`) |
+| C# | classes, structs, records, interfaces, enums, methods, properties | *not yet (cross-namespace planned)* | same-dir; cross-namespace by name |
 
-Every call edge is labeled with how it was resolved (`exact` / `name_match` / `ambiguous`) and a confidence, so the agent knows what to trust. [Adding a language](CONTRIBUTING.md) is a small, well-trodden path — contributions welcome.
+**What resolves — honestly.** Every edge carries a `resolution` (`exact` / `name_match` / `ambiguous`) + confidence, so your agent knows what to trust. Same-file calls, `self`/`this` methods, and **import-followed free-function calls resolve `exact`**. Because the graph is **type-free by design** (deterministic, no compiler in the loop), **method calls (`obj.method()`) resolve by name** (≤ `name_match`), overloaded calls are flagged `ambiguous`, and **cross-file inheritance isn't linked yet**. Go and C# don't emit import edges yet, so their cross-package/namespace calls resolve by name (same-package/-directory calls *do* resolve). These limits are inherent to the zero-infra, type-free design; an optional type-aware layer (SCIP/LSP) is on the roadmap. [Adding a language](CONTRIBUTING.md) is a well-trodden path — contributions welcome.
 
 ## How it works
 
