@@ -39,7 +39,8 @@
   "files": [
     "dist",
     "scripts",
-    "bin"
+    "bin",
+    "binary-digests.json"
   ],
   "scripts": {
     "build": "tsc",
