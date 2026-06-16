@@ -199,7 +199,11 @@ impl<'a> Walk<'a> {
                                     } else {
                                         module_var_kind(&name)
                                     };
+                                    // Route through unique() to ordinal-disambiguate
+                                    // reassigned module/class vars (mirrors how
+                                    // Function ids are deduplicated — PRD §5.3).
                                     let id = self.var_id(&qualified);
+                                    let id = self.unique(id);
                                     self.nodes.push(
                                         Node::new(id.clone(), "Variable")
                                             .set("name", json!(name))
@@ -429,5 +433,31 @@ mod tests {
                 .any(|e| e.from == b.id && e.typ == "INHERITS" && e.to == a.id),
             "nested B(A) should INHERITS the sibling Outer.A (was previously dropped)"
         );
+    }
+
+    #[test]
+    fn variable_reassignment_gets_unique_ids() {
+        // Two module-level assignments to the same name → two Variable nodes
+        // with distinct ids (…#x and …#x.1) instead of a silent dedup.
+        let src = b"x = 1\nx = 2\n";
+        let w = run(src);
+        let var_ids: Vec<&str> = w
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Variable"])
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(var_ids.len(), 2, "both assignments must produce a Variable node");
+        assert!(var_ids.contains(&"rs1:r:var:m.py#x"), "first occurrence");
+        assert!(
+            var_ids.iter().any(|id| id.starts_with("rs1:r:var:m.py#x.")),
+            "second occurrence gets ordinal suffix"
+        );
+        // All ids must be unique.
+        let unique_count = var_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert_eq!(unique_count, 2, "ids must be distinct");
     }
 }
