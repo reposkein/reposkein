@@ -142,7 +142,6 @@ function View() {
       {store.status.kind === "ready" && <DetailPanel />}
       {store.status.kind === "ready" && <LensSwitcher />}
       {store.status.kind === "ready" && <FilterHUD />}
-      {store.status.kind === "ready" && <SearchPanel />}
       {store.status.kind === "ready" && <LegendPanel />}
       {store.status.kind === "loading" && <Overlay text={`Charting the sky… (${store.status.phase})`} />}
       {store.status.kind === "error" && <Overlay text={`Error: ${store.status.message}`} error />}
@@ -196,6 +195,7 @@ function HeaderBar() {
       <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>
         scroll = zoom · drag = orbit · click cluster = expand · click star = inspect · Esc / click space = back
       </div>
+      {store.model && <SearchPanel />}
     </div>
   );
 }
@@ -255,7 +255,7 @@ function Breadcrumb() {
     <div
       style={{
         position: "absolute",
-        top: 100,
+        top: 132,
         left: 12,
         display: "flex",
         alignItems: "center",

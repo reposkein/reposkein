@@ -54,7 +54,7 @@ export function SearchPanel() {
   if (!model) return null;
 
   return (
-    <div style={{ position: "fixed", top: 12, left: 220, zIndex: 25 }}>
+    <div style={{ position: "relative", marginTop: 8, zIndex: 25 }}>
       <div style={{ position: "relative" }}>
         <input
           ref={inputRef}
