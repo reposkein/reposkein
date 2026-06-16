@@ -1,22 +1,53 @@
-import { useMemo, useRef } from "react";
-import { type ThreeEvent } from "@react-three/fiber";
+import { useEffect, useMemo, useRef } from "react";
+import { type ThreeEvent, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { useStore } from "../state/store";
-import { visibleClusters } from "../data/clientModel";
+import { representativeFor, visibleClusters } from "../data/clientModel";
 import { nodeColor, nodeSize } from "./encoding";
+
+/** Emissive brightness multiplier so stars push past the bloom luminance
+ *  threshold and glow. */
+const EMISSIVE_GAIN = 1.9;
+/** Entrance animation duration (seconds): stars fade + scale in on first load
+ *  while the camera eases to its fitted view. */
+const ENTRANCE_SEC = 1.1;
 
 /** The star-field: one THREE.Points buffer for every currently-visible
  *  cluster representative (collapsed clusters render as a single glow point;
- *  expanded clusters render their children). Click → select/expand. */
+ *  expanded clusters render their children). Click → select/expand;
+ *  hover → highlight the 1-hop neighborhood and dim the rest. */
 export function StarField() {
   const store = useStore();
   const model = store.model!;
   const pointsRef = useRef<THREE.Points>(null);
+  const materialRef = useRef<THREE.PointsMaterial>(null);
+  const hovered = store.hovered;
 
   const visible = useMemo(
     () => [...visibleClusters(model, store.expanded)],
     [model, store.expanded]
   );
+
+  // Visible representatives that should stay BRIGHT while hovering: the hovered
+  // node's representative + the representatives of its 1-hop neighbors.
+  const highlightKeys = useMemo(() => {
+    if (!hovered) return null;
+    const visibleSet = new Set(visible);
+    const repOf = (nodeId: string) => representativeFor(model, nodeId, visibleSet);
+    const set = new Set<string>();
+    const self = repOf(hovered);
+    if (self) set.add(self);
+    for (const e of model.drawEdges) {
+      if (e.from === hovered) {
+        const r = repOf(e.to);
+        if (r) set.add(r);
+      } else if (e.to === hovered) {
+        const r = repOf(e.from);
+        if (r) set.add(r);
+      }
+    }
+    return set;
+  }, [hovered, model, visible]);
 
   const { geometry, keysAt } = useMemo(() => {
     const n = visible.length;
@@ -34,7 +65,14 @@ export function StarField() {
       positions[i * 3 + 2] = model.positions[idx * 3 + 2]!;
       const c = model.byKey.get(key)!;
       const deg = c.nodeId ? (model.records.get(c.nodeId)?.degree ?? 0) : 0;
-      const [r, g, b] = nodeColor(c.kind, c.symbolKind);
+      let [r, g, b] = nodeColor(c.kind, c.symbolKind);
+      // Dim stars outside the hovered neighborhood; brighten everything (gain)
+      // so the brightest cores bloom.
+      let gain = EMISSIVE_GAIN;
+      if (highlightKeys && !highlightKeys.has(key)) gain *= 0.22;
+      r *= gain;
+      g *= gain;
+      b *= gain;
       colors[i * 3] = r;
       colors[i * 3 + 1] = g;
       colors[i * 3 + 2] = b;
@@ -45,7 +83,27 @@ export function StarField() {
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
     return { geometry: geo, keysAt };
-  }, [visible, model]);
+  }, [visible, model, highlightKeys]);
+
+  // Entrance animation: ease opacity + point size from 0 on first appearance.
+  const entranceStart = useRef<number | null>(null);
+  useEffect(() => {
+    entranceStart.current = performance.now();
+  }, []);
+
+  useFrame(() => {
+    const mat = materialRef.current;
+    if (!mat) return;
+    const start = entranceStart.current;
+    let t = 1;
+    if (start !== null) {
+      t = Math.min(1, (performance.now() - start) / 1000 / ENTRANCE_SEC);
+      // ease-out cubic
+      t = 1 - Math.pow(1 - t, 3);
+    }
+    mat.opacity = 0.95 * t;
+    mat.size = 3 * (0.3 + 0.7 * t);
+  });
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
@@ -56,9 +114,11 @@ export function StarField() {
     const c = model.byKey.get(key);
     if (!c) return;
     if (c.kind === "symbol") {
+      // Frame the star + open the detail panel.
       store.select(c.nodeId ?? key);
     } else {
-      // Expand/collapse cluster, and select its backing node if any.
+      // Expand/collapse cluster, select its backing node if any. toggleExpand
+      // bumps fitNonce so the camera refits to the new children.
       store.toggleExpand(key);
       if (c.nodeId) store.select(c.nodeId);
     }
@@ -74,31 +134,29 @@ export function StarField() {
 
   const handleOut = () => store.hover(null);
 
-  const material = useMemo(
-    () =>
-      new THREE.PointsMaterial({
-        size: 3,
-        sizeAttenuation: true,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.95,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        map: glowTexture(),
-      }),
-    []
-  );
+  const glow = useMemo(() => glowTexture(), []);
 
   return (
     <points
       ref={pointsRef}
       geometry={geometry}
-      material={material}
       onClick={handleClick}
       onPointerMove={handleMove}
       onPointerOut={handleOut}
       raycast={pointsRaycast}
-    />
+    >
+      <pointsMaterial
+        ref={materialRef}
+        size={3}
+        sizeAttenuation
+        vertexColors
+        transparent
+        opacity={0.95}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        map={glow}
+      />
+    </points>
   );
 }
 
