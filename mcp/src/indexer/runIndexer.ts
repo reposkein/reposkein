@@ -1,5 +1,17 @@
 import { spawn } from "node:child_process";
 
+const ALLOWED_KEYS = new Set(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD"]);
+
+function buildChildEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (ALLOWED_KEYS.has(k) || k.startsWith("REPOSKEIN_")) {
+      env[k] = v;
+    }
+  }
+  return env;
+}
+
 export interface SpawnResult {
   code: number;
   stdout: string;
@@ -20,7 +32,7 @@ export function repoPath(): string {
 
 export function spawnIndexer(bin: string, args: string[]): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { env: process.env });
+    const child = spawn(bin, args, { env: buildChildEnv() });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d.toString()));
