@@ -61,6 +61,25 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 
 CLI: `reposkein-mcp init` (set up a repo) and `reposkein-mcp doctor` (health check).
 
+## How your agent uses it
+
+You ask in plain language; the bundled skill drives the tools:
+
+1. **`semantic_find`** — find where to start by meaning (*"where's the rate limiter?"*).
+2. **`get_context_profile`** — callers + callees of a function/class as ready-to-read prose.
+3. **`impact`** — before editing: transitive callers (what breaks) + the tests that cover it.
+4. **`get_temporal_context`** — files that historically change together, plus churn/ownership.
+5. **`write_semantic_summary`** — record understanding onto the node (committed to git).
+6. **`reindex_file`** — refresh after an edit.
+
+Install the cross-agent skills so your agent knows when to use each:
+
+```sh
+npx skills add reposkein/reposkein --all
+```
+
+(`reposkein-mcp init` already installs the navigation skill for Claude Code; this adds it to Cursor, Codex, and 70+ other agents.)
+
 ## Configuration
 
 | Env var | Purpose |

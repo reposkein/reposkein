@@ -6,6 +6,8 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-16
+
 ### Added
 
 - **`semantic_find`** — find where to start: rank functions/classes by a

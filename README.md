@@ -76,6 +76,21 @@ In a deterministic, no-LLM [benchmark](mcp/bench/), RepoSkein surfaces the right
 
 ---
 
+## Working with your agent
+
+Once RepoSkein is wired in, your agent navigates the graph instead of grepping. The natural loop — you just ask in plain language, the bundled skill drives the tools:
+
+1. **Find where to start** — `semantic_find("jwt auth validation")` ranks the right functions/classes by meaning, so the agent doesn't need to know the symbol name. *("where's the rate limiter?")*
+2. **Understand it** — `get_context_profile` returns the resolved node's callers + callees as ready-to-read prose. `hops: 2` widens the neighborhood; `federated: true` spans nested repos.
+3. **Before you change it** — `impact` lists the transitive callers (what could break) split from the tests that cover it (what to run). *("what breaks if I change `charge()`?")*
+4. **What moves with it** — `get_temporal_context` surfaces files that historically change together (co-change), plus churn and ownership. *("what usually changes with the auth config?")*
+5. **Record what you learned** — `write_semantic_summary` attaches a 1–3 sentence note to the node, committed to git so the next agent and your teammates start ahead.
+6. **After editing** — `reindex_file` refreshes the graph for the file you changed.
+
+You rarely call these by hand — the **`reposkein-graph-rag` skill** teaches your agent *when* to use each. See [Agent skills](#agent-skills-skillssh).
+
+---
+
 ## Supported languages
 
 | Language | Definitions | Imports | Calls |
@@ -98,8 +113,9 @@ Every call edge is labeled with how it was resolved (`exact` / `name_match` / `a
  Your agent (Claude Code / Cursor / …)   ── guided by the reposkein skill
         │  MCP
         ▼
- @reposkein/mcp        get_context_profile · read_cypher · write_semantic_summary
-   (TypeScript)        init_cpg_skeleton · reindex_file   |   CLI: init · doctor
+ @reposkein/mcp        semantic_find · get_context_profile · impact · get_temporal_context
+   (TypeScript)        read_cypher · write_semantic_summary · init_cpg_skeleton · reindex_file
+                       CLI: init · doctor
         │ reads
         ▼
  .reposkein/*.jsonl   ← the code graph, committed to git (zero-infra, in-memory store)
@@ -164,6 +180,21 @@ Embedding vectors are cached in `.reposkein/local/embeddings/` (gitignored — n
 > **Privacy:** with `REPOSKEIN_EMBED_PROVIDER=voyage`, code text is sent to Voyage AI's API. For offline operation, use the `http` provider with a local model (e.g. `voyage-4-nano` via [huggingface.co/voyageai/voyage-4-nano](https://huggingface.co/voyageai/voyage-4-nano)).
 
 See [`mcp/README.md`](mcp/README.md#optional-semantic-embeddings) for full configuration details.
+
+---
+
+## Agent skills (skills.sh)
+
+RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — install into Claude Code, Cursor, Codex, and 70+ agents with one command:
+
+```sh
+npx skills add reposkein/reposkein --all
+```
+
+- **`reposkein-setup`** — installs RepoSkein in a repo and **verifies it's running** (binary → `.reposkein/` index → MCP reachability). Ask your agent to run it and it does the whole setup for you.
+- **`reposkein-graph-rag`** — teaches your agent *when* to use each tool (the [loop above](#working-with-your-agent)): `semantic_find` to start, `get_context_profile` / `impact` / `get_temporal_context` to navigate, `write_semantic_summary` to record understanding. `reposkein-mcp init` installs this skill automatically; the command above also adds it to non-Claude agents.
+
+The skills are *procedural knowledge* — the runtime is the `@reposkein/mcp` package. See [`skills/`](skills/).
 
 ---
 
