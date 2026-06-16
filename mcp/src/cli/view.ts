@@ -45,8 +45,12 @@ function buildManifest(repoId: string): string {
   return JSON.stringify({
     root: {
       repoId,
-      nodesUrl: "api/jsonl/nodes.jsonl",
-      edgesUrl: "api/jsonl/edges.jsonl",
+      // Absolute-from-origin (leading slash): these are fetched inside a Web
+      // Worker whose base URL is the worker script's location (/assets/...),
+      // not the document root — relative paths would resolve to /assets/api/...
+      // and hit the SPA catch-all (HTML), breaking JSON parsing.
+      nodesUrl: "/api/jsonl/nodes.jsonl",
+      edgesUrl: "/api/jsonl/edges.jsonl",
     },
     federated: [], // M1: single repo. Federation deferred to M3.
     counts: { nodes: 0, edges: 0 }, // counts are advisory; the client re-derives.

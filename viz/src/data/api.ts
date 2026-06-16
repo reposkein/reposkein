@@ -7,8 +7,11 @@ export interface GraphManifest {
 }
 
 export async function fetchManifest(): Promise<GraphManifest> {
-  const res = await fetch("api/graph");
-  if (!res.ok) throw new Error(`GET api/graph -> ${res.status}`);
+  // Absolute-from-origin: fetchManifest may run inside a Web Worker (base URL
+  // = the worker script's /assets/ dir), so a relative "api/graph" would
+  // resolve to /assets/api/graph and hit the SPA catch-all.
+  const res = await fetch("/api/graph");
+  if (!res.ok) throw new Error(`GET /api/graph -> ${res.status}`);
   return (await res.json()) as GraphManifest;
 }
 
