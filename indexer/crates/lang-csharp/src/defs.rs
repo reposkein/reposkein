@@ -24,6 +24,7 @@ pub struct Walk<'a> {
     declared: HashMap<String, String>,
     pending_heritage: Vec<PendingHeritage>,
     pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
+    pub constructions: Vec<reposkein_core::extractor::RawConstruction>,
 }
 
 /// C# `@arity` — FROZEN. See `reposkein_core::id` for the contract.
@@ -121,6 +122,7 @@ impl<'a> Walk<'a> {
             declared: HashMap::new(),
             pending_heritage: Vec::new(),
             heritage: Vec::new(),
+            constructions: Vec::new(),
         }
     }
 
@@ -166,13 +168,16 @@ impl<'a> Walk<'a> {
         self.edges
             .push(Edge::new(parent_id.to_string(), "DEFINES", id.clone()));
         if let Some(body) = node.child_by_field_name("body") {
+            let caller_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
             crate::calls::collect_calls(
                 body,
                 self.source,
                 &id,
                 qual,
                 self.rel_path,
+                &caller_file_id,
                 &mut self.calls,
+                &mut self.constructions,
             );
         }
     }

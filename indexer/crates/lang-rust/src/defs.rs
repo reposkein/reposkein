@@ -19,6 +19,7 @@ pub struct Walk<'a> {
     declared: std::collections::HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
     pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
+    pub constructions: Vec<reposkein_core::extractor::RawConstruction>,
 }
 
 fn name_of(node: TsNode, source: &[u8]) -> String {
@@ -78,6 +79,7 @@ impl<'a> Walk<'a> {
             declared: std::collections::HashMap::new(),
             pending_heritage: Vec::new(),
             heritage: Vec::new(),
+            constructions: Vec::new(),
         }
     }
 
@@ -144,6 +146,15 @@ impl<'a> Walk<'a> {
                 qualified,
                 self.rel_path,
                 &mut self.calls,
+            );
+            let caller_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
+            crate::calls::collect_constructions(
+                body,
+                self.source,
+                &id,
+                self.rel_path,
+                &caller_file_id,
+                &mut self.constructions,
             );
         }
     }

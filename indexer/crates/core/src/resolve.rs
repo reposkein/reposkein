@@ -1,7 +1,7 @@
 //! Cross-file resolution: turns RawImport/RawCall facts into IMPORTS/CALLS
 //! edges. Language-agnostic — operates on Function names and File paths.
 
-use crate::extractor::{RawCall, RawHeritage, RawImport, RawModuleAlias};
+use crate::extractor::{RawCall, RawConstruction, RawHeritage, RawImport, RawModuleAlias};
 use crate::id;
 use crate::model::{Edge, Node};
 use serde_json::{json, Value};
@@ -263,7 +263,7 @@ fn resolve_one(
 
 /// Edges (unchanged) — see [`resolve_full`].
 pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &str) -> Vec<Edge> {
-    resolve_full(nodes, imports, calls, &[], &[], repo).0
+    resolve_full(nodes, imports, calls, &[], &[], &[], repo).0
 }
 
 /// Like [`resolve`], but also returns, per caller Function id, the sorted+deduped
@@ -277,6 +277,7 @@ pub fn resolve_full(
     calls: &[RawCall],
     heritage: &[RawHeritage],
     module_aliases_raw: &[RawModuleAlias],
+    constructions: &[RawConstruction],
     repo: &str,
 ) -> (Vec<Edge>, Vec<(String, Vec<String>)>) {
     let files = file_paths(nodes);
@@ -340,6 +341,43 @@ pub fn resolve_full(
         );
     }
 
+    // Class-only name index for Python class-lift (resolve_one precedence step 2).
+    let class_nodes: Vec<TypeView> = nodes
+        .iter()
+        .filter(|n| n.labels == ["Class"])
+        .map(|n| TypeView {
+            id: n.id.clone(),
+            name: prop_str(n, "name"),
+            qualified: prop_str(n, "qualified_name"),
+            file_path: prop_str(n, "file_path"),
+            label: "Class".to_string(),
+        })
+        .collect();
+    let mut class_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut class_by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let mut class_by_id_qual: BTreeMap<String, String> = BTreeMap::new();
+    let mut class_by_id_dir: BTreeMap<String, String> = BTreeMap::new();
+    let mut class_by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
+    for t in &class_nodes {
+        class_by_name
+            .entry(t.name.clone())
+            .or_default()
+            .push(t.id.clone());
+        class_by_file_name
+            .entry((t.file_path.clone(), t.name.clone()))
+            .or_default()
+            .push(t.id.clone());
+        class_by_id_qual.insert(t.id.clone(), t.qualified.clone());
+        class_by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
+        class_by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
+    }
+    for v in class_by_name.values_mut() {
+        v.sort();
+    }
+    for v in class_by_file_name.values_mut() {
+        v.sort();
+    }
+
     // ALL imported local→original bindings (incl. cross-repo imports that
     // resolve_imports filtered out, since their target file isn't in-repo).
     let mut imported_originals: HashMap<(String, String), String> = HashMap::new();
@@ -352,6 +390,8 @@ pub fn resolve_full(
     }
 
     let mut agg: BTreeMap<(String, String), (u64, &'static str, f64)> = BTreeMap::new();
+    // (caller_id, class_id) → (resolution, confidence, sites) for Python class-lift.
+    let mut inst_agg: BTreeMap<(String, String), (&'static str, f64, u64)> = BTreeMap::new();
     // caller_id -> sorted-unique external (imported-but-unresolved) original names.
     let mut external: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for c in calls {
@@ -366,6 +406,48 @@ pub fn resolve_full(
             &by_id_dir,
             &caller_file_id,
         );
+
+        // Python class-lift: for bare calls only, check if callee is a class name.
+        // If any result has confidence 1.0 → keep as CALLS (precise function match wins).
+        // If no result has confidence 1.0 → try class resolution.
+        //   If class found → INSTANTIATES (discard lower-conf CALLS results).
+        //   Else → keep original CALLS results.
+        if c.receiver.is_none() {
+            let has_exact = resolved.iter().any(|(_, _, conf)| *conf >= 1.0);
+            if !has_exact {
+                // Try to resolve callee as a class name.
+                let h_fake = RawHeritage {
+                    from_id: c.caller_id.clone(),
+                    from_path: c.caller_path.clone(),
+                    from_file_id: caller_file_id.clone(),
+                    edge_type: "INSTANTIATES".to_string(),
+                    base_name: c.callee_name.clone(),
+                    label_refine: false,
+                };
+                if let Some((to_id, res, conf)) = resolve_base(
+                    &h_fake,
+                    &class_by_name,
+                    &class_by_file_qual,
+                    &class_by_file_name,
+                    &import_targets,
+                    &class_by_id_qual,
+                    &class_by_id_dir,
+                ) {
+                    // Class found → INSTANTIATES; suppress CALLS for this site.
+                    let entry = inst_agg
+                        .entry((c.caller_id.clone(), to_id))
+                        .or_insert((res, conf, 0));
+                    entry.2 += 1;
+                    if conf > entry.1 {
+                        entry.0 = res;
+                        entry.1 = conf;
+                    }
+                    // Do NOT record external for class-lift.
+                    continue;
+                }
+            }
+        }
+
         if resolved.is_empty() && c.receiver.is_none() {
             // Unresolved bare call: if it names an imported symbol, record the
             // import's ORIGINAL name as a cross-repo candidate.
@@ -399,6 +481,18 @@ pub fn resolve_full(
         e.props.insert("call_sites".to_string(), json!(count));
         edges.push(e);
     }
+
+    for ((from, to), (res, conf, sites)) in inst_agg {
+        let mut e = Edge::new(from, "INSTANTIATES", to);
+        e.props.insert("resolution".to_string(), json!(res));
+        e.props.insert("confidence".to_string(), json!(conf));
+        e.props.insert("sites".to_string(), json!(sites));
+        edges.push(e);
+    }
+
+    // Resolve explicit constructions (new Foo(), struct literals, etc.)
+    let mut construction_edges = resolve_constructions(nodes, constructions, &import_targets);
+    edges.append(&mut construction_edges);
 
     let external_out: Vec<(String, Vec<String>)> = external
         .into_iter()
@@ -515,6 +609,95 @@ pub fn resolve_heritage(
     edges
 }
 
+/// Resolves RawConstruction facts → INSTANTIATES edges.
+/// Reuses the `resolve_base` ladder restricted to Class-only nodes.
+fn resolve_constructions(
+    nodes: &[Node],
+    constructions: &[RawConstruction],
+    import_targets: &ImportTargets,
+) -> Vec<Edge> {
+    // Build a Class-only type index.
+    let types: Vec<TypeView> = nodes
+        .iter()
+        .filter(|n| n.labels == ["Class"])
+        .map(|n| TypeView {
+            id: n.id.clone(),
+            name: prop_str(n, "name"),
+            qualified: prop_str(n, "qualified_name"),
+            file_path: prop_str(n, "file_path"),
+            label: "Class".to_string(),
+        })
+        .collect();
+
+    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let mut by_id_qual: BTreeMap<String, String> = BTreeMap::new();
+    let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
+    for t in &types {
+        by_name
+            .entry(t.name.clone())
+            .or_default()
+            .push(t.id.clone());
+        by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
+        by_file_name
+            .entry((t.file_path.clone(), t.name.clone()))
+            .or_default()
+            .push(t.id.clone());
+        by_id_qual.insert(t.id.clone(), t.qualified.clone());
+        by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
+    }
+    for v in by_name.values_mut() {
+        v.sort();
+    }
+    for v in by_file_name.values_mut() {
+        v.sort();
+    }
+
+    // (caller_id, class_id) → (resolution, confidence, sites); best-confidence wins.
+    let mut agg: BTreeMap<(String, String), (&'static str, f64, u64)> = BTreeMap::new();
+    for rc in constructions {
+        // Synthesize a minimal RawHeritage-like view to reuse resolve_base.
+        let h = RawHeritage {
+            from_id: rc.caller_id.clone(),
+            from_path: rc.caller_path.clone(),
+            from_file_id: rc.caller_file_id.clone(),
+            edge_type: "INSTANTIATES".to_string(),
+            base_name: rc.class_name.clone(),
+            label_refine: false,
+        };
+        let Some((to_id, res, conf)) = resolve_base(
+            &h,
+            &by_name,
+            &by_file_qual,
+            &by_file_name,
+            import_targets,
+            &by_id_qual,
+            &by_id_dir,
+        ) else {
+            continue;
+        };
+        let entry = agg
+            .entry((rc.caller_id.clone(), to_id))
+            .or_insert((res, conf, 0));
+        entry.2 += 1;
+        if conf > entry.1 {
+            entry.0 = res;
+            entry.1 = conf;
+        }
+    }
+
+    let mut edges = Vec::new();
+    for ((from, to), (res, conf, sites)) in agg {
+        let mut e = Edge::new(from, "INSTANTIATES", to);
+        e.props.insert("resolution".to_string(), json!(res));
+        e.props.insert("confidence".to_string(), json!(conf));
+        e.props.insert("sites".to_string(), json!(sites));
+        edges.push(e);
+    }
+    edges
+}
+
 /// Resolves a heritage base name → (target_id, resolution, confidence), trying
 /// rungs most→least precise, stopping at the first hit. None = unresolved/skip.
 fn resolve_base(
@@ -587,7 +770,7 @@ fn resolve_base(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extractor::RawHeritage;
+    use crate::extractor::{RawConstruction, RawHeritage};
     use crate::model::Node;
     use serde_json::json;
 
@@ -1053,7 +1236,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], "r");
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
         assert!(
             edges.iter().all(|e| e.typ != "CALLS"),
             "no in-repo CALLS edge"
@@ -1077,7 +1260,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "h", None)];
-        let (_e, external) = resolve_full(&nodes, &imports, &calls, &[], &[], "r");
+        let (_e, external) = resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
         assert_eq!(
             external,
             vec![(caller.id.clone(), vec!["helper".to_string()])]
@@ -1091,7 +1274,7 @@ mod tests {
         let caller = func_node("r", "svc.py", "run", 0);
         let nodes = vec![file_node("r", "svc.py"), caller.clone()];
         let calls = vec![call(&caller.id, "svc.py", "run", "print", None)];
-        let (_e, external) = resolve_full(&nodes, &[], &calls, &[], &[], "r");
+        let (_e, external) = resolve_full(&nodes, &[], &calls, &[], &[], &[], "r");
         assert!(
             external.is_empty(),
             "non-imported unresolved call is not recorded"
@@ -1118,7 +1301,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], "r");
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
         assert!(edges.iter().any(|e| e.typ == "CALLS" && e.to == helper.id));
         assert!(
             external.is_empty(),
@@ -1296,7 +1479,7 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("f"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == bar_fn.id)
@@ -1325,7 +1508,7 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("foo"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == bar_fn.id)
@@ -1353,7 +1536,7 @@ mod tests {
             vec!["a/b.py".into(), "a/b/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "go", Some("x"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == go_fn.id)
@@ -1387,7 +1570,7 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "missing", Some("f"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         // No CALLS edge at all: rung 1.5 hard-stops on miss (does not fall to name_match)
         let calls_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "CALLS").collect();
         assert!(
@@ -1405,7 +1588,7 @@ mod tests {
         let nodes = vec![caller.clone(), method_fn.clone()];
         // No module aliases at all
         let calls = vec![call(&caller.id, "svc.py", "run", "method", Some("obj"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &[], "r");
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &[], &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == method_fn.id)
@@ -1429,7 +1612,7 @@ mod tests {
             vec!["some_module.py".into()],
         )];
         let calls = vec![call(&m_caller.id, "m.py", "Svc.run", "help", Some("self"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
         assert_eq!(
             e.to, m_callee.id,
@@ -1458,7 +1641,7 @@ mod tests {
         )];
         // receiver is "a.b" (a chained receiver — not a single identifier)
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("a.b"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         // "a.b" is not in module_aliases → rung 1.5 misses → falls to rungs 6/7
         let e = edges
             .iter()
@@ -1489,11 +1672,204 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("f"))];
-        let (edges_a, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
-        let (edges_b, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges_a, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges_b, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         assert_eq!(
             edges_a, edges_b,
             "module alias resolution must be deterministic"
         );
+    }
+
+    fn class_node(repo: &str, path: &str, qualified: &str) -> Node {
+        let id = format!("rs1:{repo}:class:{path}#{qualified}");
+        let name = qualified.rsplit('.').next().unwrap().to_string();
+        Node::new(id, "Class")
+            .set("name", json!(name))
+            .set("qualified_name", json!(qualified))
+            .set("file_path", json!(path))
+    }
+
+    fn raw_construction(
+        caller_id: &str,
+        caller_path: &str,
+        caller_file_id: &str,
+        class_name: &str,
+    ) -> RawConstruction {
+        RawConstruction {
+            caller_id: caller_id.to_string(),
+            caller_path: caller_path.to_string(),
+            caller_file_id: caller_file_id.to_string(),
+            class_name: class_name.to_string(),
+        }
+    }
+
+    #[test]
+    fn instantiates_same_file_class_exact() {
+        let caller = func_node("r", "m.ts", "factory", 0);
+        let cls = class_node("r", "m.ts", "Foo");
+        let nodes = vec![caller.clone(), cls.clone()];
+        let constructions = vec![raw_construction(
+            &caller.id,
+            "m.ts",
+            &id::file_id("r", "m.ts"),
+            "Foo",
+        )];
+        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "INSTANTIATES")
+            .expect("INSTANTIATES edge");
+        assert_eq!(e.from, caller.id);
+        assert_eq!(e.to, cls.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+        assert_eq!(e.props["sites"], json!(1));
+    }
+
+    #[test]
+    fn instantiates_repo_wide_unique_name_match() {
+        let caller = func_node("r", "a/svc.py", "factory", 0);
+        let cls = class_node("r", "b/model.py", "Foo");
+        let nodes = vec![caller.clone(), cls.clone()];
+        let constructions = vec![raw_construction(
+            &caller.id,
+            "a/svc.py",
+            &id::file_id("r", "a/svc.py"),
+            "Foo",
+        )];
+        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "INSTANTIATES")
+            .expect("INSTANTIATES edge");
+        assert_eq!(e.props["resolution"], json!("name_match"));
+        assert_eq!(e.props["confidence"], json!(0.7));
+    }
+
+    #[test]
+    fn instantiates_ambiguous_class_skipped() {
+        let caller = func_node("r", "svc.py", "factory", 0);
+        let c1 = class_node("r", "x/m.py", "Foo");
+        let c2 = class_node("r", "y/m.py", "Foo");
+        let nodes = vec![caller.clone(), c1, c2];
+        let constructions = vec![raw_construction(
+            &caller.id,
+            "svc.py",
+            &id::file_id("r", "svc.py"),
+            "Foo",
+        )];
+        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        assert!(
+            edges.iter().all(|e| e.typ != "INSTANTIATES"),
+            "ambiguous → no edge"
+        );
+    }
+
+    #[test]
+    fn instantiates_sites_aggregate() {
+        let caller = func_node("r", "m.ts", "factory", 0);
+        let cls = class_node("r", "m.ts", "Foo");
+        let nodes = vec![caller.clone(), cls.clone()];
+        let constructions = vec![
+            raw_construction(&caller.id, "m.ts", &id::file_id("r", "m.ts"), "Foo"),
+            raw_construction(&caller.id, "m.ts", &id::file_id("r", "m.ts"), "Foo"),
+        ];
+        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let e = edges.iter().find(|e| e.typ == "INSTANTIATES").unwrap();
+        assert_eq!(e.props["sites"], json!(2));
+    }
+
+    #[test]
+    fn python_bare_call_to_unique_class_becomes_instantiates() {
+        let caller = func_node("r", "svc.py", "run", 0);
+        let cls = class_node("r", "model.py", "Foo");
+        let nodes = vec![caller.clone(), cls.clone()];
+        let raw_call = RawCall {
+            caller_id: caller.id.clone(),
+            caller_path: "svc.py".to_string(),
+            caller_qualified: "run".to_string(),
+            callee_name: "Foo".to_string(),
+            receiver: None,
+        };
+        let (edges, _) = resolve_full(&nodes, &[], &[raw_call], &[], &[], &[], "r");
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.typ == "INSTANTIATES" && e.from == caller.id && e.to == cls.id),
+            "bare Foo() resolving to unique class → INSTANTIATES"
+        );
+        assert!(
+            edges.iter().all(|e| e.typ != "CALLS"),
+            "must not also be CALLS"
+        );
+    }
+
+    #[test]
+    fn python_same_file_free_fn_shadows_class_stays_calls() {
+        let caller = func_node("r", "m.py", "run", 0);
+        let free = func_node("r", "m.py", "helper", 0);
+        let cls = class_node("r", "m.py", "helper");
+        let nodes = vec![caller.clone(), free.clone(), cls];
+        let raw_call = RawCall {
+            caller_id: caller.id.clone(),
+            caller_path: "m.py".to_string(),
+            caller_qualified: "run".to_string(),
+            callee_name: "helper".to_string(),
+            receiver: None,
+        };
+        let (edges, _) = resolve_full(&nodes, &[], &[raw_call], &[], &[], &[], "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS").expect("CALLS edge");
+        assert_eq!(e.to, free.id, "same-file free-fn wins");
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert!(
+            edges.iter().all(|e| e.typ != "INSTANTIATES"),
+            "no INSTANTIATES"
+        );
+    }
+
+    #[test]
+    fn python_class_lift_suppresses_external_recording() {
+        let caller = func_node("r", "svc.py", "run", 0);
+        let cls = class_node("r", "model.py", "Foo");
+        let nodes = vec![file_node("r", "svc.py"), caller.clone(), cls.clone()];
+        let imports = vec![RawImport {
+            importing_file_id: id::file_id("r", "svc.py"),
+            importing_path: "svc.py".to_string(),
+            symbols: vec![("Foo".to_string(), "Foo".to_string())],
+            candidate_paths: vec!["external/pkg.py".to_string()],
+            reexport: false,
+        }];
+        let raw_call = RawCall {
+            caller_id: caller.id.clone(),
+            caller_path: "svc.py".to_string(),
+            caller_qualified: "run".to_string(),
+            callee_name: "Foo".to_string(),
+            receiver: None,
+        };
+        let (edges, external) = resolve_full(&nodes, &imports, &[raw_call], &[], &[], &[], "r");
+        assert!(
+            edges.iter().any(|e| e.typ == "INSTANTIATES"),
+            "INSTANTIATES emitted"
+        );
+        assert!(
+            external.is_empty(),
+            "class-lift suppresses external recording"
+        );
+    }
+
+    #[test]
+    fn instantiates_is_deterministic() {
+        let caller = func_node("r", "m.ts", "factory", 0);
+        let cls = class_node("r", "m.ts", "Foo");
+        let nodes = vec![caller.clone(), cls.clone()];
+        let constructions = vec![raw_construction(
+            &caller.id,
+            "m.ts",
+            &id::file_id("r", "m.ts"),
+            "Foo",
+        )];
+        let (a, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let (b, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        assert_eq!(a, b, "INSTANTIATES resolution must be deterministic");
     }
 }

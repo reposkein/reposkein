@@ -57,6 +57,80 @@ pub fn collect_calls(
     );
 }
 
+pub fn collect_constructions(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    caller_id: &str,
+    caller_path: &str,
+    caller_file_id: &str,
+    out: &mut Vec<reposkein_core::extractor::RawConstruction>,
+) {
+    // Don't descend into nested functions/closures.
+    const BOUNDARIES: &[&str] = &["function_item", "closure_expression"];
+    collect_constructions_inner(
+        node,
+        source,
+        caller_id,
+        caller_path,
+        caller_file_id,
+        out,
+        BOUNDARIES,
+    );
+}
+
+fn collect_constructions_inner(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    caller_id: &str,
+    caller_path: &str,
+    caller_file_id: &str,
+    out: &mut Vec<reposkein_core::extractor::RawConstruction>,
+    boundaries: &[&str],
+) {
+    if node.kind() == "struct_expression" {
+        // Rust struct literal: `Foo { field: val }` or `path::Foo { .. }`
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let class_name = match name_node.kind() {
+                "type_identifier" => reposkein_lang_common::text(name_node, source).to_string(),
+                "scoped_type_identifier" | "generic_type" => {
+                    // Take the last type_identifier segment
+                    let mut c = name_node.walk();
+                    name_node
+                        .named_children(&mut c)
+                        .filter(|n| n.kind() == "type_identifier")
+                        .last()
+                        .map(|n| reposkein_lang_common::text(n, source).to_string())
+                        .unwrap_or_default()
+                }
+                _ => reposkein_lang_common::text(name_node, source).to_string(),
+            };
+            if !class_name.is_empty() {
+                out.push(reposkein_core::extractor::RawConstruction {
+                    caller_id: caller_id.to_string(),
+                    caller_path: caller_path.to_string(),
+                    caller_file_id: caller_file_id.to_string(),
+                    class_name,
+                });
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if boundaries.contains(&child.kind()) {
+            continue;
+        }
+        collect_constructions_inner(
+            child,
+            source,
+            caller_id,
+            caller_path,
+            caller_file_id,
+            out,
+            boundaries,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

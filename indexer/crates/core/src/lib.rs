@@ -106,6 +106,7 @@ pub fn index_tree_with(
     let mut all_calls: Vec<extractor::RawCall> = Vec::new();
     let mut all_heritage: Vec<extractor::RawHeritage> = Vec::new();
     let mut all_module_aliases: Vec<extractor::RawModuleAlias> = Vec::new();
+    let mut all_constructions: Vec<extractor::RawConstruction> = Vec::new();
 
     // Repository node (root_path is "." by convention).
     nodes.push(
@@ -201,6 +202,7 @@ pub fn index_tree_with(
                 all_calls.append(&mut extracted.calls);
                 all_heritage.append(&mut extracted.heritage);
                 all_module_aliases.append(&mut extracted.module_aliases);
+                all_constructions.append(&mut extracted.constructions);
             }
         }
     }
@@ -211,6 +213,7 @@ pub fn index_tree_with(
         &all_calls,
         &all_heritage,
         &all_module_aliases,
+        &all_constructions,
         repo,
     );
     edges.append(&mut resolved);

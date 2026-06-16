@@ -31,6 +31,7 @@ impl Extractor for RustExtractor {
             imports,
             heritage: w.heritage,
             module_aliases: vec![],
+            constructions: w.constructions,
         }
     }
 }

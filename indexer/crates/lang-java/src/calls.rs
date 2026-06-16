@@ -2,7 +2,7 @@
 //! Does not use lang-common::collect_calls (which assumes a `function` field).
 //! Java's method_invocation uses `object` (optional) and `name` fields instead.
 
-use reposkein_core::extractor::RawCall;
+use reposkein_core::extractor::{RawCall, RawConstruction};
 use reposkein_lang_common::text;
 use tree_sitter::Node as TsNode;
 
@@ -17,24 +17,39 @@ const BOUNDARIES: &[&str] = &[
     "static_initializer",
 ];
 
+#[allow(clippy::too_many_arguments)]
 pub fn collect_calls(
     node: TsNode,
     source: &[u8],
     caller_id: &str,
     caller_qualified: &str,
     caller_path: &str,
+    caller_file_id: &str,
     out: &mut Vec<RawCall>,
+    out_constructions: &mut Vec<RawConstruction>,
 ) {
-    walk(node, source, caller_id, caller_qualified, caller_path, out);
+    walk(
+        node,
+        source,
+        caller_id,
+        caller_qualified,
+        caller_path,
+        caller_file_id,
+        out,
+        out_constructions,
+    );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     node: TsNode,
     source: &[u8],
     caller_id: &str,
     caller_qualified: &str,
     caller_path: &str,
+    caller_file_id: &str,
     out: &mut Vec<RawCall>,
+    out_constructions: &mut Vec<RawConstruction>,
 ) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -58,8 +73,64 @@ fn walk(
                 }
             }
         }
+        if child.kind() == "object_creation_expression" {
+            // Try the `type` field; if absent, scan named children for a type node.
+            let ty_node_opt = child.child_by_field_name("type").or_else(|| {
+                let mut c = child.walk();
+                let found = child.named_children(&mut c).find(|n| {
+                    matches!(
+                        n.kind(),
+                        "type_identifier" | "generic_type" | "scoped_type_identifier"
+                    )
+                });
+                found
+            });
+            let type_name: String = if let Some(ty_node) = ty_node_opt {
+                match ty_node.kind() {
+                    "type_identifier" => text(ty_node, source).to_string(),
+                    "generic_type" => {
+                        let mut c = ty_node.walk();
+                        let found = ty_node
+                            .named_children(&mut c)
+                            .find(|n| n.kind() == "type_identifier");
+                        found
+                            .map(|n| text(n, source).to_string())
+                            .unwrap_or_default()
+                    }
+                    "scoped_type_identifier" => {
+                        let mut c = ty_node.walk();
+                        let last = ty_node
+                            .named_children(&mut c)
+                            .filter(|n| n.kind() == "type_identifier")
+                            .last();
+                        last.map(|n| text(n, source).to_string())
+                            .unwrap_or_default()
+                    }
+                    _ => text(ty_node, source).to_string(),
+                }
+            } else {
+                String::new()
+            };
+            if !type_name.is_empty() {
+                out_constructions.push(RawConstruction {
+                    caller_id: caller_id.to_string(),
+                    caller_path: caller_path.to_string(),
+                    caller_file_id: caller_file_id.to_string(),
+                    class_name: type_name,
+                });
+            }
+        }
         // Recurse into non-boundary children
-        walk(child, source, caller_id, caller_qualified, caller_path, out);
+        walk(
+            child,
+            source,
+            caller_id,
+            caller_qualified,
+            caller_path,
+            caller_file_id,
+            out,
+            out_constructions,
+        );
     }
 }
 
@@ -88,7 +159,16 @@ mod tests {
         let tree = parse(src).unwrap();
         let body = find_method_body(tree.root_node()).unwrap();
         let mut calls = Vec::new();
-        collect_calls(body, src, "cid", "C.run", "p/C.java", &mut calls);
+        collect_calls(
+            body,
+            src,
+            "cid",
+            "C.run",
+            "p/C.java",
+            "rs1:r:file:p/C.java",
+            &mut calls,
+            &mut Vec::new(),
+        );
         let pairs: Vec<(&str, Option<&str>)> = calls
             .iter()
             .map(|c| (c.callee_name.as_str(), c.receiver.as_deref()))
@@ -104,7 +184,16 @@ mod tests {
         let tree = parse(src).unwrap();
         let body = find_method_body(tree.root_node()).unwrap();
         let mut calls = Vec::new();
-        collect_calls(body, src, "cid", "C.run", "p/C.java", &mut calls);
+        collect_calls(
+            body,
+            src,
+            "cid",
+            "C.run",
+            "p/C.java",
+            "rs1:r:file:p/C.java",
+            &mut calls,
+            &mut Vec::new(),
+        );
         assert!(
             !calls.iter().any(|c| c.callee_name == "inner"),
             "calls inside lambda must not attribute to outer method"

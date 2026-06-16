@@ -25,6 +25,7 @@ pub struct Walk<'a> {
     declared: std::collections::HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
     pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
+    pub constructions: Vec<reposkein_core::extractor::RawConstruction>,
 }
 
 /// TS/JS `@arity`: named children of `parameters` whose kind ends in
@@ -82,6 +83,46 @@ fn strip_angle_brackets(s: &str) -> String {
     }
 }
 
+fn collect_constructions(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    caller_id: &str,
+    caller_path: &str,
+    caller_file_id: &str,
+    out: &mut Vec<reposkein_core::extractor::RawConstruction>,
+) {
+    if node.kind() == "new_expression" {
+        if let Some(ctor) = node.child_by_field_name("constructor") {
+            let class_name = match ctor.kind() {
+                "identifier" => Some(ctor.utf8_text(source).unwrap_or("").to_string()),
+                "member_expression" => ctor
+                    .child_by_field_name("property")
+                    .and_then(|p| p.utf8_text(source).ok())
+                    .map(|s| s.to_string()),
+                "generic_type" => ctor
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|s| s.to_string()),
+                _ => None,
+            };
+            if let Some(name) = class_name {
+                if !name.is_empty() {
+                    out.push(reposkein_core::extractor::RawConstruction {
+                        caller_id: caller_id.to_string(),
+                        caller_path: caller_path.to_string(),
+                        caller_file_id: caller_file_id.to_string(),
+                        class_name: name,
+                    });
+                }
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_constructions(child, source, caller_id, caller_path, caller_file_id, out);
+    }
+}
+
 impl<'a> Walk<'a> {
     pub fn new(repo: &'a str, rel_path: &'a str, source: &'a [u8]) -> Self {
         Walk {
@@ -95,6 +136,7 @@ impl<'a> Walk<'a> {
             declared: std::collections::HashMap::new(),
             pending_heritage: Vec::new(),
             heritage: Vec::new(),
+            constructions: Vec::new(),
         }
     }
 
@@ -151,6 +193,15 @@ impl<'a> Walk<'a> {
                 &qualified,
                 self.rel_path,
                 &mut self.calls,
+            );
+            let caller_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
+            collect_constructions(
+                body,
+                self.source,
+                &id,
+                self.rel_path,
+                &caller_file_id,
+                &mut self.constructions,
             );
             self.walk(body, &qual, &id, ScopeKind::Function);
         }

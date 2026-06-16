@@ -26,6 +26,7 @@ impl Extractor for GoExtractor {
             imports: vec![],
             heritage: w.heritage,
             module_aliases: vec![],
+            constructions: vec![],
         }
     }
 }

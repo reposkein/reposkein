@@ -80,6 +80,16 @@ pub struct RawHeritage {
     pub label_refine: bool,
 }
 
+/// A construction site (`new Foo()`, `Foo { .. }` struct literal) before
+/// resolution. Ephemeral (cache-only); the class is resolved repo-wide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawConstruction {
+    pub caller_id: String,
+    pub caller_path: String,
+    pub caller_file_id: String,
+    pub class_name: String,
+}
+
 /// Nodes and edges contributed by an extractor for a single file.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtractOutput {
@@ -91,6 +101,8 @@ pub struct ExtractOutput {
     pub heritage: Vec<RawHeritage>,
     #[serde(default)]
     pub module_aliases: Vec<RawModuleAlias>,
+    #[serde(default)]
+    pub constructions: Vec<RawConstruction>,
 }
 
 pub trait Extractor {
@@ -148,6 +160,12 @@ mod tests {
             local_alias: "foo".into(),
             candidate_paths: vec!["foo.py".into(), "foo/__init__.py".into()],
         });
+        out.constructions.push(RawConstruction {
+            caller_id: "rs1:r:func:a.py#f@1".into(),
+            caller_path: "a.py".into(),
+            caller_file_id: "rs1:r:file:a.py".into(),
+            class_name: "Foo".into(),
+        });
 
         let text = serde_json::to_string(&out).unwrap();
         let back: ExtractOutput = serde_json::from_str(&text).unwrap();
@@ -160,6 +178,13 @@ mod tests {
         assert!(
             from_old.module_aliases.is_empty(),
             "missing module_aliases field must default to empty vec"
+        );
+
+        let old_json2 = r#"{"nodes":[],"edges":[],"imports":[],"calls":[],"heritage":[]}"#;
+        let from_old2: ExtractOutput = serde_json::from_str(old_json2).unwrap();
+        assert!(
+            from_old2.constructions.is_empty(),
+            "missing constructions field must default to empty vec"
         );
     }
 }

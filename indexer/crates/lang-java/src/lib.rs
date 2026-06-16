@@ -29,6 +29,7 @@ impl Extractor for JavaExtractor {
             imports,
             heritage: w.heritage,
             module_aliases: vec![],
+            constructions: w.constructions,
         }
     }
 }

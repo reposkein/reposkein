@@ -26,6 +26,7 @@ impl Extractor for CsharpExtractor {
             imports: vec![],
             heritage: w.heritage,
             module_aliases: vec![],
+            constructions: w.constructions,
         }
     }
 }
