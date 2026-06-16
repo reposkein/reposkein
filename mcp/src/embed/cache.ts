@@ -48,14 +48,35 @@ export function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex");
 }
 
+/**
+ * Sanitize a model id so it is safe to use as a filename component.
+ * HuggingFace-style ids ("org/model-name") contain slashes that would create
+ * subdirectories; other chars like backslash or NUL could collide or confuse
+ * the FS. Replace any run of unsafe characters with "_".
+ */
+export function sanitizeModelId(modelId: string): string {
+  // Replace /, \, :, *, ?, ", <, >, |, NUL and control chars with "_"
+  // Also collapse multiple consecutive underscores to avoid "___"-confusing names.
+  return modelId.replace(/[/\\:*?"<>|\x00-\x1f]+/g, "_");
+}
+
 /** Derive the cache file path for a given repo root + provider. */
 export function cachePath(repoPath: string, provider: EmbeddingProvider): string {
-  const name = `${provider.id()}__${provider.modelId()}__d${provider.dims()}`;
+  const safeModel = sanitizeModelId(provider.modelId());
+  const name = `${provider.id()}__${safeModel}__d${provider.dims()}`;
   return join(repoPath, ".reposkein", "local", "embeddings", `${name}.jsonl`);
 }
 
-/** Load cache into a Map keyed by node id. Missing file → empty map. Best-effort. */
-export function loadCache(path: string): Map<string, EmbedRecord> {
+/**
+ * Load cache into a Map keyed by node id. Missing file → empty map. Best-effort.
+ *
+ * Row validation: any row whose `v` is not an array of finite numbers of the
+ * correct length (matching provider.dims) is dropped — treated as a miss so
+ * it will be re-embedded.  Pass `expectedDims` to enable dim-length validation;
+ * omit (undefined) to skip the length check (e.g. when the provider is not known
+ * at load time — but the embedCorpus function always passes it).
+ */
+export function loadCache(path: string, expectedDims?: number): Map<string, EmbedRecord> {
   const map = new Map<string, EmbedRecord>();
   if (!existsSync(path)) return map;
   let text: string;
@@ -73,10 +94,16 @@ export function loadCache(path: string): Map<string, EmbedRecord> {
         typeof o["doc_hash"] === "string" &&
         Array.isArray(o["v"])
       ) {
+        const v = o["v"] as unknown[];
+        // Validate: every element must be a finite number
+        const allFinite = v.every((x) => typeof x === "number" && isFinite(x));
+        if (!allFinite) continue; // corrupt row — drop it (will be re-embedded)
+        // Validate: length must match the expected dims (when known)
+        if (expectedDims !== undefined && v.length !== expectedDims) continue;
         map.set(o["id"] as string, {
           id: o["id"] as string,
           doc_hash: o["doc_hash"] as string,
-          v: o["v"] as number[],
+          v: v as number[],
         });
       }
     } catch {
@@ -119,7 +146,7 @@ export async function embedCorpus(
   corpus: CorpusNode[],
 ): Promise<Map<string, number[]>> {
   const path = cachePath(repoPath, provider);
-  const cache = loadCache(path);
+  const cache = loadCache(path, provider.dims());
 
   // Compute document strings + hashes for all corpus nodes
   const docStrings = new Map<string, string>();

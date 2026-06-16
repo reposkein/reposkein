@@ -15,6 +15,7 @@ import {
   loadCache,
   saveCache,
   embedCorpus,
+  sanitizeModelId,
 } from "../src/embed/cache.js";
 import { MockProvider, hashVec } from "./embedProvider.test.js";
 import type { EmbeddingProvider, EmbedKind } from "../src/embed/provider.js";
@@ -152,6 +153,40 @@ describe("cachePath", () => {
     const p2 = new MockProvider({ id: "http", modelId: "voyage-4-nano", dims: 512 });
     expect(cachePath("/repo", p1)).not.toBe(cachePath("/repo", p2));
   });
+
+  it("slashed HF-style model id produces a safe flat filename (no subdirs)", () => {
+    const p = new MockProvider({ id: "http", modelId: "voyageai/voyage-4-nano", dims: 1024 });
+    const path = cachePath("/repo", p);
+    // The slash in the model id must be replaced — no extra directory components
+    const filename = path.split("/").pop()!;
+    expect(filename).not.toContain("/");
+    expect(filename).not.toContain("\\");
+    // The path should still be under the expected embeddings dir, not a subdir of it
+    expect(path).toMatch(/embeddings\/[^/]+\.jsonl$/);
+  });
+});
+
+// ——— sanitizeModelId ———
+
+describe("sanitizeModelId", () => {
+  it("replaces forward slashes", () => {
+    expect(sanitizeModelId("voyageai/voyage-4-nano")).not.toContain("/");
+  });
+
+  it("replaces backslashes", () => {
+    expect(sanitizeModelId("some\\model")).not.toContain("\\");
+  });
+
+  it("leaves safe characters unchanged", () => {
+    expect(sanitizeModelId("voyage-code-3")).toBe("voyage-code-3");
+  });
+
+  it("replaces multiple unsafe chars in sequence with a single underscore", () => {
+    // "org/model:version" → "org_model_version"
+    const result = sanitizeModelId("org/model:version");
+    expect(result).not.toContain("/");
+    expect(result).not.toContain(":");
+  });
 });
 
 // ——— loadCache / saveCache ———
@@ -195,6 +230,64 @@ describe("loadCache/saveCache", () => {
     const lines = readFileSync(path, "utf8").trim().split("\n");
     const ids = lines.map((l: string) => JSON.parse(l).id);
     expect(ids).toEqual(["id:1", "id:2", "id:3"]);
+  });
+
+  it("drops rows with NaN values when expectedDims provided", () => {
+    const path = join(tmpDir, "nan-test.jsonl");
+    const { writeFileSync } = require("node:fs");
+    // Row with NaN — should be dropped
+    writeFileSync(
+      path,
+      '{"id":"id:1","doc_hash":"h1","v":[null,0.5,0.3,0.1]}\n' +
+      '{"id":"id:2","doc_hash":"h2","v":[0.1,0.2,0.3,0.4]}\n'
+    );
+    const loaded = loadCache(path, 4);
+    // id:1 has a non-finite element (null → NaN check), must be dropped
+    expect(loaded.has("id:1")).toBe(false);
+    // id:2 is valid
+    expect(loaded.has("id:2")).toBe(true);
+  });
+
+  it("drops rows with wrong-length vectors when expectedDims provided", () => {
+    const path = join(tmpDir, "wrong-dims.jsonl");
+    const { writeFileSync } = require("node:fs");
+    writeFileSync(
+      path,
+      '{"id":"id:1","doc_hash":"h1","v":[0.1,0.2]}\n' +        // 2 dims, wrong
+      '{"id":"id:2","doc_hash":"h2","v":[0.1,0.2,0.3,0.4]}\n'  // 4 dims, correct
+    );
+    const loaded = loadCache(path, 4);
+    expect(loaded.has("id:1")).toBe(false); // wrong length → dropped
+    expect(loaded.has("id:2")).toBe(true);
+  });
+
+  it("re-embeds a node whose cached row had NaN (treated as miss)", async () => {
+    // Pre-seed the cache file at the expected location for a MockProvider(dims=4)
+    const provider = new MockProvider({ dims: 4 });
+    const cPath = cachePath(tmpDir, provider);
+    const { mkdirSync: mkd, writeFileSync: wfs } = require("node:fs");
+    mkd(require("node:path").dirname(cPath), { recursive: true });
+    // Build the correct doc_hash using the imported functions (ESM-compatible)
+    const docA = buildDocString(NODE_A);
+    const docB = buildDocString(NODE_B);
+    const hashA = sha256(docA);
+    const hashB = sha256(docB);
+    // Write a poisoned cache: NaN (null) vector for NODE_A, valid 4-dim for NODE_B
+    wfs(
+      cPath,
+      `{"id":"${NODE_A.id}","doc_hash":"${hashA}","v":[null,0.5,0.3,0.1]}\n` +
+      `{"id":"${NODE_B.id}","doc_hash":"${hashB}","v":[0.1,0.2,0.3,0.4]}\n`
+    );
+    // embedCorpus should detect NODE_A as a miss (null is not finite) and re-embed it
+    const result = await embedCorpus(provider, tmpDir, [NODE_A, NODE_B]);
+    // provider.embed() should have been called (for the NaN-corrupted row)
+    expect(provider.embedCallCount).toBeGreaterThan(0);
+    expect(provider.lastTexts).toContain(docA);
+    // Both nodes should have valid vectors in the result
+    expect(result.has(NODE_A.id)).toBe(true);
+    expect(result.has(NODE_B.id)).toBe(true);
+    const vA = result.get(NODE_A.id)!;
+    expect(vA.every((x: number) => isFinite(x))).toBe(true);
   });
 });
 
