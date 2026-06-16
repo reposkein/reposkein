@@ -23,6 +23,7 @@ pub struct Walk<'a> {
     /// qualified_name → node_id for all types declared in this file.
     declared: HashMap<String, String>,
     pending_heritage: Vec<PendingHeritage>,
+    pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
 }
 
 /// C# `@arity` — FROZEN. See `reposkein_core::id` for the contract.
@@ -119,6 +120,7 @@ impl<'a> Walk<'a> {
             used: HashMap::new(),
             declared: HashMap::new(),
             pending_heritage: Vec::new(),
+            heritage: Vec::new(),
         }
     }
 
@@ -451,46 +453,19 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// Resolves deferred heritage edges using label-based refinement.
-    ///
-    /// Before calling `heritage::resolve`, we refine the `edge_type` of each
-    /// `PendingHeritage` entry by checking if the resolved target is an Interface
-    /// node in `declared` (we track label alongside id in a separate map).
-    pub fn finalize_heritage(&mut self) {
-        // Build a label map: id → label.
-        let id_to_label: HashMap<String, String> = self
-            .nodes
-            .iter()
-            .filter_map(|n| n.labels.first().map(|l| (n.id.clone(), l.clone())))
-            .collect();
-
-        // Refine edge_type using resolved label.
-        // `heritage::resolve` will find id via scope resolution; replicate that
-        // logic here to refine edge_type before calling resolve.
-        let declared = &self.declared;
-        for p in &mut self.pending_heritage {
-            // Resolve target name.
-            for i in (0..=p.decl_scope.len()).rev() {
-                let candidate = if i == 0 {
-                    p.base_name.clone()
-                } else {
-                    format!("{}.{}", p.decl_scope[..i].join("."), p.base_name)
-                };
-                if let Some(id) = declared.get(&candidate) {
-                    if let Some(label) = id_to_label.get(id) {
-                        p.edge_type = match label.as_str() {
-                            "Interface" => "IMPLEMENTS".to_string(),
-                            "Class" => "INHERITS".to_string(),
-                            _ => p.edge_type.clone(),
-                        };
-                    }
-                    break;
-                }
-            }
-        }
-
-        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
-        self.edges.extend(e);
+    /// Lowers pending heritage → RawHeritage with `label_refine = true`: C#
+    /// `base_list` gives no syntactic INHERITS-vs-IMPLEMENTS distinction, so the
+    /// core resolver picks it from the resolved target's label (cross-file-aware).
+    pub fn lower_heritage(&mut self) {
+        let from_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
+        let mut raw = reposkein_core::heritage::lower(
+            &self.pending_heritage,
+            &self.declared,
+            self.rel_path,
+            &from_file_id,
+            true,
+        );
+        self.heritage.append(&mut raw);
     }
 }
 
@@ -503,7 +478,7 @@ mod tests {
         let t = parse(src).unwrap();
         let mut w = Walk::new("r", "N/Svc.cs", src);
         w.walk(t.root_node(), "rs1:r:file:N/Svc.cs");
-        w.finalize_heritage();
+        w.lower_heritage();
         w
     }
 
@@ -536,13 +511,13 @@ mod tests {
             && n.props.get("name").and_then(|v| v.as_str()) == Some("X")
             && n.props.get("kind").and_then(|v| v.as_str()) == Some("property")));
         assert!(w
-            .edges
+            .heritage
             .iter()
-            .any(|e| e.typ == "INHERITS" && e.to == "rs1:r:class:N/Svc.cs#N.Base"));
+            .any(|h| h.edge_type == "INHERITS" && h.base_name == "Base"));
         assert!(w
-            .edges
+            .heritage
             .iter()
-            .any(|e| e.typ == "IMPLEMENTS" && e.to == "rs1:r:iface:N/Svc.cs#N.IGreeter"));
+            .any(|h| h.edge_type == "IMPLEMENTS" && h.base_name == "IGreeter"));
     }
 
     #[test]
@@ -568,22 +543,14 @@ mod tests {
         // Both Base and C are in namespace N, so heritage::resolve will find
         // N.Base in the declared map when base_name == "Base" (last segment).
         let w = run(b"namespace N { class Base {} class C : N.Base {} }");
-        // With the fix: INHERITS edge from C → Base must exist.
         assert!(
-            w.edges
-                .iter()
-                .any(|e| e.typ == "INHERITS" && e.to == "rs1:r:class:N/Svc.cs#N.Base"),
-            "C must inherit from N.Base (resolved via last segment of qualified name)"
+            w.heritage.iter().any(|h| h.base_name == "Base"),
+            "C must emit RawHeritage with base_name = 'Base' (last segment)"
         );
-        // Sanity: no edge must target a node with id containing just the namespace prefix "N"
-        // as the type (which would be the pre-fix bug: base_name = "N").
-        let has_ns_target = w
-            .edges
-            .iter()
-            .any(|e| (e.typ == "INHERITS" || e.typ == "IMPLEMENTS") && e.to.ends_with("#N"));
+        // Also check no heritage with base_name "N" (the namespace prefix bug)
         assert!(
-            !has_ns_target,
-            "heritage edge must not target the namespace segment"
+            !w.heritage.iter().any(|h| h.base_name == "N"),
+            "heritage edge must not have base_name = namespace prefix"
         );
     }
 }
