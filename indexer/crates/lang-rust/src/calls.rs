@@ -155,4 +155,43 @@ mod tests {
         assert!(pairs.contains(&("helper", None)));
         assert!(pairs.contains(&("new", Some("String"))));
     }
+
+    #[test]
+    fn grammar_foo_new_is_call_with_scoped_identifier() {
+        // Verify: `Foo::new()` parses as call_expression whose `function` child
+        // is a scoped_identifier with path=type_identifier "Foo" and name=identifier "new".
+        let src = b"fn caller() { let _ = Foo::new(); }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_item")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        // let_declaration → call_expression
+        let let_decl = body
+            .named_children(&mut body.walk())
+            .find(|n| n.kind() == "let_declaration")
+            .unwrap();
+        let call = let_decl
+            .named_children(&mut let_decl.walk())
+            .find(|n| n.kind() == "call_expression")
+            .unwrap();
+        let func_node = call.child_by_field_name("function").unwrap();
+        assert_eq!(
+            func_node.kind(),
+            "scoped_identifier",
+            "Foo::new() function child must be scoped_identifier"
+        );
+        let name = func_node
+            .child_by_field_name("name")
+            .map(|n| reposkein_lang_common::text(n, src).to_string())
+            .unwrap_or_default();
+        assert_eq!(name, "new");
+        let path = func_node
+            .child_by_field_name("path")
+            .map(|n| reposkein_lang_common::text(n, src).to_string())
+            .unwrap_or_default();
+        assert_eq!(path, "Foo");
+    }
 }
