@@ -41,6 +41,24 @@ pub struct RawCall {
     pub receiver: Option<String>,
 }
 
+/// A module-alias binding: `import foo as f`, `import foo`, `import a.b.c as x`.
+/// Records that `local_alias` in `importing_file_id` refers to a module whose
+/// repo-relative candidate files are `candidate_paths`.
+///
+/// NOT emitted for `import a.b.c` (no `as`): Python only binds the top-level
+/// name `a` in that case, not `c`. Use `import a.b.c as x` to get alias
+/// resolution for dotted imports.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawModuleAlias {
+    pub importing_file_id: String,
+    pub importing_path: String,
+    /// The local name bound to the module (e.g. "f" for `import foo as f`;
+    /// "foo" for bare `import foo`; "x" for `import a.b.c as x`).
+    pub local_alias: String,
+    /// Same candidate-path semantics as RawImport: resolver picks first that exists.
+    pub candidate_paths: Vec<String>,
+}
+
 /// A heritage relationship (INHERITS/IMPLEMENTS) before cross-file resolution.
 /// The deriving (`from`) side is already resolved to a frozen node id by the
 /// language walk; only `base_name` needs repo-wide resolution by `core::resolve`.
@@ -71,6 +89,8 @@ pub struct ExtractOutput {
     pub calls: Vec<RawCall>,
     #[serde(default)]
     pub heritage: Vec<RawHeritage>,
+    #[serde(default)]
+    pub module_aliases: Vec<RawModuleAlias>,
 }
 
 pub trait Extractor {
@@ -122,9 +142,24 @@ mod tests {
             base_name: "A".into(),
             label_refine: false,
         });
+        out.module_aliases.push(RawModuleAlias {
+            importing_file_id: "rs1:r:file:a.py".into(),
+            importing_path: "a.py".into(),
+            local_alias: "foo".into(),
+            candidate_paths: vec!["foo.py".into(), "foo/__init__.py".into()],
+        });
 
         let text = serde_json::to_string(&out).unwrap();
         let back: ExtractOutput = serde_json::from_str(&text).unwrap();
         assert_eq!(back, out, "ExtractOutput must round-trip losslessly");
+
+        // Verify backward compat: old JSONL without module_aliases field deserializes
+        // with empty vec (via #[serde(default)]).
+        let old_json = r#"{"nodes":[],"edges":[],"imports":[],"calls":[],"heritage":[]}"#;
+        let from_old: ExtractOutput = serde_json::from_str(old_json).unwrap();
+        assert!(
+            from_old.module_aliases.is_empty(),
+            "missing module_aliases field must default to empty vec"
+        );
     }
 }
