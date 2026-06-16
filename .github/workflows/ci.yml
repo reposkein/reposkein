@@ -110,6 +110,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
+        with:
+          # Explicit version: action-setup runs at the repo root (working-directory
+          # applies only to `run:` steps), where there is no package.json with a
+          # `packageManager` field — so it can't auto-detect. Keep in sync with
+          # viz/package.json's `packageManager`.
+          version: "10.15.0"
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
