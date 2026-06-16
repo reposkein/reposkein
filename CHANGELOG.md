@@ -6,6 +6,19 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-16
+
+### Docs & packaging
+
+- Restructured the README (introduction, table of contents, prerequisites,
+  usage/demo, documentation index, contributing, acknowledgements, contact) with
+  an animated brand header; added `CONTRIBUTING.md` (incl. the add-a-language recipe).
+- Brand-consistent headers + navigation across all READMEs.
+- Enriched the npm package metadata (keywords, homepage, repository, bugs) for a
+  nicer npmjs.com page + search discoverability.
+- Published the `embed-server` image to GHCR (public, multi-arch amd64/arm64) and
+  documented the pull-don't-build path.
+
 ## [0.1.2] - 2026-06-16
 
 ### Added
