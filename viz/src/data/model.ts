@@ -14,6 +14,8 @@ export interface DrawEdge {
   type: string;
   resolution: "exact" | "name_match" | "ambiguous";
   confidence: number;
+  /** True when source and destination come from different repos (federation). */
+  crossRepo: boolean;
 }
 
 export interface NodeRecord {
@@ -75,12 +77,20 @@ export function buildModel(g: RawGraph): GraphModel {
   const bump = (id: string) => degree.set(id, (degree.get(id) ?? 0) + 1);
   for (const e of g.edges) {
     if (!RELATIONSHIP_EDGE_TYPES.has(e.type)) continue;
+    // Detect cross-repo edges: `rs1:<repoId>:<rest>` — compare segment [1].
+    const fromParts = e.from.split(":");
+    const toParts = e.to.split(":");
+    const crossRepo =
+      fromParts[0] === "rs1" &&
+      toParts[0] === "rs1" &&
+      fromParts[1] !== toParts[1];
     drawEdges.push({
       from: e.from,
       to: e.to,
       type: e.type,
       resolution: confidenceBucket(e.props),
       confidence: num(e.props.confidence, 1.0),
+      crossRepo,
     });
     bump(e.from);
     bump(e.to);

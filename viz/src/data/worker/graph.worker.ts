@@ -2,7 +2,8 @@
  *  all off the main thread (design §2.3, §4.1). Posts the model back to the
  *  UI, transferring the positions Float32Array zero-copy.
  *
- *  M1: single repo (manifest.root). Federation is deferred. */
+ *  M2: supports federated repos (manifest.federated). Each federated repo's
+ *  nodes/edges are merged into the combined graph before building the model. */
 
 import { fetchManifest, fetchText } from "../api";
 import { parseGraph } from "../parse";
@@ -48,6 +49,21 @@ async function run(): Promise<void> {
 
   post({ type: "progress", phase: "parsing" });
   const graph = parseGraph(nodesText, edgesText);
+
+  // M2: merge federated repos into the combined graph.
+  if (manifest.federated && manifest.federated.length > 0) {
+    post({ type: "progress", phase: "fetching federated repos" });
+    for (const fed of manifest.federated) {
+      const [fedNodes, fedEdges] = await Promise.all([
+        fetchText(fed.nodesUrl),
+        fetchText(fed.edgesUrl),
+      ]);
+      const fedGraph = parseGraph(fedNodes, fedEdges);
+      // Merge nodes and edges into the primary graph.
+      graph.nodes.push(...fedGraph.nodes);
+      graph.edges.push(...fedGraph.edges);
+    }
+  }
 
   post({ type: "progress", phase: "charting the sky" });
   const model = buildModel(graph);
