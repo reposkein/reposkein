@@ -8,6 +8,8 @@
 import { fetchManifest, fetchText } from "../api";
 import { parseGraph } from "../parse";
 import { buildModel } from "../model";
+import { layoutFingerprint } from "../layout";
+import { loadCachedPositions, storeCachedPositions } from "../positionCache";
 import type { ClusterNode } from "../cluster";
 import type { DrawEdge, NodeRecord } from "../model";
 
@@ -67,8 +69,20 @@ async function run(): Promise<void> {
     }
   }
 
-  post({ type: "progress", phase: "charting the sky" });
-  const model = buildModel(graph);
+  // Position cache (IndexedDB, available in workers): if we've laid out this
+  // exact node set + layout version before, reuse the stored byte-stable
+  // positions and SKIP the slow force simulation. Best-effort throughout.
+  const fp = layoutFingerprint(graph.nodes.map((n) => n.id));
+  const cached = await loadCachedPositions(fp);
+
+  post({ type: "progress", phase: cached ? "restoring layout" : "charting the sky" });
+  const model = buildModel(graph, { cachedPositions: cached ?? undefined });
+
+  // On a miss, persist the freshly-computed positions for next time. Snapshot
+  // the buffer NOW (synchronously) because the original is transferred zero-copy
+  // at the end of run() and would be detached before the async write slices it.
+  // Don't await — the result posts back while the write completes in background.
+  if (!cached) void storeCachedPositions(fp, model.layout.positions.slice());
 
   const result: WorkerResult = {
     type: "result",

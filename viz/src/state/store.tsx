@@ -394,11 +394,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const baked = staticPayload();
     if (baked) {
       let cancelled = false;
-      Promise.resolve().then(() => {
+      Promise.resolve().then(async () => {
         if (cancelled) return;
         try {
           dispatch({ t: "progress", phase: "parsing baked graph" });
-          const result = buildStaticResult(baked);
+          const result = await buildStaticResult(baked);
           if (!cancelled) dispatch({ t: "ready", model: fromWorker(result) });
         } catch (err) {
           if (!cancelled)

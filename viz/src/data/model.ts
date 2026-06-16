@@ -67,9 +67,16 @@ function recordOf(n: RawNode, degree: number): NodeRecord {
   };
 }
 
-export function buildModel(g: RawGraph): GraphModel {
+/** Optional build inputs. `cachedPositions` is a previously-computed,
+ *  fingerprint-matched position buffer that lets buildModel SKIP the force
+ *  layout (purely a speed win — cached == recomputed, byte-stable). */
+export interface BuildModelOptions {
+  cachedPositions?: Float32Array;
+}
+
+export function buildModel(g: RawGraph, opts?: BuildModelOptions): GraphModel {
   const tree = buildClusterTree(g);
-  const layout = computeLayout(tree);
+  const layout = computeLayout(tree, opts?.cachedPositions);
 
   // Relationship edges + degree.
   const drawEdges: DrawEdge[] = [];

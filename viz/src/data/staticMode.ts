@@ -13,6 +13,8 @@
 
 import { parseGraph } from "./parse";
 import { buildModel } from "./model";
+import { layoutFingerprint } from "./layout";
+import { loadCachedPositions, storeCachedPositions } from "./positionCache";
 import type { GraphManifest } from "./api";
 import type { WorkerResult } from "./worker/graph.worker";
 
@@ -47,9 +49,17 @@ export function isStaticMode(): boolean {
  *  identical. The federated branch reads inlined text from the manifest's
  *  federated[] entries' nodesUrl/edgesUrl ONLY if they are data: inlined —
  *  the export bakes a single repo (M1), so federation is typically empty. */
-export function buildStaticResult(payload: StaticGraphPayload): WorkerResult {
+export async function buildStaticResult(payload: StaticGraphPayload): Promise<WorkerResult> {
   const graph = parseGraph(payload.nodesText, payload.edgesText);
-  const model = buildModel(graph);
+
+  // Position cache (IndexedDB, main-thread here): reuse a byte-stable layout for
+  // this node set + layout version if present, else compute and store. Purely a
+  // speed win; best-effort, never throws (falls back to computing on any error).
+  const fp = layoutFingerprint(graph.nodes.map((n) => n.id));
+  const cached = await loadCachedPositions(fp);
+  const model = buildModel(graph, { cachedPositions: cached ?? undefined });
+  if (!cached) void storeCachedPositions(fp, model.layout.positions.slice());
+
   return {
     type: "result",
     repoId: model.tree.repoId,

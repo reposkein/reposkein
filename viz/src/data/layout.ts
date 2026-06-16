@@ -21,9 +21,32 @@ import {
 } from "d3-force-3d";
 import type { ClusterTree } from "./cluster";
 import { flattenTree } from "./cluster";
-import { idToPosition, mulberry32, fnv1a } from "./hash";
+import { idToPosition, mulberry32, fnv1a, fingerprint } from "./hash";
 
 const LAYOUT_SEED = 0x5eed_1234;
+
+/** Bumped whenever the layout algorithm, force parameters, OR the adaptive
+ *  iteration schedule (layoutIterations) changes — anything that alters the
+ *  byte output for a given graph. The position cache keys on this so a stale
+ *  cached layout from a previous algorithm is never reused after an upgrade.
+ *
+ *  HISTORY:
+ *   v1 — initial cached layout (adaptive iterations 200/150/100/70). */
+export const LAYOUT_VERSION = 1;
+
+/** Stable position-cache fingerprint for a graph's node set.
+ *
+ *  Positions are a pure function of the cluster tree (derived from node ids +
+ *  structure) and the layout algorithm, so the cache key is the SORTED node-id
+ *  list + the node count + LAYOUT_VERSION. Sorting makes it independent of JSONL
+ *  ordering; the count guards against (astronomically unlikely) id-set hash
+ *  collisions at a different size; the version invalidates on algorithm change.
+ *
+ *  Deterministic: same node set + version → identical key, every run. */
+export function layoutFingerprint(nodeIds: string[]): string {
+  const sorted = [...nodeIds].sort();
+  return fingerprint([`v${LAYOUT_VERSION}`, `n${sorted.length}`, ...sorted]);
+}
 
 /** Force-layout iteration count, adaptive to node count but DETERMINISTIC: a
  *  fixed number of ticks for a given size, so the same graph always lays out
@@ -58,11 +81,20 @@ export interface LayoutResult {
  *  Single-pass force layout over all clusters with parent→child structural
  *  links (the spec's hierarchical-freeze refinement is deferred; M1 needs a
  *  stable, navigable map and this is fully deterministic). */
-export function computeLayout(tree: ClusterTree): LayoutResult {
+export function computeLayout(tree: ClusterTree, cachedPositions?: Float32Array): LayoutResult {
   const flat = flattenTree(tree);
   const keys = flat.map((c) => c.key);
   const indexByKey = new Map<string, number>();
   keys.forEach((k, i) => indexByKey.set(k, i));
+
+  // Position-cache hit: the cached buffer aligns with the canonical key order
+  // (same node set → same deterministic tree → same flatten order), so we reuse
+  // it and skip the (slow) force simulation entirely. Length-guard against a
+  // mismatched/corrupt buffer; on mismatch we fall through to recompute.
+  if (cachedPositions && cachedPositions.length === keys.length * 3) {
+    // Copy so the model owns its buffer (the cache may keep/transfer its own).
+    return { keys, positions: cachedPositions.slice(), indexByKey };
+  }
 
   const nodes: SimNode[] = flat.map((c) => {
     const [x, y, z] = idToPosition(c.key);

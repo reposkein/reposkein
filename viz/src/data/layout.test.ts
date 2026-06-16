@@ -45,6 +45,25 @@ describe("deterministic layout", () => {
     expect(Array.from(l1.positions)).toEqual(Array.from(l2.positions));
   });
 
+  it("reusing cached positions yields byte-identical output (no-op speed win)", () => {
+    const tree = buildClusterTree(graph());
+    const fresh = computeLayout(tree);
+    // Feed the fresh positions back as the cache: must reproduce them exactly.
+    const reused = computeLayout(buildClusterTree(graph()), fresh.positions);
+    expect(reused.keys).toEqual(fresh.keys);
+    expect(Array.from(reused.positions)).toEqual(Array.from(fresh.positions));
+    // The returned buffer is a copy (model owns it), not the same reference.
+    expect(reused.positions).not.toBe(fresh.positions);
+  });
+
+  it("ignores a cached buffer of the wrong length and recomputes", () => {
+    const tree = buildClusterTree(graph());
+    const fresh = computeLayout(tree);
+    const wrong = new Float32Array(6); // deliberately too short
+    const recomputed = computeLayout(buildClusterTree(graph()), wrong);
+    expect(Array.from(recomputed.positions)).toEqual(Array.from(fresh.positions));
+  });
+
   it("layout produces a position triple per cluster", () => {
     const tree = buildClusterTree(graph());
     const layout = computeLayout(tree);
