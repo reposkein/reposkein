@@ -118,7 +118,10 @@ function readCache(path: string): TemporalStats | null {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     // Invalidate if the cache was written by an older version of the algorithm
     if (parsed["_cache_version"] !== CACHE_VERSION) return null;
-    return parsed as unknown as TemporalStats;
+    // Strip the internal version tag before returning to callers
+    const { _cache_version: _cv, ...stats } = parsed;
+    void _cv;
+    return stats as unknown as TemporalStats;
   } catch {
     return null;
   }
