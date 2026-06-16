@@ -1,7 +1,7 @@
 //! Cross-file resolution: turns RawImport/RawCall facts into IMPORTS/CALLS
 //! edges. Language-agnostic — operates on Function names and File paths.
 
-use crate::extractor::{RawCall, RawImport};
+use crate::extractor::{RawCall, RawHeritage, RawImport};
 use crate::id;
 use crate::model::{Edge, Node};
 use serde_json::{json, Value};
@@ -243,7 +243,7 @@ fn resolve_one(
 
 /// Edges (unchanged) — see [`resolve_full`].
 pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &str) -> Vec<Edge> {
-    resolve_full(nodes, imports, calls, repo).0
+    resolve_full(nodes, imports, calls, &[], repo).0
 }
 
 /// Like [`resolve`], but also returns, per caller Function id, the sorted+deduped
@@ -255,6 +255,7 @@ pub fn resolve_full(
     nodes: &[Node],
     imports: &[RawImport],
     calls: &[RawCall],
+    heritage: &[RawHeritage],
     repo: &str,
 ) -> (Vec<Edge>, Vec<(String, Vec<String>)>) {
     let files = file_paths(nodes);
@@ -302,6 +303,8 @@ pub fn resolve_full(
     }
 
     let (mut edges, import_targets) = resolve_imports(imports, &files, repo, &by_file_funcs);
+    let mut heritage_edges = resolve_heritage(nodes, heritage, &import_targets, repo);
+    edges.append(&mut heritage_edges);
 
     // ALL imported local→original bindings (incl. cross-repo imports that
     // resolve_imports filtered out, since their target file isn't in-repo).
@@ -369,9 +372,187 @@ pub fn resolve_full(
     (edges, external_out)
 }
 
+/// A lightweight view of the type nodes (Class/Interface/Enum) for heritage.
+struct TypeView {
+    id: String,
+    name: String,
+    qualified: String,
+    file_path: String,
+    label: String,
+}
+
+fn type_views(nodes: &[Node]) -> Vec<TypeView> {
+    nodes
+        .iter()
+        .filter(|n| n.labels == ["Class"] || n.labels == ["Interface"] || n.labels == ["Enum"])
+        .map(|n| TypeView {
+            id: n.id.clone(),
+            name: prop_str(n, "name"),
+            qualified: prop_str(n, "qualified_name"),
+            file_path: prop_str(n, "file_path"),
+            label: n.labels.first().cloned().unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn dir_of(path: &str) -> &str {
+    path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
+}
+
+/// Resolves RawHeritage facts → INHERITS/IMPLEMENTS edges, resolving the base
+/// type repo-wide via a CALLS-style ladder. Ambiguous repo-wide bases are
+/// SKIPPED (D-AMBIG): a false hierarchy edge is worse than a missing one.
+pub fn resolve_heritage(
+    nodes: &[Node],
+    heritage: &[RawHeritage],
+    import_targets: &ImportTargets,
+    _repo: &str,
+) -> Vec<Edge> {
+    let types = type_views(nodes);
+
+    // Indexes (all BTreeMap; value vectors sorted → deterministic).
+    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let mut by_id_label: BTreeMap<String, String> = BTreeMap::new();
+    let mut by_id_qual: BTreeMap<String, String> = BTreeMap::new();
+    let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
+    for t in &types {
+        by_name
+            .entry(t.name.clone())
+            .or_default()
+            .push(t.id.clone());
+        by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
+        by_file_name
+            .entry((t.file_path.clone(), t.name.clone()))
+            .or_default()
+            .push(t.id.clone());
+        by_id_label.insert(t.id.clone(), t.label.clone());
+        by_id_qual.insert(t.id.clone(), t.qualified.clone());
+        by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
+    }
+    for v in by_name.values_mut() {
+        v.sort();
+    }
+    for v in by_file_name.values_mut() {
+        v.sort();
+    }
+
+    // (from_id, to_id) -> (resolution, confidence, edge_type); best-confidence wins.
+    let mut agg: BTreeMap<(String, String), (&'static str, f64, String)> = BTreeMap::new();
+    for h in heritage {
+        let Some((to_id, res, conf)) = resolve_base(
+            h,
+            &by_name,
+            &by_file_qual,
+            &by_file_name,
+            import_targets,
+            &by_id_qual,
+            &by_id_dir,
+        ) else {
+            continue;
+        };
+        // D-CS: C# refines edge_type from the resolved target's label.
+        let edge_type = if h.label_refine {
+            match by_id_label.get(&to_id).map(|s| s.as_str()) {
+                Some("Interface") => "IMPLEMENTS".to_string(),
+                Some("Class") => "INHERITS".to_string(),
+                _ => h.edge_type.clone(),
+            }
+        } else {
+            h.edge_type.clone()
+        };
+        let entry = agg
+            .entry((h.from_id.clone(), to_id))
+            .or_insert((res, conf, edge_type.clone()));
+        if conf > entry.1 {
+            *entry = (res, conf, edge_type);
+        }
+    }
+
+    let mut edges = Vec::new();
+    for ((from, to), (res, conf, edge_type)) in agg {
+        let mut e = Edge::new(from, &edge_type, to);
+        e.props.insert("resolution".to_string(), json!(res));
+        e.props.insert("confidence".to_string(), json!(conf));
+        edges.push(e);
+    }
+    edges
+}
+
+/// Resolves a heritage base name → (target_id, resolution, confidence), trying
+/// rungs most→least precise, stopping at the first hit. None = unresolved/skip.
+fn resolve_base(
+    h: &RawHeritage,
+    by_name: &BTreeMap<String, Vec<String>>,
+    by_file_qual: &BTreeMap<(String, String), String>,
+    by_file_name: &BTreeMap<(String, String), Vec<String>>,
+    import_targets: &ImportTargets,
+    by_id_qual: &BTreeMap<String, String>,
+    by_id_dir: &BTreeMap<String, String>,
+) -> Option<(String, &'static str, f64)> {
+    // Rung 1: same-file, scope-aware (reproduces today's in-file edges).
+    if let Some(from_qual) = by_id_qual.get(&h.from_id) {
+        let scope: Vec<&str> = from_qual.split('.').collect();
+        for i in (0..scope.len()).rev() {
+            let candidate = if i == 0 {
+                h.base_name.clone()
+            } else {
+                format!("{}.{}", scope[..i].join("."), h.base_name)
+            };
+            if let Some(id) = by_file_qual.get(&(h.from_path.clone(), candidate)) {
+                return Some((id.clone(), "exact", 1.0));
+            }
+        }
+    }
+    if let Some(ids) = by_file_name.get(&(h.from_path.clone(), h.base_name.clone())) {
+        if ids.len() == 1 {
+            return Some((ids[0].clone(), "exact", 1.0));
+        }
+    }
+
+    // Rung 2: import-followed (the deriving file imports the base).
+    if let Some((target_path, original)) =
+        import_targets.get(&(h.from_file_id.clone(), h.base_name.clone()))
+    {
+        if let Some(ids) = by_file_name.get(&(target_path.clone(), original.clone())) {
+            if ids.len() == 1 {
+                return Some((ids[0].clone(), "exact", 1.0));
+            }
+        }
+    }
+
+    // Rung 3: same-directory unique (only when the deriving file is non-root).
+    if let Some(ids) = by_name.get(&h.base_name) {
+        if ids.len() > 1 {
+            let dir = dir_of(&h.from_path);
+            if !dir.is_empty() {
+                let local: Vec<&String> = ids
+                    .iter()
+                    .filter(|id| by_id_dir.get(*id).map(|d| d.as_str()) == Some(dir))
+                    .collect();
+                if local.len() == 1 {
+                    return Some((local[0].clone(), "name_match", 0.8));
+                }
+            }
+        }
+    }
+
+    // Rung 4: repo-wide unique.
+    if let Some(ids) = by_name.get(&h.base_name) {
+        if ids.len() == 1 {
+            return Some((ids[0].clone(), "name_match", 0.7));
+        }
+        // Rung 5 (D-AMBIG): >1 → skip (no edge).
+        return None;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extractor::RawHeritage;
     use crate::model::Node;
     use serde_json::json;
 
@@ -655,6 +836,124 @@ mod tests {
         }
     }
 
+    fn type_node(repo: &str, kind_label: &str, id_kind: &str, path: &str, qualified: &str) -> Node {
+        let id = format!("rs1:{repo}:{id_kind}:{path}#{qualified}");
+        let name = qualified.rsplit('.').next().unwrap().to_string();
+        Node::new(id, kind_label)
+            .set("name", json!(name))
+            .set("qualified_name", json!(qualified))
+            .set("file_path", json!(path))
+    }
+    fn raw_h(from_id: &str, from_path: &str, base: &str, edge: &str) -> RawHeritage {
+        RawHeritage {
+            from_id: from_id.to_string(),
+            from_path: from_path.to_string(),
+            from_file_id: id::file_id("r", from_path),
+            edge_type: edge.to_string(),
+            base_name: base.to_string(),
+            label_refine: false,
+        }
+    }
+
+    #[test]
+    fn heritage_same_file_is_exact() {
+        let base = type_node("r", "Class", "class", "m.py", "A");
+        let derived = type_node("r", "Class", "class", "m.py", "B");
+        let nodes = vec![base.clone(), derived.clone()];
+        let h = vec![raw_h(&derived.id, "m.py", "A", "INHERITS")];
+        let edges = resolve_heritage(&nodes, &h, &ImportTargets::new(), "r");
+        let e = edges.iter().find(|e| e.typ == "INHERITS").unwrap();
+        assert_eq!(e.from, derived.id);
+        assert_eq!(e.to, base.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+    }
+
+    #[test]
+    fn heritage_repo_wide_unique_is_name_match_07() {
+        let base = type_node("r", "Class", "class", "base/a.py", "A");
+        let derived = type_node("r", "Class", "class", "svc/b.py", "B");
+        let nodes = vec![base.clone(), derived.clone()];
+        let h = vec![raw_h(&derived.id, "svc/b.py", "A", "INHERITS")];
+        let edges = resolve_heritage(&nodes, &h, &ImportTargets::new(), "r");
+        let e = edges.iter().find(|e| e.typ == "INHERITS").unwrap();
+        assert_eq!(e.to, base.id);
+        assert_eq!(e.props["resolution"], json!("name_match"));
+        assert_eq!(e.props["confidence"], json!(0.7));
+    }
+
+    #[test]
+    fn heritage_ambiguous_repo_wide_is_skipped() {
+        let a1 = type_node("r", "Class", "class", "x/a.py", "A");
+        let a2 = type_node("r", "Class", "class", "y/a.py", "A");
+        let derived = type_node("r", "Class", "class", "z/b.py", "B");
+        let nodes = vec![a1, a2, derived.clone()];
+        let h = vec![raw_h(&derived.id, "z/b.py", "A", "INHERITS")];
+        let edges = resolve_heritage(&nodes, &h, &ImportTargets::new(), "r");
+        assert!(edges.is_empty(), "ambiguous heritage base must be skipped");
+    }
+
+    #[test]
+    fn heritage_same_dir_unique_beats_repo_wide_dup() {
+        let near = type_node("r", "Class", "class", "pkg/a.py", "A");
+        let far = type_node("r", "Class", "class", "other/a.py", "A");
+        let derived = type_node("r", "Class", "class", "pkg/b.py", "B");
+        let nodes = vec![near.clone(), far, derived.clone()];
+        let h = vec![raw_h(&derived.id, "pkg/b.py", "A", "INHERITS")];
+        let edges = resolve_heritage(&nodes, &h, &ImportTargets::new(), "r");
+        let e = edges.iter().find(|e| e.typ == "INHERITS").unwrap();
+        assert_eq!(e.to, near.id);
+        assert_eq!(e.props["confidence"], json!(0.8));
+    }
+
+    #[test]
+    fn heritage_import_followed_is_exact() {
+        let base = type_node("r", "Class", "class", "base/a.py", "A");
+        let dup = type_node("r", "Class", "class", "other/a.py", "A");
+        let derived = type_node("r", "Class", "class", "svc/b.py", "B");
+        let nodes = vec![base.clone(), dup, derived.clone()];
+        let mut it = ImportTargets::new();
+        it.insert(
+            (id::file_id("r", "svc/b.py"), "A".to_string()),
+            ("base/a.py".to_string(), "A".to_string()),
+        );
+        let h = vec![raw_h(&derived.id, "svc/b.py", "A", "INHERITS")];
+        let edges = resolve_heritage(&nodes, &h, &it, "r");
+        let e = edges.iter().find(|e| e.typ == "INHERITS").unwrap();
+        assert_eq!(e.to, base.id, "import-followed beats the repo-wide dup");
+        assert_eq!(e.props["resolution"], json!("exact"));
+    }
+
+    #[test]
+    fn heritage_csharp_label_refine_overrides_edge_type() {
+        let iface = type_node("r", "Interface", "iface", "n/ifoo.cs", "N.IFoo");
+        let derived = type_node("r", "Class", "class", "n/c.cs", "N.C");
+        let nodes = vec![iface.clone(), derived.clone()];
+        let h = vec![RawHeritage {
+            from_id: derived.id.clone(),
+            from_path: "n/c.cs".into(),
+            from_file_id: id::file_id("r", "n/c.cs"),
+            edge_type: "INHERITS".into(),
+            base_name: "IFoo".into(),
+            label_refine: true,
+        }];
+        let edges = resolve_heritage(&nodes, &h, &ImportTargets::new(), "r");
+        let e = edges.iter().find(|e| e.from == derived.id).unwrap();
+        assert_eq!(e.typ, "IMPLEMENTS", "label refined from Interface target");
+        assert_eq!(e.to, iface.id);
+    }
+
+    #[test]
+    fn heritage_resolution_is_deterministic() {
+        let base = type_node("r", "Class", "class", "base/a.py", "A");
+        let derived = type_node("r", "Class", "class", "svc/b.py", "B");
+        let nodes = vec![base, derived.clone()];
+        let h = vec![raw_h(&derived.id, "svc/b.py", "A", "INHERITS")];
+        let a = resolve_heritage(&nodes, &h, &ImportTargets::new(), "r");
+        let b = resolve_heritage(&nodes, &h, &ImportTargets::new(), "r");
+        assert_eq!(a, b);
+    }
+
     #[test]
     fn pub_use_chain_resolves_to_original_definition() {
         // b.rs defines Thing(); a.rs `pub use crate::b::Thing`; c.rs `use crate::a::Thing` + calls Thing().
@@ -719,7 +1018,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], "r");
         assert!(
             edges.iter().all(|e| e.typ != "CALLS"),
             "no in-repo CALLS edge"
@@ -743,7 +1042,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "h", None)];
-        let (_e, external) = resolve_full(&nodes, &imports, &calls, "r");
+        let (_e, external) = resolve_full(&nodes, &imports, &calls, &[], "r");
         assert_eq!(
             external,
             vec![(caller.id.clone(), vec!["helper".to_string()])]
@@ -757,7 +1056,7 @@ mod tests {
         let caller = func_node("r", "svc.py", "run", 0);
         let nodes = vec![file_node("r", "svc.py"), caller.clone()];
         let calls = vec![call(&caller.id, "svc.py", "run", "print", None)];
-        let (_e, external) = resolve_full(&nodes, &[], &calls, "r");
+        let (_e, external) = resolve_full(&nodes, &[], &calls, &[], "r");
         assert!(
             external.is_empty(),
             "non-imported unresolved call is not recorded"
@@ -784,7 +1083,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, "r");
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], "r");
         assert!(edges.iter().any(|e| e.typ == "CALLS" && e.to == helper.id));
         assert!(
             external.is_empty(),

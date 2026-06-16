@@ -104,6 +104,7 @@ pub fn index_tree_with(
     let mut edges: Vec<Edge> = Vec::new();
     let mut all_imports: Vec<extractor::RawImport> = Vec::new();
     let mut all_calls: Vec<extractor::RawCall> = Vec::new();
+    let mut all_heritage: Vec<extractor::RawHeritage> = Vec::new();
 
     // Repository node (root_path is "." by convention).
     nodes.push(
@@ -197,11 +198,13 @@ pub fn index_tree_with(
                 edges.append(&mut extracted.edges);
                 all_imports.append(&mut extracted.imports);
                 all_calls.append(&mut extracted.calls);
+                all_heritage.append(&mut extracted.heritage);
             }
         }
     }
 
-    let (mut resolved, external) = resolve::resolve_full(&nodes, &all_imports, &all_calls, repo);
+    let (mut resolved, external) =
+        resolve::resolve_full(&nodes, &all_imports, &all_calls, &all_heritage, repo);
     edges.append(&mut resolved);
     // Attach cross-repo call candidates to their caller Function nodes (design:
     // cross-repo-calls.md). Omitted when empty → repos without cross-repo
