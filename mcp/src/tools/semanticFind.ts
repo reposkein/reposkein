@@ -25,6 +25,7 @@ import type { EmbeddingProvider } from "../embed/provider.js";
 import { providerFromEnv } from "../embed/provider.js";
 import { embedCorpus } from "../embed/cache.js";
 import { cosineRank, rrf, type ViaKind } from "../embed/hybrid.js";
+import { neutralizeSummary } from "../guard/summaryValidation.js";
 
 export interface SemanticFindArgs {
   query: string;
@@ -163,9 +164,12 @@ export function makeSemanticFind(
         if (via !== undefined) {
           result["via"] = via;
         }
-        // Include summary only when present (keeps payload lean; absence is informative)
-        if (node.summary) {
-          result["summary"] = node.summary;
+        // Include summary only when present (keeps payload lean; absence is informative).
+        // Neutralize on the READ path to close the injection bypass: summaries from
+        // git-pulled nodes.jsonl or hand-edited files never passed the write guard.
+        const neutralized = neutralizeSummary(node.summary || null);
+        if (neutralized) {
+          result["summary"] = neutralized;
         }
         return result;
       }).filter(Boolean);

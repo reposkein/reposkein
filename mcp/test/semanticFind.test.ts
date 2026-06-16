@@ -245,3 +245,38 @@ describe("makeSemanticFind — embedding integration", () => {
 
 // Need beforeEach/afterEach to be imported
 import { beforeEach, afterEach } from "vitest";
+
+// ——— Neutralization of summaries ———
+
+describe("makeSemanticFind — summary neutralization", () => {
+  it("neutralizes a summary containing a code fence and a javascript: link", async () => {
+    // Seed a corpus node whose summary contains injection vectors:
+    // a code fence and a markdown link with a javascript: URL.
+    const injectedCorpus: CorpusNode[] = [
+      cn(
+        "inj:1",
+        "evil.fn",
+        "fn",
+        "Function",
+        "Does ```secret``` stuff and [click me](javascript:alert(1))"
+      ),
+    ];
+    const store = fakeStore({
+      searchCorpus: async () => injectedCorpus,
+      federatedRepoIds: async () => [],
+    });
+    const handler = makeSemanticFind(store, "testrepo");
+    const result = await handler({ query: "secret stuff" });
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse((result.content[0] as { text: string }).text);
+    const top = body.results[0];
+    expect(top).toBeDefined();
+    // Code fences must be stripped.
+    expect(top.summary).not.toContain("```");
+    // The javascript: link must be unwrapped to its link text only.
+    expect(top.summary).not.toContain("javascript:");
+    expect(top.summary).not.toContain("](");
+    // The display text "click me" should still be present.
+    expect(top.summary).toContain("click me");
+  });
+});
