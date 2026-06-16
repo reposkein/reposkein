@@ -24,6 +24,7 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { parseGitLog, computeTemporal, type TemporalStats } from "./gitlog.js";
 
 const execFile = promisify(execFileCb);
@@ -32,6 +33,13 @@ export type TemporalResult = TemporalStats | { unavailable: string };
 
 /** Max cache files to keep per repo (prune oldest when exceeded). */
 const MAX_CACHE_FILES = 3;
+
+/**
+ * Cache version tag.  Bump whenever the algorithm or output shape changes so
+ * stale cache files produced by an old version are automatically invalidated.
+ * Format: "v<N>" — stored in the cached payload under the key `_cache_version`.
+ */
+const CACHE_VERSION = "v1";
 
 /** Window defaults (also used for cache key). */
 const WINDOW_MONTHS = 12;
@@ -107,18 +115,28 @@ function readCache(path: string): TemporalStats | null {
   if (!existsSync(path)) return null;
   try {
     const text = readFileSync(path, "utf8");
-    return JSON.parse(text) as TemporalStats;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    // Invalidate if the cache was written by an older version of the algorithm
+    if (parsed["_cache_version"] !== CACHE_VERSION) return null;
+    return parsed as unknown as TemporalStats;
   } catch {
     return null;
   }
 }
 
-/** Atomic write: write to a .tmp file then rename (best-effort on all platforms). */
+/**
+ * Atomic write via a unique temp name → rename (no concurrent clobber).
+ * The temp name includes PID + random suffix to avoid collisions when multiple
+ * processes write concurrently. Best-effort: write failure must not break the tool.
+ */
 function writeCache(path: string, stats: TemporalStats): void {
-  const tmp = `${path}.tmp`;
+  const rand = randomBytes(4).toString("hex");
+  const tmp = `${path}.tmp-${process.pid}-${rand}`;
   try {
     mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(tmp, JSON.stringify(stats));
+    // Embed version tag so future reads can detect stale caches
+    const payload = { ...stats, _cache_version: CACHE_VERSION };
+    writeFileSync(tmp, JSON.stringify(payload));
     renameSync(tmp, path);
   } catch {
     // best-effort; a write failure must not break the tool call
