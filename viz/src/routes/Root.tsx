@@ -6,6 +6,7 @@ import { useSearch, useNavigate } from "@tanstack/react-router";
 import { StoreProvider, useStore } from "../state/store";
 import { StarField } from "../scene/StarField";
 import { NebulaHalos } from "../scene/NebulaHalos";
+import { ConstellationLines } from "../scene/ConstellationLines";
 import { EdgeLines } from "../scene/EdgeLines";
 import { Labels } from "../scene/Labels";
 import { Controls } from "../scene/Controls";
@@ -118,6 +119,7 @@ function View() {
         {store.status.kind === "ready" && store.model && (
           <>
             <NebulaHalos />
+            <ConstellationLines />
             <StarField />
             <EdgeLines />
             <TemporalLinks />
