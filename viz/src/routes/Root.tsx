@@ -20,6 +20,7 @@ import { LegendPanel } from "../panels/LegendPanel";
 import { LensSwitcher } from "../panels/LensSwitcher";
 import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
+import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
 
 export function Root() {
   return (
@@ -153,7 +154,10 @@ function View() {
       />
       <Canvas
         camera={{ position: [0, 0, 160], fov: 55, near: 0.1, far: 6000 }}
-        gl={{ antialias: true }}
+        // preserveDrawingBuffer keeps the back buffer readable so the PNG export
+        // (CaptureBridge) can serialize the composited frame. Small perf cost,
+        // acceptable for a viewer (design: share & scale §P1).
+        gl={{ antialias: true, preserveDrawingBuffer: true }}
         style={{ background: "transparent" }}
         // Click on empty space (no mesh hit) → collapse one level + refit.
         onPointerMissed={(e) => {
@@ -182,6 +186,7 @@ function View() {
           </>
         )}
         <Controls />
+        <CaptureBridge repoId={store.model?.repoId} />
         <EffectComposer>
           <Bloom
             luminanceThreshold={0.2}
@@ -239,6 +244,24 @@ function HeaderBar() {
             }}
           >
             Frame all
+          </button>
+        )}
+        {store.model && (
+          <button
+            onClick={() => captureScreenshot()}
+            title="Capture a PNG screenshot of the current view"
+            style={{
+              padding: "2px 10px",
+              fontSize: 11,
+              borderRadius: 5,
+              border: `1px solid ${BRAND.teal}66`,
+              background: `${BRAND.teal}1f`,
+              color: BRAND.cream,
+              cursor: "pointer",
+              letterSpacing: 0.3,
+            }}
+          >
+            Screenshot
           </button>
         )}
       </div>
