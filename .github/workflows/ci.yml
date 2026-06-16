@@ -100,3 +100,28 @@ jobs:
         run: npm run build
       - name: Tests (DB-gated suites skip without NEO4J_PASSWORD)
         run: npm test
+
+  viz:
+    name: viz (typecheck + build + test + lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: viz
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: viz/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Build
+        run: pnpm run build
+      - name: Tests
+        run: pnpm run test
+      - name: Lint
+        run: pnpm run lint
