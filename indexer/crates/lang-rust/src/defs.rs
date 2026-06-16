@@ -18,6 +18,7 @@ pub struct Walk<'a> {
     used: HashMap<String, u32>,
     declared: std::collections::HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
+    pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
 }
 
 fn name_of(node: TsNode, source: &[u8]) -> String {
@@ -76,6 +77,7 @@ impl<'a> Walk<'a> {
             used: HashMap::new(),
             declared: std::collections::HashMap::new(),
             pending_heritage: Vec::new(),
+            heritage: Vec::new(),
         }
     }
 
@@ -279,10 +281,18 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// Resolves deferred heritage edges (call once after the top-level walk).
-    pub fn finalize_heritage(&mut self) {
-        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
-        self.edges.extend(e);
+    /// Lowers pending heritage → RawHeritage (from-side resolved in-file; base
+    /// resolved repo-wide by core::resolve). Call once after the top-level walk.
+    pub fn lower_heritage(&mut self) {
+        let from_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
+        let mut raw = reposkein_core::heritage::lower(
+            &self.pending_heritage,
+            &self.declared,
+            self.rel_path,
+            &from_file_id,
+            false,
+        );
+        self.heritage.append(&mut raw);
     }
 }
 
@@ -295,7 +305,7 @@ mod tests {
         let tree = parse(src).unwrap();
         let mut w = Walk::new("r", "m.rs", src);
         w.walk(tree.root_node(), "rs1:r:file:m.rs");
-        w.finalize_heritage();
+        w.lower_heritage();
         w
     }
 
@@ -330,10 +340,13 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.props.get("qualified_name") == Some(&json!("Service.greet"))));
-        // Service IMPLEMENTS Greeter.
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.rs#Service"
-            && e.typ == "IMPLEMENTS"
-            && e.to == "rs1:r:iface:m.rs#Greeter"));
+        // Service emits RawHeritage with from=Service, base=Greeter.
+        assert!(w
+            .heritage
+            .iter()
+            .any(|h| h.from_id == "rs1:r:class:m.rs#Service"
+                && h.edge_type == "IMPLEMENTS"
+                && h.base_name == "Greeter"));
     }
 
     #[test]
@@ -408,11 +421,11 @@ mod tests {
             .map(|n| n.id.clone());
         // Only assert if both nodes were produced (mod walking may vary); the
         // point is no panic + if present, the IMPLEMENTS edge resolves.
-        if let (Some(s), Some(g)) = (s, g) {
+        if let (Some(s), Some(_g)) = (s, g) {
             assert!(w
-                .edges
+                .heritage
                 .iter()
-                .any(|e| e.from == s && e.typ == "IMPLEMENTS" && e.to == g));
+                .any(|h| h.from_id == s && h.edge_type == "IMPLEMENTS"));
         }
     }
 
@@ -449,10 +462,10 @@ mod tests {
             .map(|n| n.id.clone())
             .expect("trait B");
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.from == a && e.typ == "INHERITS" && e.to == b),
-            "A must INHERITS B"
+                .any(|h| h.from_id == a && h.edge_type == "INHERITS" && h.base_name == "B"),
+            "A must have RawHeritage INHERITS B"
         );
     }
 
@@ -479,16 +492,16 @@ mod tests {
             .map(|n| n.id.clone())
             .expect("trait D");
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == c_id),
-            "A must INHERITS C"
+                .any(|h| h.from_id == a_id && h.edge_type == "INHERITS" && h.base_name == "C"),
+            "A must have RawHeritage INHERITS C"
         );
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == d_id),
-            "A must INHERITS D"
+                .any(|h| h.from_id == a_id && h.edge_type == "INHERITS" && h.base_name == "D"),
+            "A must have RawHeritage INHERITS D"
         );
     }
 }
