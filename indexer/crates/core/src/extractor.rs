@@ -88,6 +88,11 @@ pub struct RawConstruction {
     pub caller_path: String,
     pub caller_file_id: String,
     pub class_name: String,
+    /// `Some(name)` when this construction is the RHS of a simple
+    /// `<ident> = <construction>` local binding; `None` for unbound construction
+    /// sites (`return Foo::new()`, `foo(Bar{})`, tuple/destructuring LHS, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_local: Option<String>,
 }
 
 /// Nodes and edges contributed by an extractor for a single file.
@@ -165,6 +170,14 @@ mod tests {
             caller_path: "a.py".into(),
             caller_file_id: "rs1:r:file:a.py".into(),
             class_name: "Foo".into(),
+            bound_local: None,
+        });
+        out.constructions.push(RawConstruction {
+            caller_id: "rs1:r:func:a.py#f@1".into(),
+            caller_path: "a.py".into(),
+            caller_file_id: "rs1:r:file:a.py".into(),
+            class_name: "Bar".into(),
+            bound_local: Some("x".into()),
         });
 
         let text = serde_json::to_string(&out).unwrap();
@@ -185,6 +198,16 @@ mod tests {
         assert!(
             from_old2.constructions.is_empty(),
             "missing constructions field must default to empty vec"
+        );
+
+        // Verify backward compat: old construction JSON without bound_local field
+        // deserializes with bound_local: None (via #[serde(default)]).
+        let old_ctor =
+            r#"{"caller_id":"c","caller_path":"a.py","caller_file_id":"f","class_name":"Foo"}"#;
+        let from_old_ctor: RawConstruction = serde_json::from_str(old_ctor).unwrap();
+        assert_eq!(
+            from_old_ctor.bound_local, None,
+            "missing bound_local field must default to None"
         );
     }
 }

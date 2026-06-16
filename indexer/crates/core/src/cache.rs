@@ -25,7 +25,10 @@ use std::path::{Path, PathBuf};
 /// Bumped 11→12: Rust associated-function constructors (`Foo::new()`) and
 /// Go composite literals (`Foo{}`, `&Foo{}`) now emit RawConstruction →
 /// INSTANTIATES edges. Both change extractor output for Rust and Go files.
-pub const EXTRACT_CACHE_SCHEMA: u32 = 12;
+/// Bumped 12→13: `RawConstruction.bound_local` captures the LHS local of
+/// `<ident> = <construction>` bindings (all 7 langs); Python now emits bound-local
+/// constructions for the receiver tracker. Changes extractor output.
+pub const EXTRACT_CACHE_SCHEMA: u32 = 13;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {
@@ -171,11 +174,12 @@ mod tests {
     }
 
     #[test]
-    fn cache_schema_is_12() {
-        // Bumped 11→12: Rust Foo::new() associated-function constructors +
-        // Go composite-literal INSTANTIATES sites change extractor output.
+    fn cache_schema_is_13() {
+        // Bumped 12→13: RawConstruction.bound_local captures LHS locals of
+        // `<ident> = <construction>` bindings; Python emits bound-local
+        // constructions for the receiver tracker.
         assert_eq!(
-            EXTRACT_CACHE_SCHEMA, 12,
+            EXTRACT_CACHE_SCHEMA, 13,
             "bump cache schema when extractor output changes"
         );
     }
