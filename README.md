@@ -201,16 +201,16 @@ REPOSKEIN_EMBED_DIMS=768          # must match the model's output dims
 `voyage-4-nano` (Apache-2.0) is a custom Qwen3-based model Ollama can't run, so RepoSkein ships a **one-command server** for it in [`embed-server/`](embed-server/):
 
 ```sh
-cd embed-server && docker compose up -d    # first boot downloads the model
+docker compose up -d                        # from the repo root — or: cd embed-server && docker compose up -d
 ```
 ```sh
 REPOSKEIN_EMBED_PROVIDER=http
 REPOSKEIN_EMBED_URL=http://127.0.0.1:8080/v1/embeddings
 REPOSKEIN_EMBED_MODEL=voyage-4-nano
-REPOSKEIN_EMBED_DIMS=1024         # must equal EMBED_DIMS in embed-server/docker-compose.yml
+REPOSKEIN_EMBED_DIMS=1024         # must equal EMBED_DIMS in the compose file
 ```
 
-Everything stays on your machine. See [`embed-server/README.md`](embed-server/README.md) for GPU, dims, and using other models.
+Everything stays on your machine. The image is **CPU-only and multi-arch** — it runs with **no NVIDIA GPU** on Apple Silicon / ARM unified-memory, x64 Linux, and Windows (CI builds + smoke-tests both amd64 and arm64). Docker can't use Apple's Metal/MPS — for that, run the server natively with `EMBED_DEVICE=mps` (see [`embed-server/README.md`](embed-server/README.md)). The root [`docker-compose.yml`](docker-compose.yml) also starts the optional Neo4j backend via `--profile neo4j`.
 
 > `REPOSKEIN_EMBED_DIMS` on the client **must match** the model's actual output dimension, or cosine scoring is skipped.
 

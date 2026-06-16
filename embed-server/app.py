@@ -35,6 +35,10 @@ from pydantic import BaseModel
 
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "voyageai/voyage-4-nano")
 EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "1024"))
+# Device: leave unset for auto-detect (cuda > mps > cpu). In Docker only `cpu`
+# is available even on Apple Silicon (containers can't reach Metal/MPS). When
+# running NATIVELY on a Mac, set EMBED_DEVICE=mps to use unified-memory GPU.
+EMBED_DEVICE = os.environ.get("EMBED_DEVICE") or None
 
 # voyage-4-nano's task prompts (from the model card) — applied automatically by
 # encode_query/encode_document on recent sentence-transformers; used as a fallback
@@ -56,6 +60,7 @@ def _load():
             EMBED_MODEL,
             trust_remote_code=True,
             truncate_dim=EMBED_DIMS,
+            device=EMBED_DEVICE,  # None = auto (cuda > mps > cpu)
         )
     return _model
 

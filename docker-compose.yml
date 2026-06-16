@@ -1,0 +1,59 @@
+# Optional supporting services for RepoSkein, in one command:
+#
+#   docker compose up -d                 # the local embedding server (for hybrid semantic_find)
+#   docker compose --profile neo4j up -d # also start the optional Neo4j backend
+#
+# NOTE: the RepoSkein MCP server itself runs over **stdio**, launched by your
+# agent (Claude Code / Cursor / …) — it is not a long-running container. This
+# compose brings up the *services the MCP server talks to*; you then point the
+# MCP server at them with env vars (shown below).
+#
+# Works on Linux, macOS, and Windows (Docker Desktop). CPU-only by default — runs
+# on Apple Silicon / ARM unified-memory and GPU-less Linux. Docker cannot use
+# Apple's Metal/MPS; for that, run embed-server natively (see embed-server/README.md).
+# NVIDIA GPU: uncomment the `deploy` block under `embed`.
+services:
+  # Local embedding server for the optional hybrid tier of `semantic_find`.
+  # Point the MCP server at it:
+  #   REPOSKEIN_EMBED_PROVIDER=http
+  #   REPOSKEIN_EMBED_URL=http://127.0.0.1:8080/v1/embeddings
+  #   REPOSKEIN_EMBED_MODEL=voyage-4-nano
+  #   REPOSKEIN_EMBED_DIMS=1024          # must equal EMBED_DIMS below
+  embed:
+    build: ./embed-server
+    image: reposkein-embed
+    ports:
+      - "8080:8080"
+    environment:
+      EMBED_MODEL: voyageai/voyage-4-nano
+      EMBED_DIMS: "1024" # voyage-4-nano Matryoshka: 2048 | 1024 | 512 | 256
+      # HF_TOKEN: "<token>"          # only for gated/private models
+    volumes:
+      - hf-cache:/root/.cache/huggingface # persist the model across restarts
+    restart: unless-stopped
+    # NVIDIA GPU only (Docker can't use Apple Silicon Metal). Uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - { driver: nvidia, count: 1, capabilities: [gpu] }
+
+  # Optional Neo4j backend (most users don't need it — committed JSONL is the
+  # zero-infra default). Enable with:  docker compose --profile neo4j up -d
+  # Then set on the MCP server: REPOSKEIN_STORE=neo4j, NEO4J_URI=neo4j://localhost:7687,
+  # NEO4J_USER=neo4j, NEO4J_PASSWORD=reposkeintest.
+  neo4j:
+    image: neo4j:5-community
+    profiles: ["neo4j"]
+    environment:
+      NEO4J_AUTH: neo4j/reposkeintest
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
+  neo4j-data:

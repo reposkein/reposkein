@@ -15,7 +15,13 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# CPU-only torch (no CUDA): smaller image, fully multi-arch, and the right default
+# for machines without an NVIDIA GPU — including Apple Silicon / ARM and GPU-less
+# Linux (Docker can't reach Apple's Metal/MPS anyway). The CPU wheel index has
+# both x86_64 and aarch64 builds. NVIDIA users can still pass `--gpus all` (the
+# CUDA runtime is injected) or build from a CUDA base.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 

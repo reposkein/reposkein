@@ -1,0 +1,76 @@
+name: embed-server
+
+# Pre-validates the local embedding server (embed-server/) so it's known-good
+# before anyone runs it. Builds + smoke-tests NATIVELY on both x86_64 and ARM64
+# runners (no QEMU), both CPU-only (no GPU) — proving it runs on the hardware
+# most people have: Apple Silicon / ARM unified-memory and GPU-less Linux, and
+# (via the same linux images) Docker Desktop on macOS and Windows.
+#
+# Path-filtered: only runs when the embed-server changes.
+on:
+  push:
+    paths:
+      - "embed-server/**"
+      - ".github/workflows/embed-server.yml"
+  pull_request:
+    paths:
+      - "embed-server/**"
+      - ".github/workflows/embed-server.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    name: build + smoke (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the image (native ${{ matrix.arch }}, CPU-only)
+        run: docker build -t reposkein-embed:ci ./embed-server
+
+      # Smoke with a tiny CPU model (all-MiniLM-L6-v2, 384-dim, ~80MB) — no GPU,
+      # no trust_remote_code needed — to validate the full serve+encode path
+      # without pulling the multi-GB voyage-4-nano weights in CI.
+      - name: Run the server
+        run: |
+          docker run -d --name embed -p 8080:8080 \
+            -e EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2 \
+            -e EMBED_DIMS=384 \
+            reposkein-embed:ci
+
+      - name: Wait for /health
+        run: |
+          for i in $(seq 1 40); do
+            curl -fsS http://localhost:8080/health && { echo; break; }
+            sleep 3
+          done
+          curl -fsS http://localhost:8080/health
+
+      - name: Embed + assert OpenAI shape and dims (model downloads on first call)
+        run: |
+          curl -fsS --max-time 600 http://localhost:8080/v1/embeddings \
+            -H 'content-type: application/json' \
+            -d '{"input":["parse the jwt token","charge the card"],"model":"x","input_type":"document"}' \
+            -o resp.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("resp.json"))
+          vecs = [r["embedding"] for r in d["data"]]
+          assert len(vecs) == 2, f"expected 2 vectors, got {len(vecs)}"
+          assert len(vecs[0]) == 384, f"expected 384 dims, got {len(vecs[0])}"
+          assert all(isinstance(x, (int, float)) for x in vecs[0][:8]), "non-numeric embedding"
+          print(f"OK: {len(vecs)} vectors x {len(vecs[0])} dims on {('arm64' if __import__('platform').machine() in ('aarch64','arm64') else 'amd64')}")
+          PY
+
+      - name: Server logs on failure
+        if: failure()
+        run: docker logs embed | tail -50
