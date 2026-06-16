@@ -14,6 +14,8 @@ import type {
   WorkerProgress,
   WorkerResult,
 } from "../data/worker/graph.worker";
+import { resolveLens, type Emphasis, type LensId } from "../data/lens";
+import { computeImpact, type ImpactResult } from "../data/impact";
 
 type Status =
   | { kind: "loading"; phase: string }
@@ -38,7 +40,21 @@ interface State {
   filters: Filters;
   /** Node id to fly-to: set by search, consumed by Controls. Bumps fitNonce. */
   focusTarget: string | null;
+  /** Active lens id (one-click filter preset). "all" = default. A manual
+   *  filter edit drops the lens back to "all" so the chip never lies. */
+  lens: LensId;
+  /** Scene emphasis driven by the active lens (highlights a node class). */
+  emphasis: Emphasis;
+  /** Confidence-audit mode: show ONLY low-confidence edges. When set, the
+   *  scene shows ambiguous (and optionally name_match) edges only. */
+  audit: AuditMode;
+  /** Impact overlay: transitive reverse-CALLS callers + covering tests of the
+   *  selected node. null = inactive. */
+  impact: ImpactResult | null;
 }
+
+/** Confidence-audit preset: which low-confidence buckets to keep visible. */
+export type AuditMode = "off" | "ambiguous" | "ambiguous+name";
 
 type Action =
   | { t: "progress"; phase: string }
@@ -54,6 +70,9 @@ type Action =
   | { t: "setMinConfidence"; value: number }
   | { t: "clearFilters" }
   | { t: "setFocusTarget"; id: string | null }
+  | { t: "setLens"; lens: LensId }
+  | { t: "setAudit"; mode: AuditMode }
+  | { t: "toggleImpact" }
   | { t: "resetView" };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
@@ -109,7 +128,13 @@ function reducer(state: State, a: Action): State {
       return { ...state, expanded, selected: null, fitNonce: state.fitNonce + 1 };
     }
     case "select":
-      return { ...state, selected: a.id, fitNonce: state.fitNonce + 1 };
+      // Selecting a different node invalidates a live impact overlay.
+      return {
+        ...state,
+        selected: a.id,
+        fitNonce: state.fitNonce + 1,
+        impact: a.id === state.selected ? state.impact : null,
+      };
     case "hover":
       return { ...state, hovered: a.id };
     case "requestFit":
@@ -118,21 +143,72 @@ function reducer(state: State, a: Action): State {
       const kinds = new Set(state.filters.kinds);
       if (a.hidden) kinds.add(a.kind);
       else kinds.delete(a.kind);
-      return { ...state, filters: { ...state.filters, kinds } };
+      // A manual filter edit is no longer a clean preset → drop the lens chip.
+      return { ...state, filters: { ...state.filters, kinds }, lens: "all", emphasis: "none" };
     }
     case "setEdgeTypeFilter": {
       const edgeTypes = new Set(state.filters.edgeTypes);
       if (a.hidden) edgeTypes.add(a.type);
       else edgeTypes.delete(a.type);
-      return { ...state, filters: { ...state.filters, edgeTypes } };
+      return { ...state, filters: { ...state.filters, edgeTypes }, lens: "all", emphasis: "none" };
     }
     case "setMinConfidence":
-      return { ...state, filters: { ...state.filters, minConfidence: a.value } };
+      return {
+        ...state,
+        filters: { ...state.filters, minConfidence: a.value },
+        lens: "all",
+        emphasis: "none",
+      };
     case "clearFilters":
       return {
         ...state,
         filters: { kinds: new Set(), edgeTypes: new Set(), minConfidence: 0 },
+        lens: "all",
+        emphasis: "none",
+        audit: "off",
       };
+    case "setLens": {
+      // Apply the preset to the EXISTING filter state + emphasis. Do NOT bump
+      // fitNonce — switching a lens must not yank the camera. Clearing audit so
+      // the two presets never fight over edge visibility.
+      const ls = resolveLens(a.lens);
+      return {
+        ...state,
+        lens: a.lens,
+        emphasis: ls.emphasis,
+        filters: {
+          kinds: ls.kinds,
+          edgeTypes: ls.edgeTypes,
+          minConfidence: ls.minConfidence,
+        },
+        audit: "off",
+      };
+    }
+    case "setAudit":
+      // Toggling audit must not move the camera (no fitNonce bump).
+      return { ...state, audit: a.mode };
+    case "toggleImpact": {
+      if (state.impact) return { ...state, impact: null };
+      if (!state.model || !state.selected) return state;
+      const result = computeImpact(state.model, state.selected);
+      // Auto-expand clusters containing impacted nodes so the highlight is
+      // visible. We expand every ancestor on each impacted node's chain.
+      const expanded = new Set(state.expanded);
+      const toExpand = new Set<string>([...result.impacted, ...result.coveringTests, state.selected]);
+      for (const nodeId of toExpand) {
+        const clusterKey = state.model.clusterOfNode.get(nodeId) ?? nodeId;
+        const chain = state.model.ancestors.get(clusterKey);
+        if (!chain) continue;
+        // Expand every ancestor EXCEPT the node's own representative (so leaves
+        // surface but a containing collapsed cluster isn't force-opened to its
+        // own symbol when it has none).
+        for (const ak of chain) {
+          const c = state.model.byKey.get(ak);
+          if (c && c.children.length > 0) expanded.add(ak);
+        }
+      }
+      return { ...state, impact: result, expanded, fitNonce: state.fitNonce + 1 };
+    }
     case "setFocusTarget":
       return {
         ...state,
@@ -143,7 +219,18 @@ function reducer(state: State, a: Action): State {
     case "resetView": {
       if (!state.model) return state;
       const expanded = new Set<string>([state.model.rootKey]);
-      return { ...state, expanded, selected: null, focusTarget: null, fitNonce: state.fitNonce + 1 };
+      return {
+        ...state,
+        expanded,
+        selected: null,
+        focusTarget: null,
+        lens: "all",
+        emphasis: "none",
+        audit: "off",
+        impact: null,
+        filters: { kinds: new Set(), edgeTypes: new Set(), minConfidence: 0 },
+        fitNonce: state.fitNonce + 1,
+      };
     }
   }
 }
@@ -159,6 +246,9 @@ interface Store extends State {
   setMinConfidence(value: number): void;
   clearFilters(): void;
   setFocusTarget(id: string | null): void;
+  setLens(lens: LensId): void;
+  setAudit(mode: AuditMode): void;
+  toggleImpact(): void;
   resetView(): void;
 }
 
@@ -176,6 +266,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     fitNonce: 0,
     filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
     focusTarget: null,
+    lens: "all",
+    emphasis: "none",
+    audit: "off",
+    impact: null,
   });
 
   useEffect(() => {
@@ -207,6 +301,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setMinConfidence: (value) => dispatch({ t: "setMinConfidence", value }),
       clearFilters: () => dispatch({ t: "clearFilters" }),
       setFocusTarget: (id) => dispatch({ t: "setFocusTarget", id }),
+      setLens: (lens) => dispatch({ t: "setLens", lens }),
+      setAudit: (mode) => dispatch({ t: "setAudit", mode }),
+      toggleImpact: () => dispatch({ t: "toggleImpact" }),
       resetView: () => dispatch({ t: "resetView" }),
     }),
     [state]

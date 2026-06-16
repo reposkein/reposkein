@@ -4,6 +4,15 @@ import * as THREE from "three";
 import { useStore } from "../state/store";
 import { representativeFor, visibleClusters } from "../data/clientModel";
 import { nodeColor, nodeSize } from "./encoding";
+import { isTestNode } from "../data/classify";
+import { TYPE_EMPHASIS_KINDS } from "../data/lens";
+import type { RGB } from "./encoding";
+
+/** Accent colors for the impact overlay (design: impacted vs covering tests). */
+const IMPACT_ACCENT: RGB = [1.0, 0.42, 0.32]; // warm coral — impacted callers
+const COVERING_ACCENT: RGB = [0.45, 1.0, 0.55]; // green — covering tests
+/** Multiplier applied to nodes outside the active overlay focus. */
+const DIM_GAIN = 0.18;
 
 /** Emissive brightness multiplier so stars push past the bloom luminance
  *  threshold and glow. */
@@ -49,6 +58,40 @@ export function StarField() {
     return set;
   }, [hovered, model, visible]);
 
+  // Impact overlay: roll impacted / covering-test node ids up to the visible
+  // cluster representatives so the highlight shows even when collapsed.
+  const impactReps = useMemo(() => {
+    if (!store.impact) return null;
+    const visibleSet = new Set(visible);
+    const repOf = (nodeId: string) => representativeFor(model, nodeId, visibleSet);
+    const impacted = new Set<string>();
+    const covering = new Set<string>();
+    const sourceRep = repOf(store.impact.sourceId);
+    for (const id of store.impact.impacted) {
+      const r = repOf(id);
+      if (r) impacted.add(r);
+    }
+    for (const id of store.impact.coveringTests) {
+      const r = repOf(id);
+      if (r) covering.add(r);
+    }
+    return { impacted, covering, sourceRep };
+  }, [store.impact, model, visible]);
+
+  // Tests lens: visible representatives that contain test code (so test stars
+  // and the file/dir cores rolling them up stay bright).
+  const testReps = useMemo(() => {
+    if (store.emphasis !== "tests") return null;
+    const visibleSet = new Set(visible);
+    const set = new Set<string>();
+    for (const rec of model.records.values()) {
+      if (!isTestNode(rec)) continue;
+      const r = representativeFor(model, rec.id, visibleSet);
+      if (r) set.add(r);
+    }
+    return set;
+  }, [store.emphasis, model, visible]);
+
   const { geometry, keysAt } = useMemo(() => {
     // Apply kind filter: exclude clusters whose symbolKind is in the hidden set.
     const filtered =
@@ -75,6 +118,39 @@ export function StarField() {
       const c = model.byKey.get(key)!;
       const deg = c.nodeId ? (model.records.get(c.nodeId)?.degree ?? 0) : 0;
       let [r, g, b] = nodeColor(c.kind, c.symbolKind);
+
+      // --- Impact overlay (highest precedence): recolor impacted reps in the
+      // accent, covering tests in the second accent, dim everything else.
+      if (impactReps) {
+        if (key === impactReps.sourceRep) {
+          // The changed node stays its natural color, fully bright.
+        } else if (impactReps.covering.has(key)) {
+          [r, g, b] = COVERING_ACCENT;
+        } else if (impactReps.impacted.has(key)) {
+          [r, g, b] = IMPACT_ACCENT;
+        } else {
+          r *= DIM_GAIN;
+          g *= DIM_GAIN;
+          b *= DIM_GAIN;
+        }
+      } else if (store.emphasis === "types") {
+        // Emphasize Class / Interface / Enum; dim other symbol stars (cluster
+        // cores stay bright so structure remains legible).
+        const sk = c.symbolKind?.toLowerCase();
+        if (c.kind === "symbol" && !(sk && TYPE_EMPHASIS_KINDS.has(sk))) {
+          r *= DIM_GAIN;
+          g *= DIM_GAIN;
+          b *= DIM_GAIN;
+        }
+      } else if (testReps) {
+        // Tests lens: brighten test reps, dim everything else.
+        if (!testReps.has(key)) {
+          r *= DIM_GAIN;
+          g *= DIM_GAIN;
+          b *= DIM_GAIN;
+        }
+      }
+
       // Dim stars outside the hovered neighborhood; brighten everything (gain)
       // so the brightest cores bloom.
       let gain = EMISSIVE_GAIN;
@@ -92,7 +168,7 @@ export function StarField() {
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
     return { geometry: geo, keysAt };
-  }, [visible, model, highlightKeys, store.filters]);
+  }, [visible, model, highlightKeys, store.filters, impactReps, testReps, store.emphasis]);
 
   // Entrance animation: ease opacity + point size from 0 on first appearance.
   const entranceStart = useRef<number | null>(null);

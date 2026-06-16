@@ -12,6 +12,7 @@ import { DetailPanel } from "../panels/DetailPanel";
 import { FilterHUD } from "../panels/FilterHUD";
 import { SearchPanel } from "../panels/SearchPanel";
 import { LegendPanel } from "../panels/LegendPanel";
+import { LensSwitcher } from "../panels/LensSwitcher";
 
 export function Root() {
   return (
@@ -110,6 +111,7 @@ function View() {
       <HeaderBar />
       {store.status.kind === "ready" && store.model && <Breadcrumb />}
       {store.status.kind === "ready" && <DetailPanel />}
+      {store.status.kind === "ready" && <LensSwitcher />}
       {store.status.kind === "ready" && <FilterHUD />}
       {store.status.kind === "ready" && <SearchPanel />}
       {store.status.kind === "ready" && <LegendPanel />}
