@@ -33,7 +33,7 @@ export function mulberry32(seed: number): () => number {
 /** Maps a stable id string to a deterministic point on a sphere of `radius`.
  *  Two independent hash streams (id and id+"#") give two angles, so the
  *  distribution is reasonable and fully reproducible. Returns [x, y, z]. */
-export function idToPosition(id: string, radius = 60): [number, number, number] {
+export function idToPosition(id: string, radius = 42): [number, number, number] {
   const rng = mulberry32(fnv1a(id));
   // Uniform-ish sphere sampling from two seeded draws.
   const u = rng();

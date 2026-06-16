@@ -45,16 +45,30 @@ export function edgeColor(type: string): RGB {
 }
 
 /** Opacity by resolution/confidence: exact bright, name_match dimmer,
- *  ambiguous faint. */
+ *  ambiguous faint — but with a minimum floor (~0.15) so a rolled-up
+ *  connection is ALWAYS visible (design: "connections always visible"). */
+export const EDGE_OPACITY_FLOOR = 0.15;
+
 export function edgeOpacity(resolution: "exact" | "name_match" | "ambiguous"): number {
   switch (resolution) {
     case "exact":
-      return 0.55;
+      return 0.75;
     case "name_match":
-      return 0.28;
+      return 0.42;
     case "ambiguous":
-      return 0.12;
+      return EDGE_OPACITY_FLOOR;
   }
+}
+
+/** Bundle opacity: scale by member count (log) so heavily-trafficked
+ *  connections read brighter, then clamp to the visible floor. */
+export function bundleOpacity(
+  resolution: "exact" | "name_match" | "ambiguous",
+  count: number
+): number {
+  const base = edgeOpacity(resolution);
+  const boosted = base * (1 + 0.18 * Math.log(1 + count));
+  return Math.min(1, Math.max(EDGE_OPACITY_FLOOR, boosted));
 }
 
 /** Node size: base + k·log(1 + degree). Cluster cores are larger. */
