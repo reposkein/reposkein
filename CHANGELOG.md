@@ -6,6 +6,43 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-06-16
+
+Deeper structural resolution: heritage now crosses files **and** repos, plus a new
+instantiation relation and sharper Go/Python edges.
+
+### Added
+
+- **Cross-file heritage.** `INHERITS`/`IMPLEMENTS` now resolve to base types
+  declared in *other* files (not just the same file), across all heritage-bearing
+  languages. Resolution mirrors the CALLS ladder — same-file & import-followed
+  resolve `exact` (1.0), unique same-dir / repo-wide bases resolve `name_match`
+  (0.8 / 0.7); **ambiguous bases are skipped** (a false hierarchy edge is worse
+  than a missing one). Heritage edges now carry `resolution` + `confidence`.
+- **Cross-repo heritage.** When a deriving type's base lives in a federated child
+  repo, a deterministic `external_heritage` candidate is recorded at index time and
+  **stitched into a cross-repo `INHERITS`/`IMPLEMENTS` edge at load time** — on both
+  the Neo4j and zero-infra backends, mirroring cross-repo CALLS/IMPORTS.
+- **`INSTANTIATES` edges.** Constructors now link the constructing function to the
+  class it builds: `new Foo()` (TS/JS/Java/C#), struct literals (Rust), and Python
+  `Foo()` whose callee resolves to a class. Resolved against the type index, skipped
+  when ambiguous — so an agent can answer *who creates instances of this type?*
+- **Go embedded-type heritage.** Struct and interface embedding
+  (`type Dog struct { Animal }`, `type RW interface { Reader; Writer }`) is captured
+  as `INHERITS` and resolved cross-file like every other language.
+- **Python module-alias calls.** `import foo as f; f.bar()` (and `import foo;
+  foo.bar()`, `import a.b as x; x.go()`) now resolve `exact` to the target module's
+  function instead of a low-confidence name match.
+
+### Changed
+
+- Python heritage now captures **dotted superclass bases** (`class C(a.b.Base)`),
+  resolved via the importing file's import.
+- C# `INHERITS`-vs-`IMPLEMENTS` is now decided from the resolved target's label
+  **cross-file** (previously only correct for same-file bases).
+- Extract-cache schema bumped 9 → 11 (heritage moved to resolver-time facts; Go
+  embedding, module aliases, and constructor sites changed extractor output).
+
 ## [0.1.4] - 2026-06-16
 
 A four-reviewer security + quality audit pass, plus a hardened cold-start.
