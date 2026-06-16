@@ -27,6 +27,7 @@ cd mcp && npm install && npm test && npm run build
 
 - `indexer/` — Rust workspace. `core` (graph model, deterministic serializer, resolver), `lang-*` (per-language Tree-sitter extractors), `lang-common` (shared helpers), `neo4j-io`, `cli`.
 - `mcp/` — the `@reposkein/mcp` TypeScript MCP server (tools + graph-store backends).
+- `viz/` — the `@reposkein/viz` constellation viewer SPA (served by `reposkein-mcp view`, bundled into the mcp package).
 
 ## Adding a new language
 
@@ -43,6 +44,25 @@ This is a well-trodden path — Go, Java, and C# were each added the same way. C
 9. **Tests** — `extraction_is_deterministic`, the frozen-arity table, defs/calls/imports coverage. The workspace determinism + round-trip gates then cover it automatically.
 
 See `docs/` and the existing `lang-*` crates for concrete examples.
+
+## Working on the viewer (`viz/`)
+
+`viz/` is the [`@reposkein/viz`](viz/README.md) constellation viewer — the read-only 3D SPA behind `reposkein-mcp view`. Unlike `mcp/` (npm), it's a **pnpm** package:
+
+```sh
+cd viz && pnpm install
+pnpm dev                       # Vite dev server (UI work)
+pnpm build                     # → viz/dist  (tsc --noEmit + vite build)
+```
+
+`pnpm dev` covers UI work, but the full experience (graph data, source peek, open-in-editor) needs the `view` server's `/api/*` endpoints. For an end-to-end check, build, bundle, then run the real server: `mcp/scripts/bundle-viz.mjs` copies `viz/dist` into the mcp package (`mcp/dist/viz`) so `reposkein-mcp view` can serve it and it ships in the npm tarball:
+
+```sh
+pnpm build && node ../mcp/scripts/bundle-viz.mjs
+cd ../mcp && reposkein-mcp view /path/to/an/indexed/repo
+```
+
+Keep the viewer's invariants intact: **read-only** (never mutate the committed JSONL), **zero-infra** (works directly over committed JSONL; the static export needs no server), and **deterministic** (the seeded layout is render-time only). The **`viz` CI job** (typecheck / build / test / lint) must stay green — run `pnpm typecheck && pnpm build && pnpm test && pnpm lint` before pushing.
 
 ## Pull requests
 

@@ -66,7 +66,12 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 | `reindex_file` | refresh after editing a file |
 | `get_temporal_context` | git-derived signals for a file: change frequency, top authors, and co-change — which files historically change together (advisory, not committed) |
 
-CLI: `reposkein-mcp init` (set up a repo) and `reposkein-mcp doctor` (health check).
+**CLI:**
+
+- `reposkein-mcp init` — set up a repo (downloads the indexer, installs git hooks + the skill, builds the graph, prints an MCP config block).
+- `reposkein-mcp doctor` — health check (binary → index → MCP reachability).
+- `reposkein-mcp index` — rebuild the committed graph after big changes.
+- `reposkein-mcp view [path]` — open the **constellation viewer**: a local, read-only, zero-infra web app (bound to `127.0.0.1`) that renders the committed `.reposkein` graph as an interactive 3D astronomy-style map. `--export <dir>` instead writes a self-contained static site (works from `file://` or any static host). See the [viewer section in the main README](https://github.com/reposkein/reposkein#visualize-the-graph--the-constellation-viewer), or **[try the live demo](https://reposkein.github.io/reposkein/)** (RepoSkein viewing its own graph).
 
 ## How your agent uses it
 

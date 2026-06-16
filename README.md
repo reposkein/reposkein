@@ -21,6 +21,10 @@
 &nbsp;[![mcpservers.org](https://img.shields.io/badge/mcpservers.org-listed-2DD4BF?style=for-the-badge&labelColor=070A12)](https://mcpservers.org/servers/reposkein/reposkein)
 &nbsp;[![ghcr](https://img.shields.io/badge/ghcr.io-embed--server-F2B84B?style=for-the-badge&logo=docker&logoColor=EAE7DC&labelColor=070A12)](https://github.com/reposkein/reposkein/pkgs/container/reposkein-embed)
 
+[![🔭 Live demo](https://img.shields.io/badge/%F0%9F%94%AD_Live_demo-explore_the_graph-2DD4BF?style=for-the-badge&labelColor=070A12)](https://reposkein.github.io/reposkein/)
+
+**[🔭 Live demo →](https://reposkein.github.io/reposkein/)** — RepoSkein's own graph, rendered as an interactive 3D constellation in your browser.
+
 </div>
 
 ## Introduction
@@ -52,6 +56,7 @@ It uses [Tree-sitter](https://tree-sitter.github.io/) to build a **deterministic
 - [Usage — working with your agent](#usage--working-with-your-agent)
 - [Supported languages](#supported-languages)
 - [How it works](#how-it-works)
+- [Visualize the graph — the constellation viewer](#visualize-the-graph--the-constellation-viewer)
 - [MCP tools](#mcp-tools)
 - [Optional: semantic embeddings](#optional-semantic-embeddings)
 - [Optional: Neo4j backend](#optional-neo4j-backend)
@@ -166,7 +171,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
         ▼
  @reposkein/mcp        semantic_find · get_context_profile · impact · get_temporal_context
    (TypeScript)        read_cypher · write_semantic_summary · init_cpg_skeleton · reindex_file
-                       CLI: init · doctor
+                       CLI: init · doctor · index · view
         │ reads
         ▼
  .reposkein/*.jsonl   ← the code graph, committed to git (zero-infra, in-memory store)
@@ -184,6 +189,28 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
 
 Got nested repositories (a monorepo of indexed repos)? RepoSkein discovers them, links them with `FEDERATES_TO`, and stitches **cross-repo call, import, and heritage edges** (`INHERITS`/`IMPLEMENTS` to a base in a child repo) at load time. Pass `federated: true` to traverse across repo boundaries. Federation edges are derived at load (never committed), so each repo stays independently deterministic.
 
+## Visualize the graph — the constellation viewer
+
+```sh
+reposkein-mcp view .          # opens http://127.0.0.1:<port> in your browser
+```
+
+`view` starts a **local, read-only, zero-infra** web app (React + three.js, bound to `127.0.0.1`) that renders the committed `.reposkein` graph as an interactive 3D astronomy-style **constellation**. There's no Neo4j and no external service — it reads the committed JSONL directly and never mutates it. **[Try the live demo →](https://reposkein.github.io/reposkein/)** (RepoSkein viewing its own multi-language graph).
+
+The map is **deterministic**: a seeded force layout means the same graph always lays out the same way (cached in IndexedDB for instant reloads), and the layout is render-time only — it never touches the committed JSONL. Levels of detail map onto an astronomy metaphor — **Repository → Directory → File → Symbol** become **galaxy → constellation → solar-system → star** — so you zoom or click to expand a cluster (a brief supernova animation) and click a star to inspect it. Federation galaxies and agent-written summaries render when present.
+
+- **Legible** — per-edge-type colors + legend, importance-sized stars, adaptive labels, breadcrumb, per-language galaxy coloring, depth fog / bloom / nebula halos.
+- **Edges encode resolution** — color = edge type (`CALLS`/`IMPORTS`/`INHERITS`/`IMPLEMENTS`/`INSTANTIATES`), opacity = confidence (`exact`/`name_match`/`ambiguous`), and flow particles show call direction.
+- **Analytical** — one-click lenses (call graph / type hierarchy / imports / tests), an impact overlay (transitive callers + covering tests), a confidence-audit mode (see where the type-free resolver guesses), and a temporal-coupling overlay (git co-change).
+- **Explorable** — ranked search-to-fly, N-hop neighborhood focus, source peek in the detail panel (a path-guarded read-only file slice + an "Open in editor" `vscode://` link), keyboard nav (`/` search, `f` frame-all, arrows to hop neighbors, `Esc` back), a minimap, and PNG screenshot export.
+- **Guided tour** — a cinematic, deterministically-derived flythrough (overview → largest modules → busiest hub → type hierarchy → entry point) with captions.
+
+```sh
+reposkein-mcp view --export ./site .   # write a self-contained static site
+```
+
+`--export` bakes the graph into `graph-data.js` (as `window.__REPOSKEIN_GRAPH__`) and emits a **self-contained static site** — it works from `file://` or any static host with no server, which is exactly how the live demo above is published. Handy for sharing a snapshot, embedding in docs, or a project landing page.
+
 ## MCP tools
 
 | Tool | What it does |
@@ -197,7 +224,7 @@ Got nested repositories (a monorepo of indexed repos)? RepoSkein discovers them,
 | `init_cpg_skeleton` | build/rebuild the graph |
 | `reindex_file` | refresh after editing a file |
 
-The `reposkein-mcp` CLI adds **`init`** (set up a repo) and **`doctor`** (health check).
+The `reposkein-mcp` CLI adds **`init`** (set up a repo), **`doctor`** (health check), **`index`** (rebuild the graph), and **`view`** (the [constellation viewer](#visualize-the-graph--the-constellation-viewer); `--export <dir>` writes a self-contained static site).
 
 ## Optional: semantic embeddings
 
@@ -280,6 +307,7 @@ mcp/          @reposkein/mcp — the TypeScript MCP server (tools + graph-store 
 mcp/bench/    benchmarks: retrieval efficiency (Track 1) + end-task SWE-bench harness (Track 2)
 skills/       reposkein-graph-rag + reposkein-setup — cross-agent skills (skills.sh)
 embed-server/ one-command local embedding server (voyage-4-nano) for hybrid semantic_find
+viz/          @reposkein/viz — the 3D constellation viewer SPA (served by `reposkein-mcp view`)
 ```
 
 ## Documentation
@@ -287,6 +315,7 @@ embed-server/ one-command local embedding server (voyage-4-nano) for hybrid sema
 | Doc | What's in it |
 | --- | --- |
 | [`mcp/README.md`](mcp/README.md) | the `@reposkein/mcp` package — tools, config, env vars |
+| [`viz/README.md`](viz/README.md) | the `@reposkein/viz` constellation viewer — architecture, dev/build |
 | [`embed-server/README.md`](embed-server/README.md) | the local embedding server — Docker/GHCR, platforms, GPU |
 | [`mcp/bench/README.md`](mcp/bench/README.md) | Track 1 retrieval benchmark — method + results |
 | [`mcp/bench/track2/README.md`](mcp/bench/track2/README.md) | Track 2 end-task (SWE-bench) harness |
