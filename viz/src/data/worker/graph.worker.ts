@@ -24,6 +24,8 @@ export interface WorkerResult {
   records: [string, NodeRecord][];
   fingerprint: string;
   counts: { nodes: number; edges: number };
+  /** Absolute path of the served repo root (for "open in editor" links). */
+  repoRoot: string | null;
 }
 
 export interface WorkerError {
@@ -79,6 +81,7 @@ async function run(): Promise<void> {
     records: [...model.records.entries()],
     fingerprint: model.fingerprint,
     counts: { nodes: graph.nodes.length, edges: graph.edges.length },
+    repoRoot: manifest.root.repoRoot ?? null,
   };
 
   // Transfer the positions buffer (zero-copy).

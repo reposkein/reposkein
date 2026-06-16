@@ -1,9 +1,36 @@
 /** Client for the `reposkein-mcp view` HTTP API (design §2.2). */
 
 export interface GraphManifest {
-  root: { repoId: string; nodesUrl: string; edgesUrl: string };
+  root: { repoId: string; nodesUrl: string; edgesUrl: string; repoRoot?: string };
   federated: { repoId: string; rootPath: string; nodesUrl: string; edgesUrl: string }[];
   counts: { nodes: number; edges: number };
+}
+
+/** A read-only source slice returned by GET /api/source. */
+export interface SourceSlice {
+  path: string;
+  start: number;
+  end: number;
+  lines: string[];
+}
+
+/** Fetch a read-only source slice for `path` over [start,end] (1-based,
+ *  inclusive). Best-effort: any failure (missing file, traversal → 404, network)
+ *  yields null so the DetailPanel degrades to showing nothing. The server
+ *  clamps + caps the range; we still send what the record claims. */
+export async function fetchSource(
+  path: string,
+  start: number,
+  end: number,
+): Promise<SourceSlice | null> {
+  try {
+    const qs = new URLSearchParams({ path, start: String(start), end: String(end) });
+    const res = await fetch(`/api/source?${qs.toString()}`);
+    if (!res.ok) return null;
+    return (await res.json()) as SourceSlice;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchManifest(): Promise<GraphManifest> {

@@ -42,7 +42,7 @@ function safeJoin(root: string, urlPath: string): string | null {
   return null;
 }
 
-function buildManifest(repoId: string): string {
+function buildManifest(repoId: string, repoRoot: string): string {
   return JSON.stringify({
     root: {
       repoId,
@@ -52,11 +52,18 @@ function buildManifest(repoId: string): string {
       // and hit the SPA catch-all (HTML), breaking JSON parsing.
       nodesUrl: "/api/jsonl/nodes.jsonl",
       edgesUrl: "/api/jsonl/edges.jsonl",
+      // Absolute path of the served repo root, so the viewer can build a
+      // vscode://file/<abs>:<line> "open in editor" link. Read-only metadata;
+      // the loopback-only server already trusts its caller (design §8).
+      repoRoot,
     },
     federated: [], // M1: single repo. Federation deferred to M3.
     counts: { nodes: 0, edges: 0 }, // counts are advisory; the client re-derives.
   });
 }
+
+/** Max lines a single /api/source request may return (cap, design §P3). */
+const SOURCE_MAX_LINES = 400;
 
 function sendGzip(res: ServerResponse, body: string, contentType: string): void {
   const gz = gzipSync(Buffer.from(body, "utf8"));
@@ -93,12 +100,51 @@ export function makeViewHandler(repoPath: string, repoId: string) {
   const edgesPath = join(reposkeinDir, "edges.jsonl");
   const distDir = vizDistDir();
 
+  const repoRoot = resolve(repoPath);
+
   return function handler(req: IncomingMessage, res: ServerResponse): void {
-    const url = (req.url ?? "/").split("?")[0] ?? "/";
+    const rawUrl = req.url ?? "/";
+    const qIdx = rawUrl.indexOf("?");
+    const url = (qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx)) || "/";
 
     // --- API routes ---
     if (url === "/api/graph") {
-      sendGzip(res, buildManifest(repoId), "application/json; charset=utf-8");
+      sendGzip(res, buildManifest(repoId, repoRoot), "application/json; charset=utf-8");
+      return;
+    }
+
+    // Read-only source slice (design §P3). Path-guarded by safeJoin (rejects
+    // traversal → 404); range clamped + capped at SOURCE_MAX_LINES. Returns
+    // JSON { path, start, end, lines: string[] }. NEVER 5xx: a missing file,
+    // bad params, or a directory all yield 404 so the panel degrades to "no
+    // source" instead of breaking.
+    if (url === "/api/source") {
+      try {
+        const params = new URLSearchParams(qIdx === -1 ? "" : rawUrl.slice(qIdx + 1));
+        const relPath = params.get("path");
+        if (!relPath) return send404(res);
+        const abs = safeJoin(repoRoot, relPath); // traversal → null → 404
+        if (!abs || !existsSync(abs) || !statSync(abs).isFile()) return send404(res);
+        const total = readFileSync(abs, "utf8").split("\n");
+        // A trailing newline yields a phantom empty final element; drop it so
+        // line counts match the file's actual line count.
+        if (total.length > 0 && total[total.length - 1] === "") total.pop();
+        // Lines are 1-based in the graph records; clamp to the file bounds.
+        const startReq = parseInt(params.get("start") ?? "1", 10);
+        const endReq = parseInt(params.get("end") ?? "0", 10);
+        const start = Math.max(1, Number.isFinite(startReq) ? startReq : 1);
+        let end = Number.isFinite(endReq) && endReq >= start ? endReq : start;
+        end = Math.min(end, total.length, start + SOURCE_MAX_LINES - 1);
+        const lines = total.slice(start - 1, end);
+        sendGzip(
+          res,
+          JSON.stringify({ path: relPath, start, end, lines }),
+          "application/json; charset=utf-8",
+        );
+      } catch {
+        // Defensive: any unexpected read error degrades to 404 (never 5xx).
+        send404(res);
+      }
       return;
     }
     if (url === "/api/jsonl/nodes.jsonl" || url === "/api/jsonl/edges.jsonl") {

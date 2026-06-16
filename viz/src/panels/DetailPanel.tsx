@@ -8,9 +8,12 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { useState } from "react";
+import { useEffect } from "react";
 import { useStore } from "../state/store";
 import { MIN_FOCUS_DEPTH, MAX_FOCUS_DEPTH } from "../data/neighborhood";
 import { BRAND } from "../scene/encoding";
+import { fetchSource, type SourceSlice } from "../data/api";
+import type { NodeRecord } from "../data/model";
 
 interface IncidentRow {
   direction: "out" | "in";
@@ -134,6 +137,8 @@ export function DetailPanel() {
       <FocusControl />
       <ImpactControl />
 
+      <SourcePeek rec={rec} repoRoot={model.repoRoot} />
+
       <Section title="Semantic summary">
         <SummaryBlock summary={rec.semanticSummary} stale={stale} />
       </Section>
@@ -184,6 +189,118 @@ export function DetailPanel() {
         )}
       </Section>
     </Shell>
+  );
+}
+
+/** Read-only source peek (design §P3). When the selected node carries a
+ *  file_path + start/end lines, fetch that slice from the path-guarded
+ *  /api/source endpoint and render it in a dimmed, scrollable monospace block
+ *  with line numbers. An "Open in editor" link uses vscode://file/<abs>:<line>
+ *  built from the served repo root. Degrades gracefully (renders nothing) when
+ *  the source is unavailable — never blocks the rest of the panel. */
+function SourcePeek({ rec, repoRoot }: { rec: NodeRecord; repoRoot: string | null }) {
+  const [slice, setSlice] = useState<SourceSlice | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "missing">("idle");
+
+  const hasSlice = !!rec.filePath && rec.startLine > 0;
+
+  useEffect(() => {
+    if (!hasSlice) {
+      setSlice(null);
+      setState("idle");
+      return;
+    }
+    let cancelled = false;
+    setState("loading");
+    setSlice(null);
+    const end = rec.endLine >= rec.startLine ? rec.endLine : rec.startLine;
+    void fetchSource(rec.filePath, rec.startLine, end).then((s) => {
+      if (cancelled) return;
+      if (s && s.lines.length > 0) {
+        setSlice(s);
+        setState("idle");
+      } else {
+        setState("missing");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rec.id, rec.filePath, rec.startLine, rec.endLine, hasSlice]);
+
+  if (!hasSlice) return null;
+
+  // Build a vscode://file/<abs>:<line> link from the repo root (when known).
+  // The server returns POSIX-relative paths; join with the abs root.
+  const editorLink =
+    repoRoot && rec.filePath
+      ? `vscode://file/${repoRoot.replace(/\/+$/, "")}/${rec.filePath}:${rec.startLine || 1}`
+      : null;
+
+  return (
+    <Section title="Source">
+      {editorLink && (
+        <a
+          href={editorLink}
+          style={{
+            fontSize: 11,
+            color: BRAND.teal,
+            textDecoration: "none",
+            display: "inline-block",
+            marginBottom: 6,
+          }}
+          title="Open this file at this line in VS Code"
+        >
+          Open in editor ↗
+        </a>
+      )}
+      {state === "loading" && (
+        <div style={{ fontSize: 11, opacity: 0.5 }}>Loading source…</div>
+      )}
+      {state === "missing" && (
+        <div style={{ fontSize: 11, opacity: 0.5 }}>Source unavailable.</div>
+      )}
+      {slice && (
+        <pre
+          style={{
+            margin: 0,
+            maxHeight: 220,
+            overflow: "auto",
+            background: "rgba(0,0,0,0.35)",
+            border: "1px solid rgba(120,150,210,0.18)",
+            borderRadius: 6,
+            padding: "6px 8px",
+            fontSize: 11,
+            lineHeight: 1.45,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            color: "rgba(220,228,245,0.78)",
+            opacity: 0.92,
+          }}
+        >
+          {slice.lines.map((line, i) => {
+            const lineNo = slice.start + i;
+            return (
+              <div key={lineNo} style={{ display: "flex", whiteSpace: "pre" }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 40,
+                    flexShrink: 0,
+                    textAlign: "right",
+                    paddingRight: 10,
+                    color: "rgba(120,140,180,0.5)",
+                    userSelect: "none",
+                  }}
+                >
+                  {lineNo}
+                </span>
+                <span style={{ flex: 1 }}>{line || " "}</span>
+              </div>
+            );
+          })}
+        </pre>
+      )}
+    </Section>
   );
 }
 
