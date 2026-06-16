@@ -20,6 +20,7 @@ pub struct Walk<'a> {
     used: HashMap<String, u32>,
     declared: HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
+    pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
 }
 
 /// Java `@arity` — FROZEN. See `reposkein_core::id` for the contract.
@@ -82,6 +83,7 @@ impl<'a> Walk<'a> {
             used: HashMap::new(),
             declared: HashMap::new(),
             pending_heritage: Vec::new(),
+            heritage: Vec::new(),
         }
     }
 
@@ -377,10 +379,18 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// Resolves deferred heritage edges (call once after the top-level walk).
-    pub fn finalize_heritage(&mut self) {
-        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
-        self.edges.extend(e);
+    /// Lowers pending heritage → RawHeritage (from-side resolved in-file; base
+    /// resolved repo-wide by core::resolve). Call once after the top-level walk.
+    pub fn lower_heritage(&mut self) {
+        let from_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
+        let mut raw = reposkein_core::heritage::lower(
+            &self.pending_heritage,
+            &self.declared,
+            self.rel_path,
+            &from_file_id,
+            false,
+        );
+        self.heritage.append(&mut raw);
     }
 }
 
@@ -393,7 +403,7 @@ mod tests {
         let tree = parse(src).unwrap();
         let mut w = Walk::new("r", "a/b/Svc.java", src);
         w.walk(tree.root_node(), "rs1:r:file:a/b/Svc.java");
-        w.finalize_heritage();
+        w.lower_heritage();
         w
     }
 
@@ -484,15 +494,15 @@ mod tests {
         assert!(w.nodes.iter().any(|n| n.labels == ["Variable"]
             && n.props.get("name").and_then(|v| v.as_str()) == Some("x")));
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.typ == "INHERITS" && e.to == "rs1:r:class:a/b/Svc.java#Base"),
+                .any(|h| h.edge_type == "INHERITS" && h.base_name == "Base"),
             "Svc INHERITS Base"
         );
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.typ == "IMPLEMENTS" && e.to == "rs1:r:iface:a/b/Svc.java#Greeter"),
+                .any(|h| h.edge_type == "IMPLEMENTS" && h.base_name == "Greeter"),
             "Svc IMPLEMENTS Greeter"
         );
     }
@@ -503,17 +513,20 @@ mod tests {
             b"package p;\ninterface Base {}\ninterface Extra {}\nclass Outer {}\nclass Child extends Outer implements Base, Extra {}\n",
         );
         // Child IMPLEMENTS Base
-        assert!(w.edges.iter().any(|e| e.typ == "IMPLEMENTS"
-            && e.from == "rs1:r:class:a/b/Svc.java#Child"
-            && e.to == "rs1:r:iface:a/b/Svc.java#Base"));
+        assert!(w
+            .heritage
+            .iter()
+            .any(|h| h.edge_type == "IMPLEMENTS" && h.base_name == "Base"));
         // Child IMPLEMENTS Extra
-        assert!(w.edges.iter().any(|e| e.typ == "IMPLEMENTS"
-            && e.from == "rs1:r:class:a/b/Svc.java#Child"
-            && e.to == "rs1:r:iface:a/b/Svc.java#Extra"));
+        assert!(w
+            .heritage
+            .iter()
+            .any(|h| h.edge_type == "IMPLEMENTS" && h.base_name == "Extra"));
         // Child INHERITS Outer
-        assert!(w.edges.iter().any(|e| e.typ == "INHERITS"
-            && e.from == "rs1:r:class:a/b/Svc.java#Child"
-            && e.to == "rs1:r:class:a/b/Svc.java#Outer"));
+        assert!(w
+            .heritage
+            .iter()
+            .any(|h| h.edge_type == "INHERITS" && h.base_name == "Outer"));
     }
 
     #[test]
