@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 /// the ExtractOutput for unchanged source).
 /// Bumped 7→8: C# base-name fix (last segment of qualified base) changes
 /// heritage edges for C# files with qualified base types.
-pub const EXTRACT_CACHE_SCHEMA: u32 = 8;
+/// Bumped 8→9: TS export-from re-exports (barrel files) → new IMPORTS edges;
+/// TS interface-extends + Rust supertrait in-file INHERITS edges; TS base
+/// type-args stripped; Python Variable ids now unique()-ordinal-disambiguated.
+pub const EXTRACT_CACHE_SCHEMA: u32 = 9;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {

@@ -194,13 +194,14 @@ impl<'a> Walk<'a> {
                         for bound in bounds.named_children(&mut bc) {
                             let base = type_name(bound, self.source);
                             if !base.is_empty() {
-                                self.pending_heritage
-                                    .push(reposkein_core::heritage::PendingHeritage {
+                                self.pending_heritage.push(
+                                    reposkein_core::heritage::PendingHeritage {
                                         decl_scope: scope.to_vec(),
                                         from_name: name.clone(),
                                         edge_type: "INHERITS".to_string(),
                                         base_name: base,
-                                    });
+                                    },
+                                );
                             }
                         }
                     }

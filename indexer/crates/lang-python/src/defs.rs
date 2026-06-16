@@ -447,7 +447,11 @@ mod tests {
             .filter(|n| n.labels == ["Variable"])
             .map(|n| n.id.as_str())
             .collect();
-        assert_eq!(var_ids.len(), 2, "both assignments must produce a Variable node");
+        assert_eq!(
+            var_ids.len(),
+            2,
+            "both assignments must produce a Variable node"
+        );
         assert!(var_ids.contains(&"rs1:r:var:m.py#x"), "first occurrence");
         assert!(
             var_ids.iter().any(|id| id.starts_with("rs1:r:var:m.py#x.")),
