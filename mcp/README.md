@@ -2,11 +2,12 @@
 
 **Give your AI coding agent a map of your codebase — instead of letting it grep and guess.**
 
-[![npm](https://img.shields.io/npm/v/@reposkein/mcp.svg?logo=npm)](https://www.npmjs.com/package/@reposkein/mcp)
-[![npm downloads](https://img.shields.io/npm/dm/@reposkein/mcp.svg)](https://www.npmjs.com/package/@reposkein/mcp)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/reposkein/reposkein/blob/main/LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-server-7c3aed.svg)](https://modelcontextprotocol.io)
+[![npm](https://img.shields.io/npm/v/@reposkein/mcp?style=for-the-badge&logo=npm&logoColor=EAE7DC&label=npm&labelColor=070A12&color=F2B84B)](https://www.npmjs.com/package/@reposkein/mcp)
+[![downloads](https://img.shields.io/npm/dm/@reposkein/mcp?style=for-the-badge&label=downloads&labelColor=070A12&color=2DD4BF)](https://www.npmjs.com/package/@reposkein/mcp)
+[![License](https://img.shields.io/badge/license-Apache_2.0-F2B84B?style=for-the-badge&labelColor=070A12)](https://github.com/reposkein/reposkein/blob/main/LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-server-2DD4BF?style=for-the-badge&labelColor=070A12)](https://modelcontextprotocol.io)
 [![skills.sh](https://skills.sh/b/reposkein/reposkein)](https://skills.sh/reposkein/reposkein)
+[![mcpservers.org](https://img.shields.io/badge/mcpservers.org-listed-2DD4BF?style=for-the-badge&labelColor=070A12)](https://mcpservers.org/servers/reposkein/reposkein)
 [![mcpservers.org](https://img.shields.io/badge/mcpservers.org-listed-1f6feb.svg)](https://mcpservers.org/servers/reposkein/reposkein)
 
 This is the [Model Context Protocol](https://modelcontextprotocol.io) server for [**RepoSkein**](https://github.com/reposkein/reposkein) — a deterministic **code graph** (functions, classes, imports, call edges) built from your repo with [Tree-sitter](https://tree-sitter.github.io/) and served to any MCP-capable agent (Claude Code, Cursor, Codex, …). Your agent navigates structure instead of guessing, and writes short summaries onto the graph as it learns — versioned in git as shared team memory.
