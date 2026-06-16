@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
-import { bundleEdges, filterDrawEdges, visibleClusters } from "../data/clientModel";
+import { bundleEdges, filterDrawEdges, representativeFor, visibleClusters } from "../data/clientModel";
 import { edgeColor, bundleOpacity } from "./encoding";
 
 /** Extracts the galaxy prefix from a cluster key (for cross-repo detection).
@@ -41,6 +41,17 @@ export function EdgeLines() {
     const impactSet = store.impact
       ? new Set<string>([store.impact.sourceId, ...store.impact.impacted])
       : null;
+
+    // Neighborhood focus: visible reps inside the focused region. Bundles wholly
+    // inside it stay bright; everything else dims.
+    let focusReps: Set<string> | null = null;
+    if (store.focus) {
+      focusReps = new Set<string>();
+      for (const id of store.focus.nodes) {
+        const r = representativeFor(model, id, visible);
+        if (r) focusReps.add(r);
+      }
+    }
 
     // Apply edge type / confidence / audit filters before bundling (shared
     // gate so flow particles render on EXACTLY the same edges).
@@ -98,6 +109,12 @@ export function EdgeLines() {
         }
       }
 
+      // Neighborhood focus: dim bundles not wholly inside the focused region.
+      if (focusReps) {
+        const inside = focusReps.has(b.srcKey) && focusReps.has(b.dstKey);
+        a = inside ? Math.min(1, a * 1.4) : a * 0.08;
+      }
+
       // Hover focus: dim bundles not touching the hovered representative.
       if (hoveredRep) {
         const incident = b.srcKey === hoveredRep || b.dstKey === hoveredRep;
@@ -131,7 +148,7 @@ export function EdgeLines() {
     geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     return geo;
-  }, [model, store.expanded, hovered, store.filters, store.audit, store.impact]);
+  }, [model, store.expanded, hovered, store.filters, store.audit, store.impact, store.focus]);
 
   const material = useMemo(
     () =>

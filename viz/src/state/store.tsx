@@ -16,6 +16,13 @@ import type {
 } from "../data/worker/graph.worker";
 import { resolveLens, type Emphasis, type LensId } from "../data/lens";
 import { computeImpact, type ImpactResult } from "../data/impact";
+import {
+  computeNeighborhood,
+  DEFAULT_FOCUS_DEPTH,
+  clampDepth,
+  type NeighborhoodResult,
+} from "../data/neighborhood";
+import { ALL_EDGE_TYPES } from "../data/lens";
 import type { CochangeMap } from "../data/temporal";
 
 type Status =
@@ -56,6 +63,11 @@ interface State {
   coupling: boolean;
   /** Fetched co-change map (null = not yet fetched; {} = fetched, no data). */
   cochange: CochangeMap | null;
+  /** Neighborhood focus: the bidirectional, depth-bounded set of nodes the
+   *  selected symbol touches. null = inactive. */
+  focus: NeighborhoodResult | null;
+  /** Focus BFS depth (1..3); the toggle/recompute reads this. */
+  focusDepth: number;
 }
 
 /** Confidence-audit preset: which low-confidence buckets to keep visible. */
@@ -78,6 +90,8 @@ type Action =
   | { t: "setLens"; lens: LensId }
   | { t: "setAudit"; mode: AuditMode }
   | { t: "toggleImpact" }
+  | { t: "toggleFocus" }
+  | { t: "setFocusDepth"; depth: number }
   | { t: "toggleCoupling" }
   | { t: "setCochange"; map: CochangeMap }
   | { t: "resetView" };
@@ -86,6 +100,34 @@ type Action =
  *  shut the deepest-expanded branch first ("one level up"). */
 function depthOf(model: ClientModel, key: string): number {
   return (model.ancestors.get(key)?.length ?? 1) - 1;
+}
+
+/** Returns a NEW expanded set with every ancestor cluster of each node in
+ *  `nodeIds` opened, so the highlighted members surface as visible reps. Shared
+ *  by the impact and neighborhood-focus overlays. */
+function expandToReveal(
+  model: ClientModel,
+  expanded: Set<string>,
+  nodeIds: Iterable<string>,
+): Set<string> {
+  const next = new Set(expanded);
+  for (const id of nodeIds) {
+    const clusterKey = model.clusterOfNode.get(id) ?? id;
+    const chain = model.ancestors.get(clusterKey);
+    if (!chain) continue;
+    for (const ak of chain) {
+      const c = model.byKey.get(ak);
+      if (c && c.children.length > 0) next.add(ak);
+    }
+  }
+  return next;
+}
+
+/** Edge types to TRAVERSE for the focus BFS: everything not hidden by the
+ *  active filters/lens (filters store the HIDDEN set). Empty hidden set → all. */
+function focusEdgeTypes(hidden: Set<string>): Set<string> {
+  if (hidden.size === 0) return new Set(ALL_EDGE_TYPES);
+  return new Set(ALL_EDGE_TYPES.filter((t) => !hidden.has(t)));
 }
 
 function reducer(state: State, a: Action): State {
@@ -135,12 +177,13 @@ function reducer(state: State, a: Action): State {
       return { ...state, expanded, selected: null, fitNonce: state.fitNonce + 1 };
     }
     case "select":
-      // Selecting a different node invalidates a live impact overlay.
+      // Selecting a different node invalidates a live impact / focus overlay.
       return {
         ...state,
         selected: a.id,
         fitNonce: state.fitNonce + 1,
         impact: a.id === state.selected ? state.impact : null,
+        focus: a.id === state.selected ? state.focus : null,
       };
     case "hover":
       return { ...state, hovered: a.id };
@@ -203,22 +246,43 @@ function reducer(state: State, a: Action): State {
       if (!state.model || !state.selected) return state;
       const result = computeImpact(state.model, state.selected);
       // Auto-expand clusters containing impacted nodes so the highlight is
-      // visible. We expand every ancestor on each impacted node's chain.
-      const expanded = new Set(state.expanded);
-      const toExpand = new Set<string>([...result.impacted, ...result.coveringTests, state.selected]);
-      for (const nodeId of toExpand) {
-        const clusterKey = state.model.clusterOfNode.get(nodeId) ?? nodeId;
-        const chain = state.model.ancestors.get(clusterKey);
-        if (!chain) continue;
-        // Expand every ancestor EXCEPT the node's own representative (so leaves
-        // surface but a containing collapsed cluster isn't force-opened to its
-        // own symbol when it has none).
-        for (const ak of chain) {
-          const c = state.model.byKey.get(ak);
-          if (c && c.children.length > 0) expanded.add(ak);
-        }
-      }
+      // visible (every ancestor on each impacted node's chain).
+      const expanded = expandToReveal(state.model, state.expanded, [
+        ...result.impacted,
+        ...result.coveringTests,
+        state.selected,
+      ]);
       return { ...state, impact: result, expanded, fitNonce: state.fitNonce + 1 };
+    }
+    case "toggleFocus": {
+      if (state.focus) return { ...state, focus: null, fitNonce: state.fitNonce + 1 };
+      if (!state.model || !state.selected) return state;
+      const result = computeNeighborhood(
+        state.model.drawEdges,
+        state.selected,
+        state.focusDepth,
+        focusEdgeTypes(state.filters.edgeTypes),
+      );
+      // Auto-expand clusters containing neighborhood members so they surface.
+      const expanded = expandToReveal(state.model, state.expanded, result.nodes);
+      // Focus owns the camera: clear a live impact overlay so they don't fight.
+      return { ...state, focus: result, impact: null, expanded, fitNonce: state.fitNonce + 1 };
+    }
+    case "setFocusDepth": {
+      const depth = clampDepth(a.depth);
+      if (depth === state.focusDepth) return state;
+      // If focus is live, recompute at the new depth and re-reveal members.
+      if (state.focus && state.model && state.selected) {
+        const result = computeNeighborhood(
+          state.model.drawEdges,
+          state.selected,
+          depth,
+          focusEdgeTypes(state.filters.edgeTypes),
+        );
+        const expanded = expandToReveal(state.model, state.expanded, result.nodes);
+        return { ...state, focusDepth: depth, focus: result, expanded, fitNonce: state.fitNonce + 1 };
+      }
+      return { ...state, focusDepth: depth };
     }
     case "setFocusTarget":
       return {
@@ -239,6 +303,7 @@ function reducer(state: State, a: Action): State {
         emphasis: "none",
         audit: "off",
         impact: null,
+        focus: null,
         coupling: false,
         filters: { kinds: new Set(), edgeTypes: new Set(), minConfidence: 0 },
         fitNonce: state.fitNonce + 1,
@@ -261,6 +326,8 @@ interface Store extends State {
   setLens(lens: LensId): void;
   setAudit(mode: AuditMode): void;
   toggleImpact(): void;
+  toggleFocus(): void;
+  setFocusDepth(depth: number): void;
   toggleCoupling(): void;
   setCochange(map: CochangeMap): void;
   resetView(): void;
@@ -286,6 +353,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     impact: null,
     coupling: false,
     cochange: null,
+    focus: null,
+    focusDepth: DEFAULT_FOCUS_DEPTH,
   });
 
   useEffect(() => {
@@ -320,6 +389,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setLens: (lens) => dispatch({ t: "setLens", lens }),
       setAudit: (mode) => dispatch({ t: "setAudit", mode }),
       toggleImpact: () => dispatch({ t: "toggleImpact" }),
+      toggleFocus: () => dispatch({ t: "toggleFocus" }),
+      setFocusDepth: (depth) => dispatch({ t: "setFocusDepth", depth }),
       toggleCoupling: () => dispatch({ t: "toggleCoupling" }),
       setCochange: (map) => dispatch({ t: "setCochange", map }),
       resetView: () => dispatch({ t: "resetView" }),

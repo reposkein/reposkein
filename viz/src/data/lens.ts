@@ -27,7 +27,7 @@ export interface LensPreset {
 }
 
 /** All relationship edge types (must mirror RELATIONSHIP_EDGE_TYPES). */
-const ALL_EDGE_TYPES = ["CALLS", "IMPORTS", "INHERITS", "IMPLEMENTS", "INSTANTIATES"];
+export const ALL_EDGE_TYPES = ["CALLS", "IMPORTS", "INHERITS", "IMPLEMENTS", "INSTANTIATES"];
 
 /** Edge types that build a type hierarchy. */
 const TYPE_EDGE_TYPES = ["INHERITS", "IMPLEMENTS", "INSTANTIATES"];

@@ -86,6 +86,19 @@ export function StarField() {
     return { impacted, covering, sourceRep };
   }, [store.impact, model, visible]);
 
+  // Neighborhood focus: roll the bidirectional, depth-bounded neighborhood up
+  // to visible reps so the focused region stays bright and the rest dims.
+  const focusReps = useMemo(() => {
+    if (!store.focus) return null;
+    const visibleSet = new Set(visible);
+    const set = new Set<string>();
+    for (const id of store.focus.nodes) {
+      const r = representativeFor(model, id, visibleSet);
+      if (r) set.add(r);
+    }
+    return set;
+  }, [store.focus, model, visible]);
+
   // Tests lens: visible representatives that contain test code (so test stars
   // and the file/dir cores rolling them up stay bright).
   const testReps = useMemo(() => {
@@ -152,6 +165,14 @@ export function StarField() {
           g *= DIM_GAIN;
           b *= DIM_GAIN;
         }
+      } else if (focusReps) {
+        // Neighborhood focus: members keep their natural color; everything
+        // outside the focused region dims.
+        if (!focusReps.has(key)) {
+          r *= DIM_GAIN;
+          g *= DIM_GAIN;
+          b *= DIM_GAIN;
+        }
       } else if (store.emphasis === "types") {
         // Emphasize Class / Interface / Enum; dim other symbol stars (cluster
         // cores stay bright so structure remains legible).
@@ -198,7 +219,7 @@ export function StarField() {
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
     return { geometry: geo, keysAt };
-  }, [visible, model, highlightKeys, store.filters, impactReps, testReps, store.emphasis, selectedRep, hoveredRep]);
+  }, [visible, model, highlightKeys, store.filters, impactReps, focusReps, testReps, store.emphasis, selectedRep, hoveredRep]);
 
   // --- Supernova expand/collapse morph -------------------------------------
   // Children emerge FROM their parent cluster's position outward to their

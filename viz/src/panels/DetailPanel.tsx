@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-table";
 import { useState } from "react";
 import { useStore } from "../state/store";
+import { MIN_FOCUS_DEPTH, MAX_FOCUS_DEPTH } from "../data/neighborhood";
+import { BRAND } from "../scene/encoding";
 
 interface IncidentRow {
   direction: "out" | "in";
@@ -129,6 +131,7 @@ export function DetailPanel() {
         </div>
       )}
 
+      <FocusControl />
       <ImpactControl />
 
       <Section title="Semantic summary">
@@ -181,6 +184,81 @@ export function DetailPanel() {
         )}
       </Section>
     </Shell>
+  );
+}
+
+/** Neighborhood focus: isolates the selected node's N-hop neighborhood over
+ *  BOTH out- and in-edges (the "show me this symbol and everything it touches"
+ *  view, get_context_profile analogue). Members stay bright; everything else
+ *  dims; the camera refits to the region. A small depth control (1–3) bounds
+ *  the BFS. Distinct from Impact (callers-only, unbounded). */
+function FocusControl() {
+  const store = useStore();
+  const active = store.focus !== null;
+  const count = store.focus?.nodes.size ?? 0;
+  const depth = store.focusDepth;
+  const teal = BRAND.teal;
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        onClick={() => store.toggleFocus()}
+        title="Isolate this symbol's N-hop neighborhood (in + out edges) and frame it"
+        style={{
+          width: "100%",
+          padding: "5px 0",
+          borderRadius: 6,
+          background: active ? `${teal}33` : "rgba(255,255,255,0.05)",
+          border: `1px solid ${active ? teal : "rgba(255,255,255,0.14)"}`,
+          color: active ? "#a9f0e6" : "rgba(255,255,255,0.75)",
+          cursor: "pointer",
+          fontSize: 12,
+          fontWeight: active ? 600 : 400,
+        }}
+      >
+        {active ? "Focus ON — click to clear" : "Focus neighborhood"}
+      </button>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginTop: 6,
+          fontSize: 11,
+          opacity: active ? 1 : 0.7,
+        }}
+      >
+        <span style={{ opacity: 0.7 }}>Depth</span>
+        {Array.from({ length: MAX_FOCUS_DEPTH - MIN_FOCUS_DEPTH + 1 }, (_, i) => {
+          const d = MIN_FOCUS_DEPTH + i;
+          const on = depth === d;
+          return (
+            <button
+              key={d}
+              onClick={() => store.setFocusDepth(d)}
+              style={{
+                width: 24,
+                height: 22,
+                borderRadius: 5,
+                background: on ? `${teal}33` : "rgba(255,255,255,0.05)",
+                border: `1px solid ${on ? teal : "rgba(255,255,255,0.14)"}`,
+                color: on ? "#a9f0e6" : "rgba(255,255,255,0.6)",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: on ? 700 : 400,
+              }}
+            >
+              {d}
+            </button>
+          );
+        })}
+        {active && (
+          <span style={{ marginLeft: "auto", color: "#a9f0e6" }}>
+            {count} node{count === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 

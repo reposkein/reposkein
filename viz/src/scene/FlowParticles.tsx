@@ -46,7 +46,18 @@ export function FlowParticles() {
       minConfidence: store.filters.minConfidence,
       audit: store.audit,
     });
-    const bundles = bundleEdges(filteredModel, visible);
+    let bundles = bundleEdges(filteredModel, visible);
+
+    // Neighborhood focus: only animate edges WHOLLY inside the focused set
+    // (rolled up to visible reps) so the motion matches the highlighted region.
+    if (store.focus) {
+      const focusReps = new Set<string>();
+      for (const id of store.focus.nodes) {
+        const r = representativeFor(model, id, visible);
+        if (r) focusReps.add(r);
+      }
+      bundles = bundles.filter((b) => focusReps.has(b.srcKey) && focusReps.has(b.dstKey));
+    }
 
     // Priority bundles: incident to the selected or hovered node's visible rep.
     const accentKeys = new Set<string>();
@@ -106,6 +117,7 @@ export function FlowParticles() {
     store.expanded,
     store.filters,
     store.audit,
+    store.focus,
     store.selected,
     store.hovered,
   ]);

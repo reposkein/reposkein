@@ -4,7 +4,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import CameraControlsImpl from "camera-controls";
 import { useStore } from "../state/store";
-import { visibleClusters } from "../data/clientModel";
+import { representativeFor, visibleClusters } from "../data/clientModel";
 
 /** How long (ms) of no interaction before the gentle idle azimuth drift kicks
  *  in, and how fast it rotates (radians / second). */
@@ -66,10 +66,19 @@ export function Controls() {
       }
     }
 
-    // If a single star is selected, frame just that node; otherwise frame the
-    // whole currently-visible set.
+    // Neighborhood focus owns the camera: frame the whole focused region
+    // (rolled up to visible reps). Otherwise: a single selected star frames
+    // just that node; with nothing selected we frame the visible set.
     let keys: string[];
-    if (store.selected && model.clusterOfNode.has(store.selected)) {
+    if (store.focus) {
+      const visible = visibleClusters(model, store.expanded);
+      const reps = new Set<string>();
+      for (const id of store.focus.nodes) {
+        const r = representativeFor(model, id, visible);
+        if (r) reps.add(r);
+      }
+      keys = [...reps];
+    } else if (store.selected && model.clusterOfNode.has(store.selected)) {
       keys = [model.clusterOfNode.get(store.selected)!];
     } else if (store.selected && model.indexByKey.has(store.selected)) {
       keys = [store.selected];
