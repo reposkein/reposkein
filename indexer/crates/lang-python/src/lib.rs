@@ -43,7 +43,7 @@ impl Extractor for PythonExtractor {
             calls: w.calls,
             heritage: w.heritage,
             module_aliases,
-            constructions: vec![],
+            constructions: w.constructions,
         }
     }
 }

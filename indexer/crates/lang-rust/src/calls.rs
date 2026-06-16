@@ -108,6 +108,37 @@ pub fn collect_constructions(
     );
 }
 
+/// Returns the bound local name if `ctor_node` is the value of a simple
+/// `let <ident> = <ctor>` or `let mut <ident> = <ctor>` binding.
+fn bound_local_for_let(ctor_node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let parent = ctor_node.parent()?;
+    // For `&Foo{}` or `&Foo { }` (reference_expression wrapping struct_expression):
+    // unwrap one reference_expression layer.
+    let parent = if parent.kind() == "reference_expression" {
+        parent.parent()?
+    } else {
+        parent
+    };
+    if parent.kind() != "let_declaration" {
+        return None;
+    }
+    let pattern = parent.child_by_field_name("pattern")?;
+    // Unwrap mut_pattern: `let mut x = ...` → pattern is mut_pattern, inner is identifier
+    let ident_node = if pattern.kind() == "mut_pattern" {
+        pattern.named_child(0)?
+    } else {
+        pattern
+    };
+    if ident_node.kind() != "identifier" {
+        return None; // tuple_pattern, struct_pattern, wildcard, etc.
+    }
+    let name = reposkein_lang_common::text(ident_node, source).to_string();
+    if name == "_" {
+        return None; // wildcard
+    }
+    Some(name)
+}
+
 fn collect_constructions_inner(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -135,11 +166,13 @@ fn collect_constructions_inner(
                 _ => reposkein_lang_common::text(name_node, source).to_string(),
             };
             if !class_name.is_empty() {
+                let bound_local = bound_local_for_let(node, source);
                 out.push(reposkein_core::extractor::RawConstruction {
                     caller_id: caller_id.to_string(),
                     caller_path: caller_path.to_string(),
                     caller_file_id: caller_file_id.to_string(),
                     class_name,
+                    bound_local,
                 });
             }
         }
@@ -160,11 +193,13 @@ fn collect_constructions_inner(
                         String::new()
                     };
                     if !class_name.is_empty() {
+                        let bound_local = bound_local_for_let(node, source);
                         out.push(reposkein_core::extractor::RawConstruction {
                             caller_id: caller_id.to_string(),
                             caller_path: caller_path.to_string(),
                             caller_file_id: caller_file_id.to_string(),
                             class_name,
+                            bound_local,
                         });
                     }
                 }
@@ -326,6 +361,75 @@ mod tests {
             constructions.is_empty(),
             "::build / ::default must NOT emit RawConstruction in v1"
         );
+    }
+
+    #[test]
+    fn let_binding_foo_new_has_bound_local() {
+        let src = b"fn caller() { let x = Foo::new(); }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_item")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_constructions(body, src, "cid", "m.rs", "fid", &mut constructions);
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, Some("x".to_string()));
+    }
+
+    #[test]
+    fn let_mut_binding_foo_new_has_bound_local() {
+        let src = b"fn caller() { let mut x = Foo::new(); }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_item")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_constructions(body, src, "cid", "m.rs", "fid", &mut constructions);
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(
+            constructions[0].bound_local,
+            Some("x".to_string()),
+            "let mut x binds to x"
+        );
+    }
+
+    #[test]
+    fn struct_literal_in_let_has_bound_local() {
+        let src = b"fn caller() { let y = Foo { field: 1 }; }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_item")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_constructions(body, src, "cid", "m.rs", "fid", &mut constructions);
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, Some("y".to_string()));
+    }
+
+    #[test]
+    fn unbound_foo_new_has_no_bound_local() {
+        // `return Foo::new()` - no let binding
+        let src = b"fn caller() -> Foo { Foo::new() }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_item")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_constructions(body, src, "cid", "m.rs", "fid", &mut constructions);
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, None);
     }
 
     #[test]

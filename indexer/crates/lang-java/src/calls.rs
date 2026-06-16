@@ -40,6 +40,25 @@ pub fn collect_calls(
     );
 }
 
+fn bound_local_for_java(ctor_node: TsNode<'_>, source: &[u8]) -> Option<String> {
+    // object_creation_expression's parent should be variable_declarator
+    let declarator = ctor_node.parent()?;
+    if declarator.kind() != "variable_declarator" {
+        return None;
+    }
+    // The declarator's parent should be local_variable_declaration
+    let decl = declarator.parent()?;
+    if decl.kind() != "local_variable_declaration" {
+        return None;
+    }
+    // The declarator's `name` field should be a plain identifier
+    let name_node = declarator.child_by_field_name("name")?;
+    if name_node.kind() != "identifier" {
+        return None;
+    }
+    Some(text(name_node, source).to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk(
     node: TsNode,
@@ -112,11 +131,13 @@ fn walk(
                 String::new()
             };
             if !type_name.is_empty() {
+                let bound_local = bound_local_for_java(child, source);
                 out_constructions.push(RawConstruction {
                     caller_id: caller_id.to_string(),
                     caller_path: caller_path.to_string(),
                     caller_file_id: caller_file_id.to_string(),
                     class_name: type_name,
+                    bound_local,
                 });
             }
         }
@@ -176,6 +197,46 @@ mod tests {
         assert!(pairs.contains(&("foo", None)));
         assert!(pairs.contains(&("bar", Some("obj"))));
         assert!(pairs.contains(&("baz", Some("this"))));
+    }
+
+    #[test]
+    fn local_var_decl_has_bound_local() {
+        let src = b"class C { void run() { Foo x = new Foo(); } }";
+        let tree = parse(src).unwrap();
+        let body = find_method_body(tree.root_node()).unwrap();
+        let mut constructions = Vec::new();
+        collect_calls(
+            body,
+            src,
+            "cid",
+            "C.run",
+            "C.java",
+            "fid",
+            &mut Vec::new(),
+            &mut constructions,
+        );
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, Some("x".to_string()));
+    }
+
+    #[test]
+    fn return_new_has_no_bound_local() {
+        let src = b"class C { Foo run() { return new Foo(); } }";
+        let tree = parse(src).unwrap();
+        let body = find_method_body(tree.root_node()).unwrap();
+        let mut constructions = Vec::new();
+        collect_calls(
+            body,
+            src,
+            "cid",
+            "C.run",
+            "C.java",
+            "fid",
+            &mut Vec::new(),
+            &mut constructions,
+        );
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, None);
     }
 
     #[test]

@@ -83,6 +83,25 @@ fn strip_angle_brackets(s: &str) -> String {
     }
 }
 
+fn bound_local_for_new_expr(ctor: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    // Parent of new_expression must be a variable_declarator
+    let parent = ctor.parent()?;
+    if parent.kind() != "variable_declarator" {
+        return None;
+    }
+    // The `value` field of the declarator must be this new_expression
+    let val = parent.child_by_field_name("value")?;
+    if val.id() != ctor.id() {
+        return None;
+    }
+    // The `name` field must be a simple identifier (not destructuring pattern)
+    let name_node = parent.child_by_field_name("name")?;
+    if name_node.kind() != "identifier" {
+        return None;
+    }
+    Some(name_node.utf8_text(source).unwrap_or("").to_string())
+}
+
 fn collect_constructions(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -107,11 +126,13 @@ fn collect_constructions(
             };
             if let Some(name) = class_name {
                 if !name.is_empty() {
+                    let bound_local = bound_local_for_new_expr(node, source);
                     out.push(reposkein_core::extractor::RawConstruction {
                         caller_id: caller_id.to_string(),
                         caller_path: caller_path.to_string(),
                         caller_file_id: caller_file_id.to_string(),
                         class_name: name,
+                        bound_local,
                     });
                 }
             }
@@ -652,6 +673,46 @@ mod tests {
             .heritage
             .iter()
             .any(|h| h.from_id == a_id && h.edge_type == "INHERITS" && h.base_name == "C"));
+    }
+
+    #[test]
+    fn new_expr_in_const_declarator_has_bound_local() {
+        // `const x = new Foo()` → bound_local = Some("x")
+        let w = run(b"function f() { const x = new Foo(); }\n");
+        let c = w
+            .constructions
+            .iter()
+            .find(|c| c.class_name == "Foo")
+            .expect("Foo construction");
+        assert_eq!(c.bound_local, Some("x".to_string()));
+    }
+
+    #[test]
+    fn new_expr_not_in_declarator_has_no_bound_local() {
+        // `return new Foo()` → bound_local = None
+        let w = run(b"function f() { return new Foo(); }\n");
+        let c = w
+            .constructions
+            .iter()
+            .find(|c| c.class_name == "Foo")
+            .expect("Foo construction");
+        assert_eq!(c.bound_local, None);
+    }
+
+    #[test]
+    fn new_expr_with_destructuring_lhs_has_no_bound_local() {
+        // simple ident binding works; destructuring LHS yields None (covered by helper).
+        let w = run(b"function f() { const y = new Foo(); const {x} = {x: 1}; }\n");
+        let c = w
+            .constructions
+            .iter()
+            .find(|c| c.class_name == "Foo")
+            .expect("Foo construction");
+        assert_eq!(
+            c.bound_local,
+            Some("y".to_string()),
+            "simple ident binding works"
+        );
     }
 
     #[test]

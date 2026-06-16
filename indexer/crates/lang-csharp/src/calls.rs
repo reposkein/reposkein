@@ -46,6 +46,41 @@ pub fn collect_calls(
     );
 }
 
+fn bound_local_for_csharp(ctor_node: TsNode<'_>, source: &[u8]) -> Option<String> {
+    // object_creation_expression should be inside a variable_declarator's initializer.
+    // C# grammar: variable_declarator → identifier, equals_value_clause
+    //   equals_value_clause → "=", value (the expression)
+    // So ctor_node's parent is equals_value_clause, whose parent is variable_declarator.
+    // Grammar deviation from design: in this tree-sitter-c-sharp grammar the
+    // object_creation_expression's parent is the variable_declarator directly
+    // (there is no intervening equals_value_clause node). Handle both shapes.
+    let parent = ctor_node.parent()?;
+    let declarator = if parent.kind() == "equals_value_clause" {
+        parent.parent()?
+    } else {
+        parent
+    };
+    if declarator.kind() != "variable_declarator" {
+        return None;
+    }
+    // declarator's parent should be variable_declaration
+    let var_decl = declarator.parent()?;
+    if var_decl.kind() != "variable_declaration" {
+        return None;
+    }
+    // variable_declaration's parent should be local_declaration_statement
+    let local_decl = var_decl.parent()?;
+    if local_decl.kind() != "local_declaration_statement" {
+        return None;
+    }
+    // Get the identifier from the variable_declarator (first named identifier child).
+    let mut cursor = declarator.walk();
+    let ident = declarator
+        .named_children(&mut cursor)
+        .find(|n| n.kind() == "identifier")?;
+    Some(text(ident, source).to_string())
+}
+
 fn collect_constructions(
     node: TsNode,
     source: &[u8],
@@ -85,11 +120,13 @@ fn collect_constructions(
                     _ => text(ty_node, source).to_string(),
                 };
                 if !type_name.is_empty() {
+                    let bound_local = bound_local_for_csharp(child, source);
                     out.push(RawConstruction {
                         caller_id: caller_id.to_string(),
                         caller_path: caller_path.to_string(),
                         caller_file_id: caller_file_id.to_string(),
                         class_name: type_name,
+                        bound_local,
                     });
                 }
             }
@@ -175,6 +212,50 @@ mod tests {
             pairs.contains(&("StaticM", Some("Type"))),
             "Type.StaticM() call"
         );
+    }
+
+    #[test]
+    fn local_decl_has_bound_local() {
+        let src = b"class C { void Run() { var x = new Foo(); } }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let method = find_first(root, "method_declaration").unwrap();
+        let body = method.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_calls(
+            body,
+            src,
+            "cid",
+            "C.Run",
+            "C.cs",
+            "rs1:r:file:C.cs",
+            &mut Vec::new(),
+            &mut constructions,
+        );
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, Some("x".to_string()));
+    }
+
+    #[test]
+    fn return_new_csharp_has_no_bound_local() {
+        let src = b"class C { Foo Run() { return new Foo(); } }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let method = find_first(root, "method_declaration").unwrap();
+        let body = method.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_calls(
+            body,
+            src,
+            "cid",
+            "C.Run",
+            "C.cs",
+            "rs1:r:file:C.cs",
+            &mut Vec::new(),
+            &mut constructions,
+        );
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, None);
     }
 
     #[test]

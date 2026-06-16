@@ -70,6 +70,67 @@ pub fn collect_constructions(
     );
 }
 
+/// Returns Some(ident) if `composite_node` (the composite_literal or &composite_literal)
+/// is the sole RHS of a simple single-identifier Go binding.
+fn bound_local_for_go(composite_node: TsNode, source: &[u8]) -> Option<String> {
+    let parent = composite_node.parent()?;
+    // For `&Foo{}`, the composite_literal's parent is unary_expression; unwrap.
+    let parent = if parent.kind() == "unary_expression" {
+        parent.parent()?
+    } else {
+        parent
+    };
+    // The RHS of a Go binding is an `expression_list`; the composite_literal
+    // (or its unary wrapper) is a child of that list. Unwrap it.
+    let binding_parent = if parent.kind() == "expression_list" {
+        parent.parent()?
+    } else {
+        parent
+    };
+
+    match binding_parent.kind() {
+        "short_var_declaration" => {
+            // left: expression_list, right: expression_list
+            let left = binding_parent.child_by_field_name("left")?;
+            let right = binding_parent.child_by_field_name("right")?;
+            // Only single-assignment (left and right each have 1 element)
+            let mut lc = left.walk();
+            let left_children: Vec<_> = left.named_children(&mut lc).collect();
+            if left_children.len() != 1 {
+                return None;
+            }
+            let mut rc = right.walk();
+            let right_children: Vec<_> = right.named_children(&mut rc).collect();
+            if right_children.len() != 1 {
+                return None;
+            }
+            let lhs = left_children[0];
+            if lhs.kind() != "identifier" {
+                return None;
+            }
+            let name = text(lhs, source).to_string();
+            if name == "_" {
+                return None;
+            }
+            Some(name)
+        }
+        "var_spec" => {
+            // name: identifier list, value: expression list
+            // Simple case: single name, single value
+            let name = binding_parent.child_by_field_name("name")?;
+            if name.kind() != "identifier" {
+                return None;
+            }
+            let ident_name = text(name, source).to_string();
+            if ident_name == "_" {
+                return None;
+            }
+            Some(ident_name)
+        }
+        _ => None,
+    }
+}
+
 fn collect_constructions_inner(
     node: TsNode,
     source: &[u8],
@@ -84,11 +145,13 @@ fn collect_constructions_inner(
     // Direct composite_literal: `Foo{}` or `pkg.Foo{}`
     if kind == "composite_literal" {
         if let Some(class_name) = composite_literal_class_name(node, source) {
+            let bound_local = bound_local_for_go(node, source);
             out.push(reposkein_core::extractor::RawConstruction {
                 caller_id: caller_id.to_string(),
                 caller_path: caller_path.to_string(),
                 caller_file_id: caller_file_id.to_string(),
                 class_name,
+                bound_local,
             });
         }
     }
@@ -260,6 +323,58 @@ mod tests {
         collect_constructions(body, src, "cid", "pkg/m.go", "fid", &mut c1);
         collect_constructions(body, src, "cid", "pkg/m.go", "fid", &mut c2);
         assert_eq!(c1, c2, "collect_constructions must be deterministic");
+    }
+
+    #[test]
+    fn short_var_decl_composite_literal_has_bound_local() {
+        let src = b"package p\nfunc caller() { x := Foo{} }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_declaration")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions: Vec<RawConstruction> = Vec::new();
+        collect_constructions(body, src, "cid", "pkg/m.go", "fid", &mut constructions);
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, Some("x".to_string()));
+    }
+
+    #[test]
+    fn short_var_decl_ref_composite_literal_has_bound_local() {
+        let src = b"package p\nfunc caller() { x := &Foo{} }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_declaration")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions: Vec<RawConstruction> = Vec::new();
+        collect_constructions(body, src, "cid", "pkg/m.go", "fid", &mut constructions);
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(constructions[0].bound_local, Some("x".to_string()));
+    }
+
+    #[test]
+    fn unbound_composite_literal_has_no_bound_local() {
+        // `_ = Foo{}` — blank identifier → no bound_local
+        let src = b"package p\nfunc caller() { _ = Foo{} }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_declaration")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions: Vec<RawConstruction> = Vec::new();
+        collect_constructions(body, src, "cid", "pkg/m.go", "fid", &mut constructions);
+        assert_eq!(constructions.len(), 1);
+        assert_eq!(
+            constructions[0].bound_local, None,
+            "blank _ must have no bound_local"
+        );
     }
 
     #[test]
