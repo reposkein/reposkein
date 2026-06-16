@@ -1,12 +1,9 @@
-//! Intra-file heritage (INHERITS/IMPLEMENTS) resolution shared by the language
-//! extractors. Base/trait names are written bare or scope-relative; this maps
-//! each endpoint to a declared type's node id by trying scope-prefixed
-//! candidates (most→least specific), so nested and cross-scope references
-//! resolve instead of dangling. An edge is emitted only when BOTH endpoints are
-//! declared in-file (external bases are simply not linked — the same observable
-//! result as the old dangling-then-dropped behavior).
+//! Heritage resolution helpers shared by the language extractors.
+//! `PendingHeritage` accumulates during the per-file walk; `lower` converts it
+//! to `RawHeritage` facts (from-side resolved in-file, base left for repo-wide
+//! resolution by `core::resolve::resolve_heritage`).
 
-use crate::model::Edge;
+use crate::extractor::RawHeritage;
 use std::collections::HashMap;
 
 /// A heritage relationship awaiting resolution. `from_name` (the declaring or
@@ -40,22 +37,31 @@ fn resolve_name<'a>(
     None
 }
 
-/// Resolves pending heritage into edges (input order preserved). Emits an edge
-/// only when both endpoints resolve to declared in-file types.
-pub fn resolve(pending: &[PendingHeritage], declared: &HashMap<String, String>) -> Vec<Edge> {
+/// Lowers pending heritage into `RawHeritage` facts for the cross-file resolver
+/// (`core::resolve::resolve_heritage`). The **from-side** is resolved here,
+/// against the file-local `declared` map (identical gating to the old in-file
+/// resolver: an unresolved from-side emits nothing). The **base** is left as a
+/// name for repo-wide resolution. Input order is preserved.
+pub fn lower(
+    pending: &[PendingHeritage],
+    declared: &HashMap<String, String>,
+    from_path: &str,
+    from_file_id: &str,
+    label_refine: bool,
+) -> Vec<RawHeritage> {
     let mut out = Vec::new();
     for p in pending {
-        let (Some(from_id), Some(to_id)) = (
-            resolve_name(declared, &p.decl_scope, &p.from_name),
-            resolve_name(declared, &p.decl_scope, &p.base_name),
-        ) else {
+        let Some(from_id) = resolve_name(declared, &p.decl_scope, &p.from_name) else {
             continue;
         };
-        out.push(Edge::new(
-            from_id.clone(),
-            p.edge_type.clone(),
-            to_id.clone(),
-        ));
+        out.push(RawHeritage {
+            from_id: from_id.clone(),
+            from_path: from_path.to_string(),
+            from_file_id: from_file_id.to_string(),
+            edge_type: p.edge_type.clone(),
+            base_name: p.base_name.clone(),
+            label_refine,
+        });
     }
     out
 }
@@ -72,64 +78,60 @@ mod tests {
     }
 
     #[test]
-    fn resolves_top_level_inherits() {
-        let d = declared(&[("A", "idA"), ("B", "idB")]);
+    fn lowers_when_from_side_resolves() {
+        let d = declared(&[("B", "rs1:r:class:m.py#B")]);
         let p = vec![PendingHeritage {
             decl_scope: vec![],
             from_name: "B".into(),
             edge_type: "INHERITS".into(),
             base_name: "A".into(),
         }];
-        let e = resolve(&p, &d);
-        assert_eq!(e.len(), 1);
-        assert_eq!(
-            (e[0].from.as_str(), e[0].typ.as_str(), e[0].to.as_str()),
-            ("idB", "INHERITS", "idA")
-        );
+        let raw = lower(&p, &d, "m.py", "rs1:r:file:m.py", false);
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].from_id, "rs1:r:class:m.py#B");
+        assert_eq!(raw[0].base_name, "A");
+        assert_eq!(raw[0].edge_type, "INHERITS");
+        assert!(!raw[0].label_refine);
     }
 
     #[test]
-    fn resolves_nested_sibling_inherits() {
-        // class Outer: class A; class B(A)  → both qualified under Outer.
-        let d = declared(&[("Outer.A", "idA"), ("Outer.B", "idB")]);
+    fn skips_when_from_side_does_not_resolve() {
+        // Rust `impl Trait for ExternalType` — the from-type is not local.
+        let d = declared(&[("Greeter", "rs1:r:iface:m.rs#Greeter")]);
+        let p = vec![PendingHeritage {
+            decl_scope: vec![],
+            from_name: "ExternalType".into(),
+            edge_type: "IMPLEMENTS".into(),
+            base_name: "Greeter".into(),
+        }];
+        assert!(lower(&p, &d, "m.rs", "rs1:r:file:m.rs", false).is_empty());
+    }
+
+    #[test]
+    fn lowers_nested_from_side_via_scope() {
+        // class Outer: class B(A) → from `B` resolves to Outer.B via scope.
+        let d = declared(&[("Outer.B", "rs1:r:class:m.py#Outer.B")]);
         let p = vec![PendingHeritage {
             decl_scope: vec!["Outer".into()],
             from_name: "B".into(),
             edge_type: "INHERITS".into(),
             base_name: "A".into(),
         }];
-        let e = resolve(&p, &d);
-        assert_eq!(e.len(), 1, "nested base resolves via scope candidate");
-        assert_eq!((e[0].from.as_str(), e[0].to.as_str()), ("idB", "idA"));
+        let raw = lower(&p, &d, "m.py", "rs1:r:file:m.py", false);
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].from_id, "rs1:r:class:m.py#Outer.B");
     }
 
     #[test]
-    fn resolves_cross_scope_impl() {
-        // impl Greeter for Service inside `mod m`; Greeter is top-level.
-        let d = declared(&[("Greeter", "idG"), ("m.Service", "idS")]);
-        let p = vec![PendingHeritage {
-            decl_scope: vec!["m".into()],
-            from_name: "Service".into(),
-            edge_type: "IMPLEMENTS".into(),
-            base_name: "Greeter".into(),
-        }];
-        let e = resolve(&p, &d);
-        assert_eq!(e.len(), 1);
-        assert_eq!(
-            (e[0].from.as_str(), e[0].typ.as_str(), e[0].to.as_str()),
-            ("idS", "IMPLEMENTS", "idG")
-        );
-    }
-
-    #[test]
-    fn external_base_yields_no_edge() {
-        let d = declared(&[("B", "idB")]);
+    fn label_refine_flag_carried() {
+        let d = declared(&[("C", "rs1:r:class:m.cs#N.C")]);
         let p = vec![PendingHeritage {
             decl_scope: vec![],
-            from_name: "B".into(),
+            from_name: "C".into(),
             edge_type: "INHERITS".into(),
-            base_name: "ImportedExternal".into(),
+            base_name: "IFoo".into(),
         }];
-        assert!(resolve(&p, &d).is_empty());
+        let raw = lower(&p, &d, "N/C.cs", "rs1:r:file:N/C.cs", true);
+        assert!(raw[0].label_refine);
     }
 }
