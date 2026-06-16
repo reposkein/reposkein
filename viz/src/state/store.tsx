@@ -53,7 +53,8 @@ type Action =
   | { t: "setEdgeTypeFilter"; type: string; hidden: boolean }
   | { t: "setMinConfidence"; value: number }
   | { t: "clearFilters" }
-  | { t: "setFocusTarget"; id: string | null };
+  | { t: "setFocusTarget"; id: string | null }
+  | { t: "resetView" };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
  *  shut the deepest-expanded branch first ("one level up"). */
@@ -139,6 +140,11 @@ function reducer(state: State, a: Action): State {
         // Bump fitNonce when setting a non-null target so Controls.tsx picks it up.
         fitNonce: a.id !== null ? state.fitNonce + 1 : state.fitNonce,
       };
+    case "resetView": {
+      if (!state.model) return state;
+      const expanded = new Set<string>([state.model.rootKey]);
+      return { ...state, expanded, selected: null, focusTarget: null, fitNonce: state.fitNonce + 1 };
+    }
   }
 }
 
@@ -153,6 +159,7 @@ interface Store extends State {
   setMinConfidence(value: number): void;
   clearFilters(): void;
   setFocusTarget(id: string | null): void;
+  resetView(): void;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -200,6 +207,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setMinConfidence: (value) => dispatch({ t: "setMinConfidence", value }),
       clearFilters: () => dispatch({ t: "clearFilters" }),
       setFocusTarget: (id) => dispatch({ t: "setFocusTarget", id }),
+      resetView: () => dispatch({ t: "resetView" }),
     }),
     [state]
   );
