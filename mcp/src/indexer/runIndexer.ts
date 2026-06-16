@@ -2,6 +2,11 @@ import { spawn } from "node:child_process";
 
 const ALLOWED_KEYS = new Set(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD"]);
 
+/** Indexer spawn timeout (~10 minutes). Large repos can be slow but shouldn't hang forever. */
+const INDEXER_TIMEOUT_MS = 600_000;
+/** Cap accumulated stdout/stderr to the last 1 MB to avoid OOM on runaway output. */
+const OUTPUT_CAP_BYTES = 1024 * 1024;
+
 function buildChildEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -35,10 +40,29 @@ export function spawnIndexer(bin: string, args: string[]): Promise<SpawnResult> 
     const child = spawn(bin, args, { env: buildChildEnv() });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
+
+    /** Append data to a buffer, keeping only the last OUTPUT_CAP_BYTES bytes. */
+    function appendCapped(buf: string, chunk: string): string {
+      const combined = buf + chunk;
+      if (combined.length > OUTPUT_CAP_BYTES) {
+        return combined.slice(combined.length - OUTPUT_CAP_BYTES);
+      }
+      return combined;
+    }
+
+    child.stdout.on("data", (d) => { stdout = appendCapped(stdout, d.toString()); });
+    child.stderr.on("data", (d) => { stderr = appendCapped(stderr, d.toString()); });
     child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`indexer timed out after ${INDEXER_TIMEOUT_MS}ms`));
+    }, INDEXER_TIMEOUT_MS);
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, stdout, stderr });
+    });
   });
 }
 

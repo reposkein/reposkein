@@ -241,6 +241,31 @@ describe("makeSemanticFind — embedding integration", () => {
     const hybridBody = JSON.parse((hybridResult.content[0] as { text: string }).text);
     expect(hybridBody.results.length).toBeGreaterThan(0);
   });
+
+  it("TIMEOUT-FALLBACK: provider throws AbortError (simulating timeout) → falls back to lexical", async () => {
+    // Pure-lexical baseline
+    const lexicalHandler = makeSemanticFind(makeStore(), "testrepo", tmpDir, null);
+    const lexicalResult = await lexicalHandler({ query: "auth" });
+    const lexicalBody = JSON.parse((lexicalResult.content[0] as { text: string }).text);
+
+    // Provider that throws an AbortError (the error fetch throws on timeout)
+    const abortProvider = new MockProvider({ dims: 4 });
+    const abortError = new DOMException("The operation was aborted", "AbortError");
+    abortProvider.throwError = abortError as unknown as Error;
+
+    const hybridHandler = makeSemanticFind(makeStore(), "testrepo", tmpDir, abortProvider);
+    const hybridResult = await hybridHandler({ query: "auth" });
+
+    // Must NOT propagate as an error
+    expect(hybridResult.isError).toBeFalsy();
+
+    const hybridBody = JSON.parse((hybridResult.content[0] as { text: string }).text);
+    // Falls back to lexical: same ids and order
+    expect(hybridBody.results.map((r: { node_id: string }) => r.node_id))
+      .toEqual(lexicalBody.results.map((r: { node_id: string }) => r.node_id));
+    // No hybrid disclosure when fallback occurred
+    expect(hybridBody.ranking).toBeUndefined();
+  });
 });
 
 // Need beforeEach/afterEach to be imported

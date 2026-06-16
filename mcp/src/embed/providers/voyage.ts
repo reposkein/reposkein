@@ -26,6 +26,8 @@ const DEFAULT_MODEL = "voyage-code-3";
 const DEFAULT_DIMS = 1024;
 /** Max texts per request (Voyage API limit). */
 const BATCH_SIZE = 1000;
+/** Default embedding request timeout in ms. Override with REPOSKEIN_EMBED_TIMEOUT_MS. */
+const DEFAULT_TIMEOUT_MS = 30000;
 
 interface VoyageResponse {
   embeddings: number[][];
@@ -37,6 +39,9 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
   private readonly _modelId: string;
   private readonly _dims: number;
   private readonly _apiKey: string;
+  private readonly _timeoutMs: number;
+  /** True only when the user explicitly set REPOSKEIN_EMBED_DIMS. */
+  private readonly _dimsExplicit: boolean;
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
     const apiKey = env["VOYAGE_API_KEY"];
@@ -54,9 +59,13 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
         );
       }
       this._dims = d;
+      this._dimsExplicit = true;
     } else {
       this._dims = DEFAULT_DIMS;
+      this._dimsExplicit = false;
     }
+    const rawTimeout = env["REPOSKEIN_EMBED_TIMEOUT_MS"];
+    this._timeoutMs = rawTimeout !== undefined ? Number(rawTimeout) : DEFAULT_TIMEOUT_MS;
   }
 
   id(): string { return this._id; }
@@ -75,23 +84,40 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
         input: batch,
         model: this._modelId,
         input_type: kind,
-        output_dimension: this._dims,
       };
+      // Only send output_dimension when the user explicitly configured it.
+      // Voyage defaults to the model's native dimensionality when omitted.
+      if (this._dimsExplicit) {
+        body["output_dimension"] = this._dims;
+      }
 
-      const res = await fetch(VOYAGE_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${this._apiKey}`,
-        },
-        body: JSON.stringify(body),
-      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this._timeoutMs);
+      let res: Response;
+      try {
+        res = await fetch(VOYAGE_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this._apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
 
       if (!res.ok) {
         const text = await res.text().catch(() => "(no body)");
         throw new Error(`Voyage API error ${res.status}: ${text}`);
       }
 
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) {
+        const text = await res.text().catch(() => "(unreadable body)");
+        throw new Error(`Voyage API returned non-JSON response (${contentType}): ${text.slice(0, 200)}`);
+      }
       const json = (await res.json()) as VoyageResponse;
       if (!Array.isArray(json.embeddings)) {
         throw new Error(`Voyage API response missing embeddings array: ${JSON.stringify(json)}`);

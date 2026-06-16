@@ -25,6 +25,8 @@
 import type { EmbeddingProvider, EmbedKind } from "../provider.js";
 
 const DEFAULT_DIMS = 1024;
+/** Default embedding request timeout in ms. Override with REPOSKEIN_EMBED_TIMEOUT_MS. */
+const DEFAULT_TIMEOUT_MS = 30000;
 
 interface OpenAIEmbedResponse {
   data: Array<{ embedding: number[] }>;
@@ -39,6 +41,7 @@ export class HttpEmbeddingProvider implements EmbeddingProvider {
   private readonly _url: string;
   private readonly _modelId: string;
   private readonly _dims: number;
+  private readonly _timeoutMs: number;
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
     const url = env["REPOSKEIN_EMBED_URL"];
@@ -63,6 +66,8 @@ export class HttpEmbeddingProvider implements EmbeddingProvider {
     } else {
       this._dims = DEFAULT_DIMS;
     }
+    const rawTimeout = env["REPOSKEIN_EMBED_TIMEOUT_MS"];
+    this._timeoutMs = rawTimeout !== undefined ? Number(rawTimeout) : DEFAULT_TIMEOUT_MS;
   }
 
   id(): string { return this._id; }
@@ -78,17 +83,30 @@ export class HttpEmbeddingProvider implements EmbeddingProvider {
       input_type: kind,
     };
 
-    const res = await fetch(this._url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this._timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(this._url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => "(no body)");
       throw new Error(`HTTP embedding server error ${res.status}: ${text}`);
     }
 
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      const text = await res.text().catch(() => "(unreadable body)");
+      throw new Error(`HTTP embedding server returned non-JSON response (${contentType}): ${text.slice(0, 200)}`);
+    }
     const json = (await res.json()) as OpenAIEmbedResponse | VoyageEmbedResponse;
 
     // OpenAI-compatible shape: { data: [{ embedding: [...] }, ...] }

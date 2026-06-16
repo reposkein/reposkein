@@ -41,17 +41,28 @@ const MIN_SUPPORT = 3;
 
 // ── git helpers ──────────────────────────────────────────────────────────────
 
+/** Error thrown by Node when the child output exceeds maxBuffer. */
+const MAX_BUFFER_EXCEEDED = "ERR_CHILD_PROCESS_STDIO_MAX_BUFFER_SIZE";
+
 async function gitExec(
   args: string[],
   cwd: string,
-): Promise<{ stdout: string; ok: boolean; error?: string }> {
+): Promise<{ stdout: string; ok: boolean; error?: string; maxBufferExceeded?: boolean }> {
   try {
-    const { stdout } = await execFile("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await execFile("git", args, {
+      cwd,
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 20000,
+      killSignal: "SIGKILL",
+    });
     return { stdout, ok: true };
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string };
+    const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string; code?: string };
     if (e.code === "ENOENT") {
       return { stdout: "", ok: false, error: "git executable not found in PATH" };
+    }
+    if (e.code === MAX_BUFFER_EXCEEDED) {
+      return { stdout: "", ok: false, maxBufferExceeded: true, error: "maxBuffer exceeded" };
     }
     // git exits non-zero for "not a git repo" etc.
     const msg = (e.stderr as string | undefined) ?? e.message ?? String(err);
@@ -167,6 +178,9 @@ export async function getTemporal(repoPath: string): Promise<TemporalResult> {
     ];
     const logResult = await gitExec(logArgs, repoPath);
     if (!logResult.ok) {
+      if (logResult.maxBufferExceeded) {
+        return { unavailable: "history too large for the temporal window" };
+      }
       return { unavailable: `git log failed: ${logResult.error ?? "unknown error"}` };
     }
 
