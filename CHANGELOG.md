@@ -6,6 +6,24 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-06-16
+
+### Added
+
+- **Intraprocedural receiver-type resolution.** When a local variable is assigned
+  an in-repo class constructor (`x = Foo()`, `const x = new Foo()`, `let x =
+  Foo::new()`, `x := Foo{}`, …), that variable's later method calls (`x.bar()`)
+  now resolve **`exact`/1.0** to the class's method instead of a low-confidence
+  name match — across all 7 languages, deterministically from source alone (no
+  compiler, no external index). Reassigned/shadowed locals are conservatively
+  dropped (no guessing); calls on untraceable receivers (params/fields/returns)
+  still fall back to name-match.
+
+### Changed
+
+- Extract-cache schema bumped 12 → 13 (the new `bound_local` binding fact changes
+  extractor output).
+
 ## [0.1.6] - 2026-06-16
 
 ### Added
