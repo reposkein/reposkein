@@ -28,6 +28,7 @@ impl Extractor for JavaExtractor {
             calls: w.calls,
             imports,
             heritage: w.heritage,
+            module_aliases: vec![],
         }
     }
 }

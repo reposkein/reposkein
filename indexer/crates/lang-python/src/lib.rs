@@ -31,7 +31,8 @@ impl Extractor for PythonExtractor {
             return ExtractOutput::default();
         };
         let root = tree.root_node();
-        let imports = imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
+        let (imports, module_aliases) =
+            imports::extract_imports(root, ctx.source, ctx.file_id, ctx.rel_path);
         let mut w = defs::Walk::new(ctx.repo, ctx.rel_path, ctx.file_id, ctx.source);
         w.walk(root, &[], ctx.file_id, defs::ScopeKind::Module);
         w.lower_heritage();
@@ -41,6 +42,7 @@ impl Extractor for PythonExtractor {
             imports,
             calls: w.calls,
             heritage: w.heritage,
+            module_aliases,
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Python import extraction → RawImport with candidate target file paths.
 
-use reposkein_core::extractor::RawImport;
+use reposkein_core::extractor::{RawImport, RawModuleAlias};
 use tree_sitter::Node as TsNode;
 
 fn text<'a>(node: TsNode, source: &'a [u8]) -> &'a str {
@@ -54,28 +54,66 @@ fn push_import(
     importing_file_id: &str,
     importing_path: &str,
     out: &mut Vec<RawImport>,
+    out_aliases: &mut Vec<RawModuleAlias>,
 ) {
     match child.kind() {
         "import_statement" => {
             // `import a.b.c` / `import a.b.c as d` — one or more names.
             let mut nc = child.walk();
             for name in child.named_children(&mut nc) {
-                let dotted = if name.kind() == "aliased_import" {
-                    name.child_by_field_name("name")
+                if name.kind() == "aliased_import" {
+                    // `import foo as f` or `import a.b.c as x`
+                    // Emit both a RawImport (for the IMPORTS edge) and a
+                    // RawModuleAlias (for module-alias call resolution rung 1.5).
+                    if let Some(d) = name.child_by_field_name("name") {
+                        let parts = dotted_parts(d, source);
+                        let cand = candidates(&parts);
+                        out.push(RawImport {
+                            importing_file_id: importing_file_id.to_string(),
+                            importing_path: importing_path.to_string(),
+                            symbols: Vec::new(),
+                            candidate_paths: cand.clone(),
+                            reexport: false,
+                        });
+                        // The alias is the local name bound in this namespace.
+                        let alias = name
+                            .child_by_field_name("alias")
+                            .map(|a| text(a, source).to_string())
+                            .unwrap_or_default();
+                        if !alias.is_empty() {
+                            out_aliases.push(RawModuleAlias {
+                                importing_file_id: importing_file_id.to_string(),
+                                importing_path: importing_path.to_string(),
+                                local_alias: alias,
+                                candidate_paths: cand,
+                            });
+                        }
+                    }
                 } else if name.kind() == "dotted_name" {
-                    Some(name)
-                } else {
-                    None
-                };
-                if let Some(d) = dotted {
-                    let parts = dotted_parts(d, source);
+                    // `import foo` or `import a.b.c` (no `as`).
+                    // For `import foo`, Python binds "foo" → emit a RawModuleAlias.
+                    // For `import a.b.c` (multi-segment, no `as`), Python only binds
+                    // the top-level name "a", NOT "c" — do NOT emit a RawModuleAlias
+                    // (to avoid false aliases). The caller must write `import a.b.c as x`.
+                    let parts = dotted_parts(name, source);
+                    let cand = candidates(&parts);
                     out.push(RawImport {
                         importing_file_id: importing_file_id.to_string(),
                         importing_path: importing_path.to_string(),
                         symbols: Vec::new(),
-                        candidate_paths: candidates(&parts),
+                        candidate_paths: cand.clone(),
                         reexport: false,
                     });
+                    // Only single-segment bare imports (e.g. `import foo`) bind
+                    // the module name directly.
+                    if parts.len() == 1 {
+                        out_aliases.push(RawModuleAlias {
+                            importing_file_id: importing_file_id.to_string(),
+                            importing_path: importing_path.to_string(),
+                            local_alias: parts[0].clone(),
+                            candidate_paths: cand,
+                        });
+                    }
                 }
             }
         }
@@ -154,15 +192,30 @@ fn collect_imports(
     importing_file_id: &str,
     importing_path: &str,
     out: &mut Vec<RawImport>,
+    out_aliases: &mut Vec<RawModuleAlias>,
 ) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
             "import_statement" | "import_from_statement" => {
-                push_import(child, source, importing_file_id, importing_path, out);
+                push_import(
+                    child,
+                    source,
+                    importing_file_id,
+                    importing_path,
+                    out,
+                    out_aliases,
+                );
             }
             k if IMPORT_CONTAINERS.contains(&k) => {
-                collect_imports(child, source, importing_file_id, importing_path, out);
+                collect_imports(
+                    child,
+                    source,
+                    importing_file_id,
+                    importing_path,
+                    out,
+                    out_aliases,
+                );
             }
             _ => {} // do not descend into function/class bodies (local imports excluded)
         }
@@ -170,15 +223,24 @@ fn collect_imports(
 }
 
 /// Extracts all imports in a module subtree, given the importing file context.
+/// Returns `(imports, module_aliases)`.
 pub fn extract_imports(
     root: TsNode,
     source: &[u8],
     importing_file_id: &str,
     importing_path: &str,
-) -> Vec<RawImport> {
+) -> (Vec<RawImport>, Vec<RawModuleAlias>) {
     let mut out = Vec::new();
-    collect_imports(root, source, importing_file_id, importing_path, &mut out);
-    out
+    let mut out_aliases = Vec::new();
+    collect_imports(
+        root,
+        source,
+        importing_file_id,
+        importing_path,
+        &mut out,
+        &mut out_aliases,
+    );
+    (out, out_aliases)
 }
 
 #[cfg(test)]
@@ -188,7 +250,12 @@ mod tests {
 
     fn imports_of(src: &[u8], path: &str) -> Vec<RawImport> {
         let tree = parse(src).unwrap();
-        extract_imports(tree.root_node(), src, "fid", path)
+        extract_imports(tree.root_node(), src, "fid", path).0
+    }
+
+    fn aliases_of(src: &[u8], path: &str) -> Vec<RawModuleAlias> {
+        let tree = parse(src).unwrap();
+        extract_imports(tree.root_node(), src, "fid", path).1
     }
 
     #[test]
@@ -238,6 +305,66 @@ mod tests {
         assert_eq!(
             imps[0].symbols,
             vec![("h".to_string(), "helper".to_string())]
+        );
+    }
+
+    // --- Module alias tests (design §10, extractor test plan) ---
+
+    #[test]
+    fn alias_import_emits_module_alias() {
+        // `import foo as f` → RawModuleAlias { local_alias:"f", candidate_paths:["foo.py","foo/__init__.py"] }
+        let aliases = aliases_of(b"import foo as f\n", "svc.py");
+        assert_eq!(aliases.len(), 1, "one alias emitted");
+        assert_eq!(aliases[0].local_alias, "f");
+        assert_eq!(
+            aliases[0].candidate_paths,
+            vec!["foo.py", "foo/__init__.py"]
+        );
+    }
+
+    #[test]
+    fn bare_import_emits_module_alias() {
+        // `import foo` → RawModuleAlias { local_alias:"foo", candidate_paths:["foo.py","foo/__init__.py"] }
+        let aliases = aliases_of(b"import foo\n", "svc.py");
+        assert_eq!(aliases.len(), 1, "one alias emitted for bare import");
+        assert_eq!(aliases[0].local_alias, "foo");
+        assert_eq!(
+            aliases[0].candidate_paths,
+            vec!["foo.py", "foo/__init__.py"]
+        );
+    }
+
+    #[test]
+    fn dotted_alias_emits_last_alias() {
+        // `import a.b.c as x` → RawModuleAlias { local_alias:"x", candidate_paths:["a/b/c.py","a/b/c/__init__.py"] }
+        let aliases = aliases_of(b"import a.b.c as x\n", "svc.py");
+        assert_eq!(aliases.len(), 1, "one alias for dotted aliased import");
+        assert_eq!(aliases[0].local_alias, "x");
+        assert_eq!(
+            aliases[0].candidate_paths,
+            vec!["a/b/c.py", "a/b/c/__init__.py"]
+        );
+    }
+
+    #[test]
+    fn bare_dotted_no_alias() {
+        // `import a.b.c` (no `as`) → NO RawModuleAlias
+        // Python only binds "a" (not "c") in the namespace; we cannot track
+        // `c` as a valid single-identifier alias.
+        let aliases = aliases_of(b"import a.b.c\n", "svc.py");
+        assert!(
+            aliases.is_empty(),
+            "bare dotted import without alias must emit no RawModuleAlias"
+        );
+    }
+
+    #[test]
+    fn from_import_no_module_alias() {
+        // `from pkg import mod` → No RawModuleAlias (symbol import, not module alias)
+        let aliases = aliases_of(b"from pkg import mod\n", "svc.py");
+        assert!(
+            aliases.is_empty(),
+            "from-import must not emit RawModuleAlias"
         );
     }
 }

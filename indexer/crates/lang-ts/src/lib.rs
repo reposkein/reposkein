@@ -26,6 +26,7 @@ pub fn extract_module(ctx: &FileContext) -> ExtractOutput {
         imports,
         calls: w.calls,
         heritage: w.heritage,
+        module_aliases: vec![],
     }
 }
 

@@ -528,11 +528,7 @@ mod tests {
         let mut found_embed = false;
         let mut found_named = false;
 
-        fn check(
-            node: tree_sitter::Node,
-            found_embed: &mut bool,
-            found_named: &mut bool,
-        ) {
+        fn check(node: tree_sitter::Node, found_embed: &mut bool, found_named: &mut bool) {
             if node.kind() == "field_declaration" {
                 let has_name = node.child_by_field_name("name").is_some();
                 if !has_name {
