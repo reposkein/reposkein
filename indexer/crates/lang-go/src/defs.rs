@@ -91,6 +91,33 @@ fn first_line(node: TsNode, source: &[u8]) -> String {
         .to_string()
 }
 
+/// Extract the bare base name from an embedded type node.
+///
+/// Handles the three legal embedding forms in Go:
+/// - `type_identifier`  → bare name  (`Animal` → `"Animal"`)
+/// - `qualified_type`   → name segment only  (`io.Reader` → `"Reader"`)
+/// - `pointer_type`     → peel one pointer level and recurse  (`*Animal` → `"Animal"`)
+///
+/// Returns `None` for all other node kinds (generic_type, function_type, etc.),
+/// which silently skips the field — matching the existing pattern for
+/// unnamed/empty nodes elsewhere in the extractor.
+fn embedded_base_name(ty: TsNode, src: &[u8]) -> Option<String> {
+    match ty.kind() {
+        "type_identifier" => Some(text(ty, src).to_string()),
+        "qualified_type" => ty
+            .child_by_field_name("name")
+            .map(|n| text(n, src).to_string()),
+        "pointer_type" => {
+            // A pointer_type has a single named child: the pointee type.
+            let mut c = ty.walk();
+            let pointee = ty.named_children(&mut c).next();
+            drop(c);
+            pointee.and_then(|child| embedded_base_name(child, src))
+        }
+        _ => None,
+    }
+}
+
 impl<'a> Walk<'a> {
     pub fn new(repo: &'a str, rel_path: &'a str, source: &'a [u8]) -> Self {
         Walk {
@@ -231,10 +258,84 @@ impl<'a> Walk<'a> {
                             "struct_type" => {
                                 let id = self.class_id(&name);
                                 self.push_type(id, "Class", &name, spec, parent_id);
+                                // Embedded fields: field_declaration with no "name" child.
+                                // Walk: struct_type → field_declaration_list → field_declaration*.
+                                let mut sc = ty.walk();
+                                for fdl in ty.named_children(&mut sc) {
+                                    if fdl.kind() != "field_declaration_list" {
+                                        continue;
+                                    }
+                                    let mut fc = fdl.walk();
+                                    for fd in fdl.named_children(&mut fc) {
+                                        if fd.kind() != "field_declaration" {
+                                            continue;
+                                        }
+                                        // Embedded = no name field (field_identifier absent).
+                                        if fd.child_by_field_name("name").is_some() {
+                                            continue;
+                                        }
+                                        let Some(type_node) = fd.child_by_field_name("type") else {
+                                            continue;
+                                        };
+                                        let Some(base) = embedded_base_name(type_node, self.source)
+                                        else {
+                                            continue;
+                                        };
+                                        self.pending_heritage.push(
+                                            reposkein_core::heritage::PendingHeritage {
+                                                decl_scope: vec![],
+                                                from_name: name.clone(),
+                                                edge_type: "INHERITS".to_string(),
+                                                base_name: base,
+                                            },
+                                        );
+                                    }
+                                }
                             }
                             "interface_type" => {
                                 let id = self.iface_id(&name);
                                 self.push_type(id, "Interface", &name, spec, parent_id);
+                                // Embedded interfaces: type_elem children of interface_type.
+                                // Skip type constraints (union: `int | float64`, tilde: `~int`).
+                                let mut ic = ty.walk();
+                                for elem in ty.named_children(&mut ic) {
+                                    if elem.kind() != "type_elem" {
+                                        continue;
+                                    }
+                                    // Plain embed has no `|` or `~` anonymous tokens.
+                                    let has_union_token = {
+                                        let mut ec = elem.walk();
+                                        let tokens: Vec<_> = elem
+                                            .children(&mut ec)
+                                            .filter(|c| !c.is_named())
+                                            .map(|c| text(c, self.source).to_string())
+                                            .collect();
+                                        tokens.iter().any(|t| t == "|" || t == "~")
+                                    };
+                                    if has_union_token {
+                                        continue;
+                                    }
+                                    // Plain embed: exactly 1 named child.
+                                    let mut ec2 = elem.walk();
+                                    let type_children: Vec<_> =
+                                        elem.named_children(&mut ec2).collect();
+                                    if type_children.len() != 1 {
+                                        continue;
+                                    }
+                                    let Some(base) =
+                                        embedded_base_name(type_children[0], self.source)
+                                    else {
+                                        continue;
+                                    };
+                                    self.pending_heritage.push(
+                                        reposkein_core::heritage::PendingHeritage {
+                                            decl_scope: vec![],
+                                            from_name: name.clone(),
+                                            edge_type: "INHERITS".to_string(),
+                                            base_name: base,
+                                        },
+                                    );
+                                }
                             }
                             _ => {} // aliases, function types, etc. — deferred
                         }
@@ -411,5 +512,236 @@ mod tests {
             .edges
             .iter()
             .any(|e| e.typ == "DEFINES" && e.to == method_id && e.from == "rs1:r:file:pkg/m.go"));
+    }
+
+    // ── Grammar verification ─────────────────────────────────────────────────
+
+    #[test]
+    fn grammar_struct_embed_field_declaration_has_no_name_field() {
+        // Verify tree-sitter-go grammar: embedded field is a field_declaration
+        // with no "name" child (field_identifier), and its "type" child is
+        // type_identifier. Named field has "name". This locks the grammar
+        // assumption before the implementation depends on it.
+        let src = b"package p\ntype Dog struct { Animal; breed string }";
+        let tree = parse(src).unwrap();
+
+        let mut found_embed = false;
+        let mut found_named = false;
+
+        fn check(
+            node: tree_sitter::Node,
+            found_embed: &mut bool,
+            found_named: &mut bool,
+        ) {
+            if node.kind() == "field_declaration" {
+                let has_name = node.child_by_field_name("name").is_some();
+                if !has_name {
+                    let ty = node
+                        .child_by_field_name("type")
+                        .expect("embedded field must have type child");
+                    assert_eq!(
+                        ty.kind(),
+                        "type_identifier",
+                        "embedded field type should be type_identifier, got {}",
+                        ty.kind()
+                    );
+                    *found_embed = true;
+                } else {
+                    *found_named = true;
+                }
+            }
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                check(child, found_embed, found_named);
+            }
+        }
+
+        check(tree.root_node(), &mut found_embed, &mut found_named);
+        assert!(found_embed, "should find embedded field (no name field)");
+        assert!(found_named, "should find named field");
+    }
+
+    #[test]
+    fn grammar_interface_embed_is_type_elem_not_method_elem() {
+        // Verify: `ReadWriter interface { Reader; Writer }` → type_elem children
+        // (not method_elem). Each type_elem has a single type_identifier child.
+        let src = b"package p\ntype ReadWriter interface { Reader; Writer }";
+        let tree = parse(src).unwrap();
+
+        let mut type_elem_count = 0u32;
+
+        fn check(node: tree_sitter::Node, count: &mut u32) {
+            if node.kind() == "interface_type" {
+                let mut c = node.walk();
+                for child in node.named_children(&mut c) {
+                    if child.kind() == "type_elem" {
+                        *count += 1;
+                    }
+                    // method_elem would have kind "method_elem"
+                    assert_ne!(
+                        child.kind(),
+                        "method_elem",
+                        "should be type_elem for bare interface embed"
+                    );
+                }
+            }
+            let mut c = node.walk();
+            for child in node.named_children(&mut c) {
+                check(child, count);
+            }
+        }
+
+        check(tree.root_node(), &mut type_elem_count);
+        assert_eq!(
+            type_elem_count, 2,
+            "expected 2 type_elem children for Reader and Writer"
+        );
+    }
+
+    // ── T1: In-file struct embed ─────────────────────────────────────────────
+
+    #[test]
+    fn struct_embed_emits_inherits_heritage() {
+        let src = b"package p\n\
+            type Animal struct{ name string }\n\
+            type Dog struct {\n\
+                Animal\n\
+                breed string\n\
+            }";
+        let w = run(src);
+        assert_eq!(
+            w.heritage.len(),
+            1,
+            "exactly 1 heritage entry for struct embed"
+        );
+        let h = &w.heritage[0];
+        assert_eq!(h.from_id, "rs1:r:class:pkg/m.go#Dog");
+        assert_eq!(h.base_name, "Animal");
+        assert_eq!(h.edge_type, "INHERITS");
+        assert!(!h.label_refine, "label_refine must be false");
+        // No heritage for the named field "breed"
+        assert!(
+            w.heritage.iter().all(|h| h.base_name != "breed"),
+            "named field must not become heritage"
+        );
+    }
+
+    // ── T2: In-file interface embed ──────────────────────────────────────────
+
+    #[test]
+    fn interface_embed_emits_inherits_heritage() {
+        let src = b"package p\n\
+            type Reader interface { Read(p []byte) (int, error) }\n\
+            type Writer interface { Write(p []byte) (int, error) }\n\
+            type ReadWriter interface {\n\
+                Reader\n\
+                Writer\n\
+            }";
+        let w = run(src);
+        let rw_heritage: Vec<_> = w
+            .heritage
+            .iter()
+            .filter(|h| h.from_id == "rs1:r:iface:pkg/m.go#ReadWriter")
+            .collect();
+        assert_eq!(
+            rw_heritage.len(),
+            2,
+            "ReadWriter should have 2 heritage entries"
+        );
+        assert_eq!(
+            rw_heritage[0].base_name, "Reader",
+            "first embed: Reader (source order)"
+        );
+        assert_eq!(
+            rw_heritage[1].base_name, "Writer",
+            "second embed: Writer (source order)"
+        );
+        assert!(rw_heritage.iter().all(|h| h.edge_type == "INHERITS"));
+        assert!(rw_heritage.iter().all(|h| !h.label_refine));
+    }
+
+    // ── T3: Pointer-embedded struct ──────────────────────────────────────────
+
+    #[test]
+    fn pointer_struct_embed_strips_pointer() {
+        let src = b"package p\n\
+            type Base struct{ x int }\n\
+            type Child struct {\n\
+                *Base\n\
+            }";
+        let w = run(src);
+        assert_eq!(w.heritage.len(), 1, "pointer embed is still heritage");
+        assert_eq!(
+            w.heritage[0].base_name, "Base",
+            "pointer stripped from *Base"
+        );
+        assert_eq!(w.heritage[0].edge_type, "INHERITS");
+    }
+
+    // ── T4: Qualified (package-prefixed) embedded type ───────────────────────
+
+    #[test]
+    fn qualified_embed_strips_package_prefix() {
+        let src = b"package p\n\
+            import \"io\"\n\
+            type MyReadWriter struct {\n\
+                io.Reader\n\
+            }";
+        let w = run(src);
+        assert_eq!(w.heritage.len(), 1, "qualified embed emits heritage");
+        assert_eq!(
+            w.heritage[0].base_name, "Reader",
+            "package prefix stripped from io.Reader"
+        );
+        assert_eq!(w.heritage[0].edge_type, "INHERITS");
+    }
+
+    // ── T6: Type constraint (union) is NOT heritage ──────────────────────────
+
+    #[test]
+    fn type_constraint_union_is_not_heritage() {
+        let src = b"package p\n\
+            type Number interface {\n\
+                int | float64\n\
+            }";
+        let w = run(src);
+        assert!(
+            w.heritage.is_empty(),
+            "type constraint (union) must not emit heritage"
+        );
+    }
+
+    // ── T7: Named field is NOT heritage ──────────────────────────────────────
+
+    #[test]
+    fn named_field_is_not_heritage() {
+        let src = b"package p\n\
+            type Foo struct{}\n\
+            type Bar struct {\n\
+                f Foo\n\
+            }";
+        let w = run(src);
+        assert!(w.heritage.is_empty(), "named field must not emit heritage");
+    }
+
+    // ── T8: Determinism with embeds ──────────────────────────────────────────
+
+    #[test]
+    fn embed_extraction_is_deterministic() {
+        let src = b"package p\n\
+            type A struct{}\n\
+            type B struct{}\n\
+            type C struct { A; B }";
+        let a = run(src);
+        let b = run(src);
+        assert_eq!(
+            a.heritage, b.heritage,
+            "heritage must be identical across runs"
+        );
+        assert_eq!(a.nodes, b.nodes);
+        assert_eq!(a.edges, b.edges);
+        // Verify source order: A before B
+        assert_eq!(a.heritage[0].base_name, "A");
+        assert_eq!(a.heritage[1].base_name, "B");
     }
 }
