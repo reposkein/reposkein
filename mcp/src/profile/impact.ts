@@ -6,9 +6,13 @@ import type { GraphStore } from "../store/GraphStore.js";
  *  - any lowercased path segment equals "test" or "tests", or ends with ".tests"
  *  - the lowercased basename starts with "test_"
  *  - the basename contains "_test.", ".test.", ".spec.", or ".tests."
- *  - the original (case-preserving) basename ends with "Test.<ext>", "Tests.<ext>"
+ *  - the original (case-preserving) basename ends with exactly "Test.java",
+ *    "Tests.java", or "Tests.cs" (case-sensitive, language-specific — Rust rule)
  *
- * "contest_results.py" → false (basename "contest_results.py" doesn't start with "test_").
+ * Intentionally NOT matched (no false positives):
+ *  - "LoadTest.py" — not a Java/C# file; Rust only checks .java/.cs
+ *  - "FooTest.ts"  — same; TypeScript uses .test.ts or .spec.ts convention
+ *  - "contest_results.py" — "contest" starts with "cont", not "test_"
  */
 export function isTestPath(filePath: string): boolean {
   const p = filePath.toLowerCase();
@@ -34,10 +38,14 @@ export function isTestPath(filePath: string): boolean {
     return true;
   }
 
-  // Case-sensitive: original basename ends with Test.<ext> or Tests.<ext>
-  // e.g. FooTest.java, FooTests.java, FooTests.cs
-  // Match any extension: "Test." followed by word chars, or "Tests." followed by word chars
-  if (/Test\.\w+$/.test(origBasename) || /Tests\.\w+$/.test(origBasename)) {
+  // Case-sensitive: only the exact language-specific suffixes that Rust checks.
+  // FooTest.java / FooTests.java (Java convention)
+  // FooTests.cs (C# convention — paired with the .tests. segment check above for Foo.Tests.cs)
+  if (
+    origBasename.endsWith("Test.java") ||
+    origBasename.endsWith("Tests.java") ||
+    origBasename.endsWith("Tests.cs")
+  ) {
     return true;
   }
 

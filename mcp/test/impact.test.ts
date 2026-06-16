@@ -63,6 +63,18 @@ describe("isTestPath", () => {
   it("Service.java → false", () => {
     expect(isTestPath("src/main/java/com/acme/Service.java")).toBe(false);
   });
+
+  it("LoadTest.py → false (Rust role_for only checks Test.java/Tests.java/Tests.cs, not arbitrary extensions)", () => {
+    expect(isTestPath("src/LoadTest.py")).toBe(false);
+  });
+
+  it("FooTest.ts → false (TypeScript uses .test.ts convention, not Test.ts suffix)", () => {
+    expect(isTestPath("src/FooTest.ts")).toBe(false);
+  });
+
+  it("FooTests.cs → true (C# convention — Tests.cs suffix)", () => {
+    expect(isTestPath("src/FooTests.cs")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
