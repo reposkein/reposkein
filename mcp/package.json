@@ -1,7 +1,36 @@
 {
   "name": "@reposkein/mcp",
   "version": "0.1.2",
-  "description": "RepoSkein MCP server",
+  "description": "Deterministic code-graph (GraphRAG) MCP server — give your AI agent callers/callees, change-impact, and semantic search over your repo instead of grep. 7 languages, zero-infra, git-native.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "llm",
+    "ai-agents",
+    "code-graph",
+    "graphrag",
+    "rag",
+    "tree-sitter",
+    "static-analysis",
+    "code-intelligence",
+    "code-navigation",
+    "claude",
+    "claude-code",
+    "cursor",
+    "codex",
+    "developer-tools",
+    "reposkein"
+  ],
+  "homepage": "https://github.com/reposkein/reposkein#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reposkein/reposkein.git",
+    "directory": "mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/reposkein/reposkein/issues"
+  },
+  "author": "RepoSkein",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {

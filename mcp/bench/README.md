@@ -1,4 +1,13 @@
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=soft&color=0:070A12,50:2DD4BF,100:F2B84B&height=90&section=header&text=Retrieval%20Benchmark&fontColor=EAE7DC&fontSize=38" width="100%" alt="RepoSkein retrieval benchmark" />
+
+<sub><a href="https://github.com/reposkein/reposkein">← RepoSkein</a> · <a href="https://github.com/reposkein/reposkein#benchmarks">Benchmarks</a> · <a href="track2/README.md">Track 2 →</a></sub>
+
+</div>
+
 # RepoSkein Retrieval Benchmark (Track 1)
+
+**Contents:** [Method](#method) · [Results](#results) · [Honesty caveats](#honesty-caveats) · [How to run](#how-to-run) · [Add fixtures](#how-to-add-fixtures)
 
 A deterministic, no-LLM harness that compares **RepoSkein's structural retrieval** against a **grep-based agent** on labeled code-navigation tasks. It measures retrieval quality (precision/recall/F0.5 vs independent hand-labeled ground-truth) and context-token efficiency.
 

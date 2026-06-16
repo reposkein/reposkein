@@ -1,3 +1,7 @@
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:070A12,45:2DD4BF,100:F2B84B&height=150&section=header&text=RepoSkein&fontColor=EAE7DC&fontSize=56&animation=fadeIn" width="100%" alt="RepoSkein" />
+</div>
+
 # @reposkein/mcp
 
 **Give your AI coding agent a map of your codebase — instead of letting it grep and guess.**
@@ -15,6 +19,8 @@ This is the [Model Context Protocol](https://modelcontextprotocol.io) server for
 - ⚡ **Zero-infra** — no database, no Docker. The graph lives in committed `.reposkein/*.jsonl` files.
 - 🔒 **Deterministic** — same code → byte-identical graph. No LLM in the construction path.
 - 🌐 **7 languages** — Python, TypeScript, JavaScript, Rust, Go, Java, C#.
+
+**Contents:** [Get started](#get-started-30-seconds) · [Tools](#tools) · [How your agent uses it](#how-your-agent-uses-it) · [Configuration](#configuration) · [Embeddings](#optional-semantic-embeddings) · [Learn more](#learn-more)
 
 ## Get started (≈30 seconds)
 

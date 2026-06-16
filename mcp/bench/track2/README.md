@@ -1,4 +1,13 @@
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=soft&color=0:070A12,50:2DD4BF,100:F2B84B&height=90&section=header&text=End-Task%20Benchmark&fontColor=EAE7DC&fontSize=36" width="100%" alt="RepoSkein end-task benchmark" />
+
+<sub><a href="https://github.com/reposkein/reposkein">← RepoSkein</a> · <a href="https://github.com/reposkein/reposkein#benchmarks">Benchmarks</a> · <a href="../README.md">← Track 1</a></sub>
+
+</div>
+
 # RepoSkein End-Task Benchmark (Track 2)
+
+**Contents:** [Design](#design-one-agent-swap-only-navigation) · [Metrics](#metrics-reported-together-never-one-number) · [Build vs run](#build-vs-run-important) · [How to run](#how-to-run) · [Results](#results)
 
 Track 1 (`mcp/bench/`) measures the **retrieval layer** in isolation. Track 2
 measures **end-task outcomes**: does RepoSkein's leaner, structural context let a

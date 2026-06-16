@@ -1,4 +1,13 @@
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=soft&color=0:070A12,50:2DD4BF,100:F2B84B&height=90&section=header&text=embed-server&fontColor=EAE7DC&fontSize=40" width="100%" alt="reposkein embed-server" />
+
+<sub><a href="https://github.com/reposkein/reposkein">← RepoSkein</a> · <a href="https://github.com/reposkein/reposkein#optional-semantic-embeddings">Embeddings docs</a></sub>
+
+</div>
+
 # reposkein-embed-server
+
+**Contents:** [Run it](#run-it-one-command) · [Platforms](#platforms--hardware-no-nvidia-gpu-required) · [Point RepoSkein at it](#point-reposkein-at-it) · [Smoke test](#smoke-test) · [Configuration](#configuration) · [Run without Docker](#run-without-docker)
 
 A **ready-to-go local embedding service** for RepoSkein's optional semantic
 embeddings (`semantic_find`'s hybrid tier). It serves an OpenAI-compatible
