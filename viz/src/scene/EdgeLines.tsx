@@ -1,38 +1,66 @@
 import { useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
-import { representativeFor, visibleClusters } from "../data/clientModel";
-import { edgeColor, edgeOpacity } from "./encoding";
+import { bundleEdges, visibleClusters } from "../data/clientModel";
+import { edgeColor, bundleOpacity } from "./encoding";
 
-/** Relationship edges as a SINGLE LineSegments buffer (design §5). Each drawn
- *  edge runs between the deepest currently-visible cluster representatives of
- *  its endpoints; self-loops (both endpoints in the same collapsed cluster)
- *  are suppressed. Color encodes edge type; per-vertex color is pre-multiplied
- *  by a confidence/resolution opacity factor (additive blending) so exact
- *  edges read bright/solid and ambiguous edges faint — one draw call. */
+/** Relationship connections as a SINGLE additive LineSegments buffer
+ *  (design §3.2 / §5). Raw edges are rolled up to the deepest currently-visible
+ *  cluster representatives of their endpoints and AGGREGATED into per-pair
+ *  bundles, so cluster↔cluster connections render at EVERY LOD — including the
+ *  top level where only galaxy/dir cores are visible (the initial view shows a
+ *  connected constellation). Self-loops are suppressed. Color encodes the
+ *  bundle's dominant type; opacity encodes confidence/resolution with a
+ *  minimum floor so connections are always visible. On hover, bundles not
+ *  incident to the hovered representative are dimmed. One draw call. */
 export function EdgeLines() {
   const store = useStore();
   const model = store.model!;
+  const hovered = store.hovered;
 
   const geometry = useMemo(() => {
     const visible = visibleClusters(model, store.expanded);
+    const bundles = bundleEdges(model, visible);
+
+    // Deepest visible representative of the hovered node (if any), used to
+    // brighten incident bundles and dim the rest.
+    const hoveredKey = hovered ? model.clusterOfNode.get(hovered) ?? hovered : null;
+    let hoveredRep: string | null = null;
+    if (hoveredKey) {
+      const chain = model.ancestors.get(hoveredKey);
+      if (!chain) {
+        hoveredRep = visible.has(hoveredKey) ? hoveredKey : null;
+      } else {
+        for (let i = chain.length - 1; i >= 0; i--) {
+          if (visible.has(chain[i]!)) {
+            hoveredRep = chain[i]!;
+            break;
+          }
+        }
+      }
+    }
+
     const positions: number[] = [];
     const colors: number[] = [];
 
-    for (const e of model.drawEdges) {
-      const srcKey = representativeFor(model, e.from, visible);
-      const dstKey = representativeFor(model, e.to, visible);
-      if (!srcKey || !dstKey || srcKey === dstKey) continue; // suppress self-loops
-      const si = model.indexByKey.get(srcKey);
-      const di = model.indexByKey.get(dstKey);
+    for (const b of bundles) {
+      const si = model.indexByKey.get(b.srcKey);
+      const di = model.indexByKey.get(b.dstKey);
       if (si === undefined || di === undefined) continue;
 
-      const [r, g, b] = edgeColor(e.type);
-      const a = edgeOpacity(e.resolution);
+      const [r, g, bl] = edgeColor(b.dominantType);
+      let a = bundleOpacity(b.bestResolution, b.count);
+
+      // Hover focus: dim bundles not touching the hovered representative.
+      if (hoveredRep) {
+        const incident = b.srcKey === hoveredRep || b.dstKey === hoveredRep;
+        a = incident ? Math.min(1, a * 1.6) : a * 0.12;
+      }
+
       // Pre-multiply color by opacity for additive blending.
       const cr = r * a;
       const cg = g * a;
-      const cb = b * a;
+      const cb = bl * a;
 
       positions.push(
         model.positions[si * 3]!,
@@ -49,7 +77,7 @@ export function EdgeLines() {
     geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     return geo;
-  }, [model, store.expanded]);
+  }, [model, store.expanded, hovered]);
 
   const material = useMemo(
     () =>

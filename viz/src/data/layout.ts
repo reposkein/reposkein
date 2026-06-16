@@ -67,14 +67,18 @@ export function computeLayout(tree: ClusterTree): LayoutResult {
   // Seeded RNG: d3-force-3d uses the simulation's randomSource for any jitter.
   const rng = mulberry32(fnv1a("randomSource") ^ LAYOUT_SEED);
 
+  // Tightened spread (design §4): a gentler charge, shorter structural springs
+  // and a stronger centering pull keep the top-level clusters close enough to
+  // read as ONE constellation rather than a scattered cloud. All values are
+  // constants — the layout stays byte-deterministic (layout.test).
   const sim = forceSimulation(nodes, 3)
-    .force("charge", forceManyBody().strength(-12))
+    .force("charge", forceManyBody().strength(-7))
     .force(
       "link",
       forceLink(links)
         .id((d: SimNode) => d.key)
-        .distance(8)
-        .strength(0.6)
+        .distance(5)
+        .strength(0.85)
     )
     .force("center", forceCenter(0, 0, 0))
     .stop();
