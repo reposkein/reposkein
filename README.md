@@ -182,7 +182,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
 
 ### Cross-repo federation
 
-Got nested repositories (a monorepo of indexed repos)? RepoSkein discovers them, links them with `FEDERATES_TO`, and stitches **cross-repo call and import edges** at load time. Pass `federated: true` to traverse across repo boundaries. Federation edges are derived at load (never committed), so each repo stays independently deterministic.
+Got nested repositories (a monorepo of indexed repos)? RepoSkein discovers them, links them with `FEDERATES_TO`, and stitches **cross-repo call, import, and heritage edges** (`INHERITS`/`IMPLEMENTS` to a base in a child repo) at load time. Pass `federated: true` to traverse across repo boundaries. Federation edges are derived at load (never committed), so each repo stays independently deterministic.
 
 ## MCP tools
 

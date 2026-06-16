@@ -9,6 +9,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: CI only needs to read the repo (checkout). No job here
+# writes contents, packages, or other scopes — declaring this explicitly
+# satisfies the CodeQL "workflow does not contain permissions" check and caps
+# the GITHUB_TOKEN regardless of repo/org default-permission settings.
+permissions:
+  contents: read
+
 jobs:
   indexer:
     name: indexer (test + fmt + clippy)
