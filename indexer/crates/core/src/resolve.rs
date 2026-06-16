@@ -164,6 +164,8 @@ fn resolve_one(
     module_aliases: &BTreeMap<(String, String), String>, // (importing_file_id, alias) -> target_path
     by_id_dir: &BTreeMap<String, String>,                // func id -> directory of its file
     caller_file_id: &str,
+    bindings: &BTreeMap<(String, String), (String, String)>, // (caller_id, local) -> (class_id, class_file)
+    class_by_id_qual: &BTreeMap<String, String>,             // class id -> qualified_name
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
     if matches!(
@@ -192,6 +194,25 @@ fn resolve_one(
                 // HARD STOP: do NOT fall through to name_match rungs, since the module is
                 // known and the function simply isn't there (avoid false positives).
                 return Vec::new();
+            }
+        }
+    }
+    // Rung 1.6: intraprocedural receiver-type binding.
+    // receiver is Some(name), NOT self/cls/this, and (caller, name) is a tracked
+    // unambiguous constructor-local binding.
+    if let Some(recv) = &c.receiver {
+        if !matches!(recv.as_str(), "self" | "cls" | "this") {
+            if let Some((class_id, class_file)) = bindings.get(&(c.caller_id.clone(), recv.clone()))
+            {
+                if let Some(class_qual) = class_by_id_qual.get(class_id) {
+                    let method_qual = format!("{class_qual}.{}", c.callee_name);
+                    if let Some(method_id) = by_file_qual.get(&(class_file.clone(), method_qual)) {
+                        return vec![(method_id.clone(), "exact", 1.0)];
+                    }
+                    // Binding known, but method not found in class's file.
+                    // FALL THROUGH (not hard-stop): method may be inherited or external.
+                    // Let rung 6/7 handle it → no regression.
+                }
             }
         }
     }
@@ -368,6 +389,7 @@ pub fn resolve_full(
     let mut class_by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut class_by_id_qual: BTreeMap<String, String> = BTreeMap::new();
     let mut class_by_id_dir: BTreeMap<String, String> = BTreeMap::new();
+    let mut class_by_id_file: BTreeMap<String, String> = BTreeMap::new();
     let mut class_by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
     for t in &class_nodes {
         class_by_name
@@ -380,6 +402,7 @@ pub fn resolve_full(
             .push(t.id.clone());
         class_by_id_qual.insert(t.id.clone(), t.qualified.clone());
         class_by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
+        class_by_id_file.insert(t.id.clone(), t.file_path.clone());
         class_by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
     }
     for v in class_by_name.values_mut() {
@@ -387,6 +410,48 @@ pub fn resolve_full(
     }
     for v in class_by_file_name.values_mut() {
         v.sort();
+    }
+
+    // Build receiver-binding index: (caller_id, local_name) -> (class_id, class_file_path).
+    // Uses BTreeMap/BTreeSet for determinism. Conflict-drop: only keep unambiguous bindings.
+    let mut binding_classes: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for rc in constructions {
+        let Some(local) = &rc.bound_local else {
+            continue;
+        };
+        let h = RawHeritage {
+            from_id: rc.caller_id.clone(),
+            from_path: rc.caller_path.clone(),
+            from_file_id: rc.caller_file_id.clone(),
+            edge_type: "INSTANTIATES".into(),
+            base_name: rc.class_name.clone(),
+            label_refine: false,
+        };
+        if let Some((class_id, _res, _conf)) = resolve_base(
+            &h,
+            &class_by_name,
+            &class_by_file_qual,
+            &class_by_file_name,
+            &import_targets,
+            &class_by_id_qual,
+            &class_by_id_dir,
+        ) {
+            binding_classes
+                .entry((rc.caller_id.clone(), local.clone()))
+                .or_default()
+                .insert(class_id);
+        }
+    }
+    // Conflict-drop: keep only unambiguous bindings (BTreeSet size == 1).
+    let mut bindings: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
+    for ((caller, local), classes) in binding_classes {
+        if classes.len() == 1 {
+            let class_id = classes.into_iter().next().unwrap();
+            if let Some(file) = class_by_id_file.get(&class_id) {
+                bindings.insert((caller, local), (class_id, file.clone()));
+            }
+        }
+        // size != 1 → DROP (reassigned/shadowed to multiple distinct classes)
     }
 
     // ALL imported local→original bindings (incl. cross-repo imports that
@@ -416,6 +481,8 @@ pub fn resolve_full(
             &module_aliases,
             &by_id_dir,
             &caller_file_id,
+            &bindings,
+            &class_by_id_qual,
         );
 
         // Python class-lift: for bare calls only, check if callee is a class name.
@@ -1772,6 +1839,23 @@ mod tests {
             caller_path: caller_path.to_string(),
             caller_file_id: caller_file_id.to_string(),
             class_name: class_name.to_string(),
+            bound_local: None,
+        }
+    }
+
+    fn raw_construction_bound(
+        caller_id: &str,
+        caller_path: &str,
+        caller_file_id: &str,
+        class_name: &str,
+        bound_local: Option<&str>,
+    ) -> RawConstruction {
+        RawConstruction {
+            caller_id: caller_id.to_string(),
+            caller_path: caller_path.to_string(),
+            caller_file_id: caller_file_id.to_string(),
+            class_name: class_name.to_string(),
+            bound_local: bound_local.map(|s| s.to_string()),
         }
     }
 
@@ -1943,5 +2027,208 @@ mod tests {
         let (a, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
         let (b, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
         assert_eq!(a, b, "INSTANTIATES resolution must be deterministic");
+    }
+
+    // --- Rung 1.6: intraprocedural receiver-type binding tests ---
+
+    #[test]
+    fn rung_1_6_bound_local_resolves_to_exact() {
+        // In-file class: x = Foo(); x.bar() → CALLS exact 1.0 to Foo.bar
+        let caller = func_node("r", "m.py", "run", 0);
+        let foo_bar = func_node("r", "m.py", "Foo.bar", 1); // Foo.bar method
+        let cls = class_node("r", "m.py", "Foo");
+        let nodes = vec![caller.clone(), foo_bar.clone(), cls.clone()];
+        let constructions = vec![raw_construction_bound(
+            &caller.id,
+            "m.py",
+            &id::file_id("r", "m.py"),
+            "Foo",
+            Some("x"),
+        )];
+        let calls = vec![call(&caller.id, "m.py", "run", "bar", Some("x"))];
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &[], &constructions, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == foo_bar.id)
+            .expect("CALLS edge to Foo.bar via rung 1.6");
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+    }
+
+    #[test]
+    fn rung_1_6_cross_file_class_resolves_to_exact() {
+        // Foo in b.py, caller in a.py, x = Foo(), x.bar() → CALLS exact to Foo.bar in b.py
+        let caller = func_node("r", "a.py", "run", 0);
+        let foo_bar = func_node("r", "b.py", "Foo.bar", 1);
+        let cls = class_node("r", "b.py", "Foo");
+        let nodes = vec![
+            file_node("r", "a.py"),
+            file_node("r", "b.py"),
+            caller.clone(),
+            foo_bar.clone(),
+            cls.clone(),
+        ];
+        let constructions = vec![raw_construction_bound(
+            &caller.id,
+            "a.py",
+            &id::file_id("r", "a.py"),
+            "Foo",
+            Some("x"),
+        )];
+        let calls = vec![call(&caller.id, "a.py", "run", "bar", Some("x"))];
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &[], &constructions, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == foo_bar.id)
+            .expect("CALLS edge to Foo.bar in b.py via rung 1.6");
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+    }
+
+    #[test]
+    fn rung_1_6_reassignment_drops_binding() {
+        // x = Foo(); x = Bar(); x.run() → binding dropped (2 classes) → falls to name_match/ambiguous
+        let caller = func_node("r", "m.py", "run", 0);
+        let foo_run = func_node("r", "m.py", "Foo.run", 1);
+        let bar_run = func_node("r", "m.py", "Bar.run", 1);
+        let foo_cls = class_node("r", "m.py", "Foo");
+        let bar_cls = class_node("r", "m.py", "Bar");
+        let nodes = vec![
+            caller.clone(),
+            foo_run.clone(),
+            bar_run.clone(),
+            foo_cls.clone(),
+            bar_cls.clone(),
+        ];
+        let constructions = vec![
+            raw_construction_bound(
+                &caller.id,
+                "m.py",
+                &id::file_id("r", "m.py"),
+                "Foo",
+                Some("x"),
+            ),
+            raw_construction_bound(
+                &caller.id,
+                "m.py",
+                &id::file_id("r", "m.py"),
+                "Bar",
+                Some("x"),
+            ),
+        ];
+        let calls = vec![call(&caller.id, "m.py", "run", "run", Some("x"))];
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &[], &constructions, "r");
+        // With 2 classes resolving for (caller, "x"), the binding is dropped.
+        // x.run() falls to rung 6/7 → ambiguous (both Foo.run and Bar.run exist)
+        let call_edges: Vec<&_> = edges.iter().filter(|e| e.typ == "CALLS").collect();
+        // Should NOT be exact
+        for e in &call_edges {
+            assert_ne!(
+                e.props.get("resolution").and_then(|v| v.as_str()),
+                Some("exact"),
+                "reassigned binding must NOT resolve to exact"
+            );
+        }
+    }
+
+    #[test]
+    fn rung_1_6_method_not_on_class_falls_through() {
+        // x = Foo(); x.qux() where Foo has no qux → falls through to rung 6/7 (no panic)
+        let caller = func_node("r", "m.py", "run", 0);
+        let qux_elsewhere = func_node("r", "other.py", "qux", 0);
+        let cls = class_node("r", "m.py", "Foo");
+        // Foo has no `qux` method in its file
+        let nodes = vec![caller.clone(), qux_elsewhere.clone(), cls.clone()];
+        let constructions = vec![raw_construction_bound(
+            &caller.id,
+            "m.py",
+            &id::file_id("r", "m.py"),
+            "Foo",
+            Some("x"),
+        )];
+        let calls = vec![call(&caller.id, "m.py", "run", "qux", Some("x"))];
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &[], &constructions, "r");
+        // Falls through to rung 6/7: qux exists elsewhere → name_match 0.5
+        let e = edges.iter().find(|e| e.typ == "CALLS");
+        assert!(
+            e.is_some(),
+            "should fall through to name_match, not return empty"
+        );
+        let e = e.unwrap();
+        assert_eq!(
+            e.props.get("resolution").and_then(|v| v.as_str()),
+            Some("name_match"),
+            "method-not-on-class must fall through to name_match (rung 6/7)"
+        );
+        assert_eq!(
+            e.props.get("confidence").and_then(|v| v.as_f64()),
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn rung_1_6_unbound_receiver_stays_name_match() {
+        // obj.method() where obj is NOT a constructor-local → stays at name_match/0.5
+        let caller = func_node("r", "m.py", "run", 0);
+        let method_fn = func_node("r", "other.py", "method", 0);
+        let nodes = vec![caller.clone(), method_fn.clone()];
+        // No constructions → no bindings → rung 1.6 does not fire
+        let calls_raw = vec![call(&caller.id, "m.py", "run", "method", Some("obj"))];
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls_raw, &[], &[], &[], "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == method_fn.id)
+            .expect("attribute call falls through to name_match");
+        assert_eq!(e.props["resolution"], json!("name_match"));
+        assert_eq!(e.props["confidence"], json!(0.5));
+    }
+
+    #[test]
+    fn rung_1_6_receiver_binding_is_deterministic() {
+        // Run resolve_full twice with binding constructions → byte-identical results.
+        let caller = func_node("r", "m.py", "run", 0);
+        let foo_bar = func_node("r", "m.py", "Foo.bar", 1);
+        let cls = class_node("r", "m.py", "Foo");
+        let nodes = vec![caller.clone(), foo_bar.clone(), cls.clone()];
+        let constructions = vec![raw_construction_bound(
+            &caller.id,
+            "m.py",
+            &id::file_id("r", "m.py"),
+            "Foo",
+            Some("x"),
+        )];
+        let calls_raw = vec![call(&caller.id, "m.py", "run", "bar", Some("x"))];
+        let (a, _, _) = resolve_full(&nodes, &[], &calls_raw, &[], &[], &constructions, "r");
+        let (b, _, _) = resolve_full(&nodes, &[], &calls_raw, &[], &[], &constructions, "r");
+        assert_eq!(a, b, "receiver-binding resolution must be deterministic");
+    }
+
+    #[test]
+    fn rung_1_6_ambiguous_class_does_not_bind() {
+        // x = Foo() where Foo is repo-wide ambiguous → resolve_base returns None → no binding
+        let caller = func_node("r", "m.py", "run", 0);
+        let c1 = class_node("r", "x/m.py", "Foo");
+        let c2 = class_node("r", "y/m.py", "Foo");
+        // Foo.bar in x/m.py
+        let foo_bar = func_node("r", "x/m.py", "Foo.bar", 1);
+        let nodes = vec![caller.clone(), c1.clone(), c2.clone(), foo_bar.clone()];
+        let constructions = vec![raw_construction_bound(
+            &caller.id,
+            "m.py",
+            &id::file_id("r", "m.py"),
+            "Foo",
+            Some("x"),
+        )];
+        let calls_raw = vec![call(&caller.id, "m.py", "run", "bar", Some("x"))];
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls_raw, &[], &[], &constructions, "r");
+        // Foo is ambiguous → binding dropped → falls to rung 6/7.
+        // The key check: NOT exact.
+        for e in edges.iter().filter(|e| e.typ == "CALLS") {
+            assert_ne!(
+                e.props.get("resolution").and_then(|v| v.as_str()),
+                Some("exact"),
+                "ambiguous class must not produce exact binding"
+            );
+        }
     }
 }
