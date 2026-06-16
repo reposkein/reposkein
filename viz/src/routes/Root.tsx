@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Stars } from "@react-three/drei";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
@@ -19,6 +19,7 @@ import { SearchPanel } from "../panels/SearchPanel";
 import { LegendPanel } from "../panels/LegendPanel";
 import { LensSwitcher } from "../panels/LensSwitcher";
 import { BRAND } from "../scene/encoding";
+import { pickNeighbor } from "../data/navigate";
 
 export function Root() {
   return (
@@ -34,10 +35,62 @@ function View() {
   const navigate = useNavigate({ from: "/" });
   const nodeFromUrl = search.node;
 
-  // Esc collapses one LOD level and refits to the parent (design §5 navigation).
+  // Keyboard navigation (design §P4):
+  //   /            → focus the search input
+  //   f            → frame-all / reset view
+  //   Esc          → collapse one LOD level (back) — also clears the search box
+  //   Arrow / Tab  → with a node selected, hop to a connected neighbor
+  // Typing inside an input/textarea is left alone (except Esc, handled there).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") store.collapseLevel();
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+
+      if (e.key === "Escape") {
+        if (!typing) store.collapseLevel();
+        return;
+      }
+      if (typing) return; // don't hijack keys while the user is typing
+
+      if (e.key === "/") {
+        e.preventDefault();
+        document.getElementById("reposkein-search")?.focus();
+        return;
+      }
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        store.resetView();
+        return;
+      }
+
+      // Neighbor hopping requires a selected node with a known model.
+      const model = store.model;
+      if (!model || !store.selected) return;
+      let dir: "next" | "prev" | null = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") dir = "next";
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") dir = "prev";
+      else if (e.key === "Tab") dir = e.shiftKey ? "prev" : "next";
+      if (!dir) return;
+      e.preventDefault();
+      const next = pickNeighbor(model.drawEdges, store.selected, dir);
+      if (!next) return;
+      // Reveal (expand ancestors) → select → fly to it.
+      const clusterKey = model.clusterOfNode.get(next) ?? next;
+      const chain = model.ancestors.get(clusterKey);
+      if (chain) {
+        for (const ak of chain) {
+          const c = model.byKey.get(ak);
+          if (c && c.children.length > 0 && !store.expanded.has(ak)) {
+            store.toggleExpand(ak);
+          }
+        }
+      }
+      store.select(next);
+      store.setFocusTarget(next);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -145,7 +198,7 @@ function View() {
       {store.status.kind === "ready" && <LensSwitcher />}
       {store.status.kind === "ready" && <FilterHUD />}
       {store.status.kind === "ready" && <LegendPanel />}
-      {store.status.kind === "loading" && <Overlay text={`Charting the sky… (${store.status.phase})`} />}
+      <LoaderGate />
       {store.status.kind === "error" && <Overlay text={`Error: ${store.status.message}`} error />}
     </div>
   );
@@ -196,6 +249,9 @@ function HeaderBar() {
       )}
       <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>
         scroll = zoom · drag = orbit · click cluster = expand · click star = inspect · Esc / click space = back
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.45, marginTop: 1 }}>
+        keys: / search · f frame all · ←→ / Tab hop neighbor
       </div>
       {store.model && <SearchPanel />}
     </div>
@@ -291,6 +347,93 @@ function Breadcrumb() {
           </span>
         </span>
       ))}
+    </div>
+  );
+}
+
+/** Loading polish (design §P4): a tasteful centered loader shown while the
+ *  worker charts the layout (status !== ready). A soft pulsing constellation
+ *  glyph + "Charting the constellation…" with the live phase. When the model
+ *  becomes ready the overlay fades out over ~700ms (kept mounted for the fade,
+ *  then removed) so the scene doesn't pop in over a blank canvas. */
+function LoaderGate() {
+  const store = useStore();
+  const loading = store.status.kind === "loading";
+  const phase = store.status.kind === "loading" ? store.status.phase : "";
+  // `fading` keeps the overlay mounted briefly after ready for the fade-out.
+  const [mounted, setMounted] = useState(true);
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    if (loading) {
+      setMounted(true);
+      setVisible(true);
+      return;
+    }
+    // Ready (or error): fade out, then unmount.
+    setVisible(false);
+    const t = setTimeout(() => setMounted(false), 700);
+    return () => clearTimeout(t);
+  }, [loading]);
+
+  if (!mounted) return null;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 18,
+        pointerEvents: "none",
+        opacity: visible ? 1 : 0,
+        transition: "opacity 0.7s ease",
+        background:
+          "radial-gradient(ellipse 60% 50% at 50% 50%, rgba(5,6,12,0.55) 0%, rgba(5,6,12,0) 70%)",
+      }}
+    >
+      <style>
+        {`@keyframes rs-pulse {
+            0%,100% { transform: scale(0.9); opacity: 0.55; }
+            50%     { transform: scale(1.12); opacity: 1; }
+          }
+          @keyframes rs-spin { to { transform: rotate(360deg); } }`}
+      </style>
+      {/* Pulsing core ringed by a slow-spinning halo (the "constellation"). */}
+      <div style={{ position: "relative", width: 64, height: 64 }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: "50%",
+            border: `2px solid ${BRAND.teal}55`,
+            borderTopColor: BRAND.amber,
+            animation: "rs-spin 1.6s linear infinite",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            inset: 18,
+            borderRadius: "50%",
+            background: `radial-gradient(circle, ${BRAND.amber} 0%, ${BRAND.amber}00 70%)`,
+            animation: "rs-pulse 1.8s ease-in-out infinite",
+          }}
+        />
+      </div>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 15, color: BRAND.cream, letterSpacing: 0.4 }}>
+          Charting the constellation…
+        </div>
+        {phase && (
+          <div style={{ fontSize: 11, color: "rgba(160,180,220,0.6)", marginTop: 4 }}>
+            {phase}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

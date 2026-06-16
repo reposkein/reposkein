@@ -58,8 +58,9 @@ export function SearchPanel() {
       <div style={{ position: "relative" }}>
         <input
           ref={inputRef}
+          id="reposkein-search"
           type="text"
-          placeholder="Search nodes…"
+          placeholder="Search nodes… ( / )"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
