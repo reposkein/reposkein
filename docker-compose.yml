@@ -20,8 +20,11 @@ services:
   #   REPOSKEIN_EMBED_MODEL=voyage-4-nano
   #   REPOSKEIN_EMBED_DIMS=1024          # must equal EMBED_DIMS below
   embed:
+    # Prebuilt multi-arch image (amd64 + arm64). To use it without building:
+    #   docker compose pull embed && docker compose up -d
+    # Plain `docker compose up` builds locally from ./embed-server instead.
+    image: ghcr.io/reposkein/reposkein-embed:latest
     build: ./embed-server
-    image: reposkein-embed
     ports:
       - "8080:8080"
     environment:

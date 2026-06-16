@@ -25,6 +25,13 @@ curl localhost:8080/health  # {"status":"ok","model":"voyageai/voyage-4-nano","d
 Or from the **repo root**, bring it up alongside RepoSkein's other optional
 services: `docker compose up -d` (see the root [`docker-compose.yml`](../docker-compose.yml)).
 
+**Don't want to build?** Pull the prebuilt multi-arch image (amd64/arm64) — `docker run` auto-picks your architecture:
+
+```sh
+docker run -p 8080:8080 -v reposkein-hf:/root/.cache/huggingface \
+  ghcr.io/reposkein/reposkein-embed
+```
+
 First boot downloads the model (a few hundred MB → the `hf-cache` volume keeps it
 across restarts).
 

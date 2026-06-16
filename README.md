@@ -1,16 +1,27 @@
-# RepoSkein
+<div align="center">
 
-**Give your AI coding agent a map of your codebase — instead of letting it grep and guess.**
+<!-- animated gradient name banner (deep-navy → teal → amber) -->
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:070A12,45:2DD4BF,100:F2B84B&height=200&section=header&text=RepoSkein&fontColor=EAE7DC&fontSize=72&fontAlignY=38&animation=fadeIn&desc=Thread%20your%20repo%20into%20agent-ready%20context&descSize=17&descAlignY=60" width="100%" alt="RepoSkein — thread your repo into agent-ready context" />
 
-[![npm](https://img.shields.io/npm/v/@reposkein/mcp.svg?logo=npm)](https://www.npmjs.com/package/@reposkein/mcp)
-[![npm downloads](https://img.shields.io/npm/dm/@reposkein/mcp.svg)](https://www.npmjs.com/package/@reposkein/mcp)
-[![CI](https://github.com/reposkein/reposkein/actions/workflows/ci.yml/badge.svg)](https://github.com/reposkein/reposkein/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/reposkein/reposkein.svg?logo=github)](https://github.com/reposkein/reposkein/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-server-7c3aed.svg)](https://modelcontextprotocol.io)
+<!-- animated typing tagline -->
+<a href="https://github.com/reposkein/reposkein">
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=21&pause=1200&color=2DD4BF&center=true&vCenter=true&width=780&height=38&lines=A+deterministic+code+graph+for+AI+agents;Navigate+structure%2C+not+grep-and-guess;7+languages+%C2%B7+zero-infra+%C2%B7+git-native;~8.4x+fewer+context+tokens+than+grep" alt="A deterministic code graph for AI agents" />
+</a>
+
+<br /><br />
+
+[![npm](https://img.shields.io/npm/v/@reposkein/mcp?style=for-the-badge&logo=npm&logoColor=EAE7DC&label=npm&labelColor=070A12&color=F2B84B)](https://www.npmjs.com/package/@reposkein/mcp)
+[![CI](https://img.shields.io/github/actions/workflow/status/reposkein/reposkein/ci.yml?style=for-the-badge&logo=githubactions&logoColor=EAE7DC&label=CI&labelColor=070A12&color=2DD4BF)](https://github.com/reposkein/reposkein/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/reposkein/reposkein?style=for-the-badge&logo=github&logoColor=EAE7DC&label=release&labelColor=070A12&color=2DD4BF)](https://github.com/reposkein/reposkein/releases)
+[![License](https://img.shields.io/badge/license-Apache_2.0-F2B84B?style=for-the-badge&labelColor=070A12)](./LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-server-2DD4BF?style=for-the-badge&labelColor=070A12)](https://modelcontextprotocol.io)
+
 [![skills.sh](https://skills.sh/b/reposkein/reposkein)](https://skills.sh/reposkein/reposkein)
-[![Glama](https://glama.ai/mcp/servers/reposkein/reposkein/badges/score.svg)](https://glama.ai/mcp/servers/reposkein/reposkein)
-[![mcpservers.org](https://img.shields.io/badge/mcpservers.org-listed-1f6feb.svg)](https://mcpservers.org/servers/reposkein/reposkein)
+&nbsp;[![Glama](https://glama.ai/mcp/servers/reposkein/reposkein/badges/score.svg)](https://glama.ai/mcp/servers/reposkein/reposkein)
+&nbsp;[![mcpservers.org](https://img.shields.io/badge/mcpservers.org-listed-2DD4BF?style=for-the-badge&labelColor=070A12)](https://mcpservers.org/servers/reposkein/reposkein)
+&nbsp;[![ghcr](https://img.shields.io/badge/ghcr.io-embed--server-F2B84B?style=for-the-badge&logo=docker&logoColor=EAE7DC&labelColor=070A12)](https://github.com/reposkein/reposkein/pkgs/container/reposkein-embed)
+
+</div>
 
 RepoSkein builds a deterministic **graph of your code** — files, classes, functions, imports, and call edges — with [Tree-sitter](https://tree-sitter.github.io/), and serves it to any MCP-capable agent (Claude Code, Cursor, Codex, …). Your agent navigates structure instead of guessing, then writes short summaries onto the graph as it learns — and those summaries are versioned in git, so understanding becomes **shared team memory**.
 
@@ -203,6 +214,13 @@ REPOSKEIN_EMBED_DIMS=768          # must match the model's output dims
 ```sh
 docker compose up -d                        # from the repo root — or: cd embed-server && docker compose up -d
 ```
+
+**Or skip the build entirely** — pull the prebuilt multi-arch image (amd64/arm64):
+
+```sh
+docker run -p 8080:8080 -v reposkein-hf:/root/.cache/huggingface ghcr.io/reposkein/reposkein-embed
+# (or, with the root compose: `docker compose pull embed && docker compose up -d`)
+```
 ```sh
 REPOSKEIN_EMBED_PROVIDER=http
 REPOSKEIN_EMBED_URL=http://127.0.0.1:8080/v1/embeddings
@@ -265,3 +283,8 @@ embed-server/ one-command local embedding server (voyage-4-nano) for the optiona
 ## License
 
 [Apache-2.0](./LICENSE).
+
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:F2B84B,55:2DD4BF,100:070A12&height=120&section=footer" width="100%" alt="" />
+<sub>Built for agents that read structure, not noise.</sub>
+</div>
