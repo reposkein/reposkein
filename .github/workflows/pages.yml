@@ -1,0 +1,91 @@
+name: Live demo (GitHub Pages)
+
+# Builds a static, server-free export of the RepoSkein constellation viewer over
+# RepoSkein's OWN graph (a real, multi-language Rust+TS codebase) and deploys it
+# to GitHub Pages, so the README can link a live interactive demo.
+#
+# ONE-TIME SETUP (repo owner): Settings → Pages → Build and deployment →
+# Source: "GitHub Actions". Until that's enabled, the `deploy` job will fail
+# (the `build` job still produces the artifact).
+#
+# The exported site is self-contained (the graph is baked into graph-data.js;
+# no server, no Neo4j) and uses relative asset paths, so it works under the
+# project-pages subpath (https://<org>.github.io/<repo>/).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deploy; don't cancel an in-progress one (let it finish).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Opt node20-declaring actions into Node 24 ahead of GitHub's forced migration.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: build static export
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: indexer
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.15.0"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: viz/pnpm-lock.yaml
+
+      # Index THIS repo first (before deps are installed, so node_modules/dist
+      # aren't present — only tracked source is indexed; .gitignore is respected).
+      - name: Build the indexer
+        working-directory: indexer
+        run: cargo build --release -p reposkein-indexer
+      - name: Index the RepoSkein repo (demo graph)
+        run: ./indexer/target/release/reposkein-indexer index . --repo-id reposkein --name RepoSkein
+
+      # Build the viewer SPA and the mcp package (which bundles viz into dist/viz).
+      - name: Build viewer (viz)
+        working-directory: viz
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - name: Build mcp + bundle viz
+        working-directory: mcp
+        run: |
+          npm ci
+          npm run build
+          node scripts/bundle-viz.mjs
+
+      # Export a self-contained static site (graph baked in; no server).
+      - name: Export static constellation
+        run: node mcp/dist/index.js view --export ./_site .
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
