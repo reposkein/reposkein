@@ -19,6 +19,7 @@ import { SearchPanel } from "../panels/SearchPanel";
 import { LegendPanel } from "../panels/LegendPanel";
 import { LensSwitcher } from "../panels/LensSwitcher";
 import { MinimapPanel } from "../panels/MinimapPanel";
+import { TourController } from "../panels/TourController";
 import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
 import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
@@ -51,6 +52,10 @@ function View() {
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
+
+      // While the guided tour is active it owns the keyboard (TourController
+      // handles Esc on the capture phase); don't let normal nav keys interfere.
+      if (store.tour) return;
 
       if (e.key === "Escape") {
         if (!typing) store.collapseLevel();
@@ -266,6 +271,7 @@ function HeaderBar() {
             Screenshot
           </button>
         )}
+        {store.model && <TourController />}
       </div>
       {store.model && (
         <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>

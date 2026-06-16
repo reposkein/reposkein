@@ -69,6 +69,9 @@ interface State {
   focus: NeighborhoodResult | null;
   /** Focus BFS depth (1..3); the toggle/recompute reads this. */
   focusDepth: number;
+  /** Guided cinematic tour is active (drives the TourController + caption HUD).
+   *  Pure UI flag; the tour reuses the existing expand/select/fit/focus actions. */
+  tour: boolean;
 }
 
 /** Confidence-audit preset: which low-confidence buckets to keep visible. */
@@ -95,6 +98,8 @@ type Action =
   | { t: "setFocusDepth"; depth: number }
   | { t: "toggleCoupling" }
   | { t: "setCochange"; map: CochangeMap }
+  | { t: "startTour" }
+  | { t: "exitTour" }
   | { t: "resetView" };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
@@ -292,6 +297,27 @@ function reducer(state: State, a: Action): State {
         // Bump fitNonce when setting a non-null target so Controls.tsx picks it up.
         fitNonce: a.id !== null ? state.fitNonce + 1 : state.fitNonce,
       };
+    case "startTour": {
+      if (!state.model) return state;
+      // Begin from a clean top-level frame so the tour's first overview stop
+      // reads consistently regardless of prior navigation.
+      const expanded = new Set<string>([state.model.rootKey]);
+      return {
+        ...state,
+        tour: true,
+        expanded,
+        selected: null,
+        focusTarget: null,
+        impact: null,
+        focus: null,
+        emphasis: "none",
+        fitNonce: state.fitNonce + 1,
+      };
+    }
+    case "exitTour":
+      // Leave the camera where it is (no fitNonce bump); just clear the tour
+      // flag + any focus highlight the tour set so normal interaction resumes.
+      return { ...state, tour: false, focus: null, selected: null };
     case "resetView": {
       if (!state.model) return state;
       const expanded = new Set<string>([state.model.rootKey]);
@@ -331,6 +357,8 @@ interface Store extends State {
   setFocusDepth(depth: number): void;
   toggleCoupling(): void;
   setCochange(map: CochangeMap): void;
+  startTour(): void;
+  exitTour(): void;
   resetView(): void;
 }
 
@@ -356,6 +384,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     cochange: null,
     focus: null,
     focusDepth: DEFAULT_FOCUS_DEPTH,
+    tour: false,
   });
 
   useEffect(() => {
@@ -419,6 +448,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setFocusDepth: (depth) => dispatch({ t: "setFocusDepth", depth }),
       toggleCoupling: () => dispatch({ t: "toggleCoupling" }),
       setCochange: (map) => dispatch({ t: "setCochange", map }),
+      startTour: () => dispatch({ t: "startTour" }),
+      exitTour: () => dispatch({ t: "exitTour" }),
       resetView: () => dispatch({ t: "resetView" }),
     }),
     [state]
