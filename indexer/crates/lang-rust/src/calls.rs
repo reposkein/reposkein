@@ -57,6 +57,36 @@ pub fn collect_calls(
     );
 }
 
+/// Returns the last `type_identifier` text in a path node.
+/// Handles: `type_identifier` → itself; `identifier` → itself (path position);
+/// `scoped_identifier` / `scoped_type_identifier` → recurse into `name` field.
+fn last_type_identifier<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> String {
+    match node.kind() {
+        "type_identifier" => reposkein_lang_common::text(node, source).to_string(),
+        "identifier" => {
+            // Plain identifier in path position: treat as the class name.
+            reposkein_lang_common::text(node, source).to_string()
+        }
+        "scoped_identifier" | "scoped_type_identifier" => {
+            // The `name` field is the rightmost segment.
+            if let Some(name_node) = node.child_by_field_name("name") {
+                let s = reposkein_lang_common::text(name_node, source).to_string();
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+            // Fallback: last named child that is type_identifier or identifier.
+            let mut c = node.walk();
+            node.named_children(&mut c)
+                .filter(|n| n.kind() == "type_identifier" || n.kind() == "identifier")
+                .last()
+                .map(|n| reposkein_lang_common::text(n, source).to_string())
+                .unwrap_or_default()
+        }
+        _ => String::new(),
+    }
+}
+
 pub fn collect_constructions(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -114,6 +144,33 @@ fn collect_constructions_inner(
             }
         }
     }
+    // Detect `Foo::new()` associated-function constructors.
+    // Conservative: only the `new` segment qualifies (v1).
+    if node.kind() == "call_expression" {
+        if let Some(func) = node.child_by_field_name("function") {
+            if func.kind() == "scoped_identifier" {
+                let segment = func
+                    .child_by_field_name("name")
+                    .map(|n| reposkein_lang_common::text(n, source))
+                    .unwrap_or_default();
+                if segment == "new" {
+                    let class_name = if let Some(path_node) = func.child_by_field_name("path") {
+                        last_type_identifier(path_node, source)
+                    } else {
+                        String::new()
+                    };
+                    if !class_name.is_empty() {
+                        out.push(reposkein_core::extractor::RawConstruction {
+                            caller_id: caller_id.to_string(),
+                            caller_path: caller_path.to_string(),
+                            caller_file_id: caller_file_id.to_string(),
+                            class_name,
+                        });
+                    }
+                }
+            }
+        }
+    }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if boundaries.contains(&child.kind()) {
@@ -154,6 +211,113 @@ mod tests {
         assert!(pairs.contains(&("go", Some("self"))));
         assert!(pairs.contains(&("helper", None)));
         assert!(pairs.contains(&("new", Some("String"))));
+    }
+
+    #[test]
+    fn foo_new_emits_raw_construction() {
+        // Foo::new() in a function body must emit RawConstruction{class_name:"Foo"}.
+        let src = b"struct Foo; impl Foo { fn new() -> Foo { Foo } } fn caller() { let x = Foo::new(); }";
+        let tree = parse(src).unwrap();
+        // caller() is the last top-level function_item
+        let root = tree.root_node();
+        let caller = root
+            .named_children(&mut root.walk())
+            .filter(|n| n.kind() == "function_item")
+            .last()
+            .unwrap();
+        let body = caller.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_constructions(body, src, "caller_id", "m.rs", "file_id", &mut constructions);
+        assert_eq!(
+            constructions.len(),
+            1,
+            "Foo::new() must emit exactly one RawConstruction"
+        );
+        assert_eq!(constructions[0].class_name, "Foo");
+        assert_eq!(constructions[0].caller_id, "caller_id");
+    }
+
+    #[test]
+    fn foo_new_does_not_suppress_raw_call() {
+        // Foo::new() must ALSO produce a RawCall (CALLS edge to the method); we verify
+        // that collect_calls still sees it alongside the RawConstruction.
+        let src = b"struct Foo; impl Foo { fn new() -> Foo { Foo } } fn caller() { let x = Foo::new(); }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let caller = root
+            .named_children(&mut root.walk())
+            .filter(|n| n.kind() == "function_item")
+            .last()
+            .unwrap();
+        let body = caller.child_by_field_name("body").unwrap();
+        let mut calls = Vec::new();
+        collect_calls(body, src, "caller_id", "caller", "m.rs", &mut calls);
+        assert!(
+            calls.iter().any(|c| c.callee_name == "new"),
+            "Foo::new() must still produce a RawCall (callee_name=\"new\")"
+        );
+    }
+
+    #[test]
+    fn scoped_new_with_path_extracts_last_segment() {
+        // crate::svc::Foo::new() → class_name "Foo" (last segment of path before ::new)
+        let src = b"fn caller() { let _ = crate::svc::Foo::new(); }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_item")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_constructions(body, src, "c", "m.rs", "fid", &mut constructions);
+        // Resolver filters externals; here we just check extraction.
+        // For `crate::svc::Foo::new()`, the scoped_identifier path is `crate::svc::Foo`
+        // (itself a scoped_identifier). The last type_identifier in that path is "Foo".
+        assert_eq!(
+            constructions.len(),
+            1,
+            "crate::svc::Foo::new() must emit 1 RawConstruction"
+        );
+        assert_eq!(constructions[0].class_name, "Foo");
+    }
+
+    #[test]
+    fn construction_new_is_deterministic() {
+        let src =
+            b"struct A; impl A { fn new() -> A { A } } fn run() { let _ = A::new(); }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .filter(|n| n.kind() == "function_item")
+            .last()
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut c1 = Vec::new();
+        let mut c2 = Vec::new();
+        collect_constructions(body, src, "cid", "m.rs", "fid", &mut c1);
+        collect_constructions(body, src, "cid", "m.rs", "fid", &mut c2);
+        assert_eq!(c1, c2, "collect_constructions must be deterministic");
+    }
+
+    #[test]
+    fn other_scoped_methods_do_not_emit_construction() {
+        // Only ::new ends up emitting; ::build, ::default, etc. do not (v1 conservative).
+        let src = b"fn caller() { let _ = Foo::build(); let _ = Foo::default(); }";
+        let tree = parse(src).unwrap();
+        let root = tree.root_node();
+        let func = root
+            .named_children(&mut root.walk())
+            .find(|n| n.kind() == "function_item")
+            .unwrap();
+        let body = func.child_by_field_name("body").unwrap();
+        let mut constructions = Vec::new();
+        collect_constructions(body, src, "cid", "m.rs", "fid", &mut constructions);
+        assert!(
+            constructions.is_empty(),
+            "::build / ::default must NOT emit RawConstruction in v1"
+        );
     }
 
     #[test]
