@@ -424,6 +424,185 @@ fn cross_repo_imports_skips_missing_target() {
 
 #[test]
 #[ignore]
+fn cross_repo_heritage_stitches_to_unique_child_class() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    s.purge("xhA").unwrap();
+    s.purge("xhB").unwrap();
+
+    // A.PaymentService records external_heritage INHERITS BaseService; B defines
+    // class BaseService.
+    let a_svc = Node::new("rs1:xhA:class:svc.py#PaymentService@0", "Class")
+        .set("name", json!("PaymentService"))
+        .set("qualified_name", json!("PaymentService"))
+        .set("external_heritage", json!(["INHERITS|BaseService"]));
+    let b_base = Node::new("rs1:xhB:class:base.py#BaseService@0", "Class")
+        .set("name", json!("BaseService"))
+        .set("qualified_name", json!("BaseService"));
+    s.import_graph(
+        "xhA",
+        &Graph {
+            nodes: vec![a_svc],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xhB",
+        &Graph {
+            nodes: vec![b_base],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+
+    let n = s
+        .stitch_cross_repo_heritage(&["xhA".to_string(), "xhB".to_string()])
+        .unwrap();
+    assert!(n >= 1, "one cross-repo INHERITS edge created");
+
+    let c = s
+        .run_count(
+            "MATCH (:Rs:Class {id:'rs1:xhA:class:svc.py#PaymentService@0'})\
+             -[r:INHERITS {cross_repo:true, stitched:true, resolution:'name_match', confidence:0.7}]->\
+             (:Rs:Class {id:'rs1:xhB:class:base.py#BaseService@0'}) RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(
+        c, 1,
+        "exactly one cross-repo INHERITS A.PaymentService -> B.BaseService"
+    );
+
+    s.purge("xhA").unwrap();
+    s.purge("xhB").unwrap();
+}
+
+#[test]
+#[ignore]
+fn cross_repo_heritage_refines_interface_to_implements() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    s.purge("xhA").unwrap();
+    s.purge("xhB").unwrap();
+
+    // Provisional INHERITS (C# base_list), but the child target is an Interface
+    // → refined to IMPLEMENTS at stitch time (D-XRH-CS).
+    let a_svc = Node::new("rs1:xhA:class:svc.cs#PaymentService@0", "Class")
+        .set("name", json!("PaymentService"))
+        .set("qualified_name", json!("PaymentService"))
+        .set("external_heritage", json!(["INHERITS|IPaymentBase"]));
+    let b_iface = Node::new("rs1:xhB:iface:base.cs#IPaymentBase@0", "Interface")
+        .set("name", json!("IPaymentBase"))
+        .set("qualified_name", json!("IPaymentBase"));
+    s.import_graph(
+        "xhA",
+        &Graph {
+            nodes: vec![a_svc],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xhB",
+        &Graph {
+            nodes: vec![b_iface],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+
+    s.stitch_cross_repo_heritage(&["xhA".to_string(), "xhB".to_string()])
+        .unwrap();
+
+    let implements = s
+        .run_count(
+            "MATCH (:Rs:Class {id:'rs1:xhA:class:svc.cs#PaymentService@0'})\
+             -[r:IMPLEMENTS {cross_repo:true}]->\
+             (:Rs:Interface {id:'rs1:xhB:iface:base.cs#IPaymentBase@0'}) RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(
+        implements, 1,
+        "Interface target refines INHERITS -> IMPLEMENTS"
+    );
+    let inherits = s
+        .run_count(
+            "MATCH (:Rs:Class {id:'rs1:xhA:class:svc.cs#PaymentService@0'})-[r:INHERITS {cross_repo:true}]->() RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(inherits, 0, "no INHERITS edge — refined to IMPLEMENTS");
+
+    s.purge("xhA").unwrap();
+    s.purge("xhB").unwrap();
+}
+
+#[test]
+#[ignore]
+fn ambiguous_cross_repo_heritage_is_skipped() {
+    use reposkein_core::Graph;
+    use serde_json::json;
+    let s = store();
+    s.purge("xhA").unwrap();
+    s.purge("xhB").unwrap();
+    s.purge("xhC").unwrap();
+
+    // BaseService defined in two loaded child repos → ambiguous → no edge.
+    let a_svc = Node::new("rs1:xhA:class:svc.py#PaymentService@0", "Class")
+        .set("name", json!("PaymentService"))
+        .set("qualified_name", json!("PaymentService"))
+        .set("external_heritage", json!(["INHERITS|BaseService"]));
+    let b_base = Node::new("rs1:xhB:class:base.py#BaseService@0", "Class")
+        .set("name", json!("BaseService"))
+        .set("qualified_name", json!("BaseService"));
+    let c_base = Node::new("rs1:xhC:class:other.py#BaseService@0", "Class")
+        .set("name", json!("BaseService"))
+        .set("qualified_name", json!("BaseService"));
+    s.import_graph(
+        "xhA",
+        &Graph {
+            nodes: vec![a_svc],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xhB",
+        &Graph {
+            nodes: vec![b_base],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+    s.import_graph(
+        "xhC",
+        &Graph {
+            nodes: vec![c_base],
+            edges: vec![],
+        },
+    )
+    .unwrap();
+
+    s.stitch_cross_repo_heritage(&["xhA".into(), "xhB".into(), "xhC".into()])
+        .unwrap();
+    let c = s
+        .run_count(
+            "MATCH (:Rs:Class {id:'rs1:xhA:class:svc.py#PaymentService@0'})-[r {cross_repo:true}]->() RETURN count(r) AS c",
+        )
+        .unwrap();
+    assert_eq!(
+        c, 0,
+        "ambiguous base (BaseService in 2 repos) creates no edge"
+    );
+
+    s.purge("xhA").unwrap();
+    s.purge("xhB").unwrap();
+    s.purge("xhC").unwrap();
+}
+
+#[test]
+#[ignore]
 fn confidence_floats_round_trip_byte_identical() {
     // PRD §6.2.4 fixes confidence to 2 decimals; §6.2.7 guarantees load->export
     // byte-identical. Exercise the exact values the resolver emits (0.5/0.7 and

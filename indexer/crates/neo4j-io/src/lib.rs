@@ -232,4 +232,83 @@ impl Neo4jStore {
             }
         })
     }
+
+    /// Creates DB-only cross-repo `INHERITS`/`IMPLEMENTS` edges from each
+    /// deriving type's committed `external_heritage` (XRH-M1: sorted-unique
+    /// `"<edge_type>|<base_name>"` strings) to the matching base type in a
+    /// different loaded repo. Mirrors `stitch_cross_repo_calls` but resolves
+    /// against type nodes (Class/Interface/Enum) and refines the edge type from
+    /// the resolved CHILD target's label (D-XRH-CS: Interface→IMPLEMENTS,
+    /// Class→INHERITS, else keep the provisional kind). Ambiguous matches (>1
+    /// loaded type with that name in another repo) are SKIPPED (D-AMBIG). Edges
+    /// are `cross_repo:true, stitched:true, resolution:"name_match",
+    /// confidence:0.7`. Idempotent (MERGE). Returns the total edge count
+    /// (design: cross-repo-heritage.md §3.2).
+    ///
+    /// Relationship types can't be parameterized in plain Cypher and the rest of
+    /// this file uses no APOC, so this runs two literal-MERGE passes (one
+    /// INHERITS, one IMPLEMENTS), each selecting the final type via the same
+    /// unique-match + child-label rule.
+    pub fn stitch_cross_repo_heritage(&self, repo_ids: &[String]) -> Result<u64> {
+        let ids: Vec<String> = repo_ids.to_vec();
+        // Shared prefix: resolve each (deriving type, spec) to a unique base type
+        // in another repo, then bind `final_type` from the child's label. Each
+        // pass keeps only the rows whose `final_type` matches its literal MERGE.
+        // `coll_all` (ALL type labels, regardless of repo) enforces D-AMBIG:
+        // a name defined >1 time across the federation (excluding the deriving
+        // repo) yields no edge.
+        let common = "MATCH (d:Rs) \
+             WHERE d.repo_id IN $ids AND d.external_heritage IS NOT NULL \
+               AND (d:Class OR d:Interface OR d:Enum) \
+             UNWIND d.external_heritage AS spec \
+             WITH d, split(spec, '|')[0] AS provisional, split(spec, '|')[1] AS base_name \
+             MATCH (b:Rs {name: base_name}) \
+             WHERE b.repo_id IN $ids AND b.repo_id <> d.repo_id \
+               AND (b:Class OR b:Interface OR b:Enum) \
+             WITH d, provisional, base_name, collect(DISTINCT b) AS matches \
+             WHERE size(matches) = 1 \
+             WITH d, provisional, matches[0] AS b \
+             WITH d, b, CASE \
+                    WHEN b:Interface THEN 'IMPLEMENTS' \
+                    WHEN b:Class THEN 'INHERITS' \
+                    ELSE provisional END AS final_type ";
+        self.rt.block_on(async {
+            let mut total: i64 = 0;
+            // Pass 1 — INHERITS.
+            let mut a = self
+                .graph
+                .execute(
+                    query(&format!(
+                        "{common} WITH d, b WHERE final_type = 'INHERITS' \
+                         MERGE (d)-[s:INHERITS {{cross_repo: true}}]->(b) \
+                         ON CREATE SET s.resolution = 'name_match', s.confidence = 0.7, \
+                                       s.stitched = true \
+                         RETURN count(s) AS c",
+                    ))
+                    .param("ids", ids.clone()),
+                )
+                .await?;
+            if let Ok(Some(row)) = a.next().await {
+                total += row.get::<i64>("c")?;
+            }
+            // Pass 2 — IMPLEMENTS.
+            let mut b = self
+                .graph
+                .execute(
+                    query(&format!(
+                        "{common} WITH d, b WHERE final_type = 'IMPLEMENTS' \
+                         MERGE (d)-[s:IMPLEMENTS {{cross_repo: true}}]->(b) \
+                         ON CREATE SET s.resolution = 'name_match', s.confidence = 0.7, \
+                                       s.stitched = true \
+                         RETURN count(s) AS c",
+                    ))
+                    .param("ids", ids),
+                )
+                .await?;
+            if let Ok(Some(row)) = b.next().await {
+                total += row.get::<i64>("c")?;
+            }
+            Ok(total as u64)
+        })
+    }
 }
