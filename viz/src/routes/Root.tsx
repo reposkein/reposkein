@@ -104,6 +104,13 @@ function View() {
           if (e.button === 0) store.collapseLevel();
         }}
       >
+        {/* Exponential depth fog tuned to the navy background: distant stars and
+            edges fade with distance as a depth cue. Density is deliberately low
+            (~the fitted distance of an expanded cluster is tens of units, where
+            the fog factor is only a few percent, so the focused region stays
+            crisp and bloom still reads) — distant cross-graph links and the
+            background starfield (radius 600) sink into the navy. */}
+        <fogExp2 attach="fog" args={[0x070a12, 0.0016]} />
         <ambientLight intensity={0.6} />
         {/* Background starfield for depth (decorative, behind the graph). */}
         <Stars radius={600} depth={120} count={2600} factor={6} saturation={0} fade speed={0.6} />
