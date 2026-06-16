@@ -1,0 +1,29 @@
+# Turnkey local embedding service for RepoSkein.
+#
+#   cd embed-server && docker compose up -d
+#
+# Then point RepoSkein's MCP server at it:
+#   REPOSKEIN_EMBED_PROVIDER=http
+#   REPOSKEIN_EMBED_URL=http://127.0.0.1:8080/v1/embeddings
+#   REPOSKEIN_EMBED_MODEL=voyage-4-nano
+#   REPOSKEIN_EMBED_DIMS=1024          # must equal EMBED_DIMS below
+services:
+  embed:
+    build: .
+    image: reposkein-embed
+    ports:
+      - "8080:8080"
+    environment:
+      EMBED_MODEL: voyageai/voyage-4-nano
+      EMBED_DIMS: "1024" # voyage-4-nano Matryoshka: 2048 | 1024 | 512 | 256
+      # HF_TOKEN: "<token>"   # only for gated/private models
+    volumes:
+      - hf-cache:/root/.cache/huggingface # persist the downloaded model across restarts
+    # For GPU acceleration (NVIDIA), uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - { driver: nvidia, count: 1, capabilities: [gpu] }
+volumes:
+  hf-cache:

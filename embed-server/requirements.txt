@@ -1,0 +1,8 @@
+# Pinned loosely for reproducibility; voyage-4-nano is Qwen3-based so it needs a
+# recent transformers. CPU works (slow on first use); a CUDA GPU is much faster.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sentence-transformers>=3.1
+transformers>=4.51
+torch>=2.2
+einops>=0.8

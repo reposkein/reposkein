@@ -118,7 +118,7 @@ REPOSKEIN_EMBED_MODEL=voyage-4-nano   # or any model your local server serves
 REPOSKEIN_EMBED_DIMS=1024
 ```
 
-Point this at any OpenAI-compatible local embedding server (e.g. running `voyage-4-nano` from [huggingface.co/voyageai/voyage-4-nano](https://huggingface.co/voyageai/voyage-4-nano), sentence-transformers, or similar). All text stays on your machine.
+Point this at any OpenAI-compatible local embedding server. Two easy options: **Ollama** (`ollama pull nomic-embed-text`, URL `http://127.0.0.1:11434/v1/embeddings`, dims 768), or RepoSkein's **one-command `voyage-4-nano` server** — [`embed-server/`](https://github.com/reposkein/reposkein/tree/main/embed-server) (`docker compose up -d`). All text stays on your machine.
 
 **How it works:** vectors are cached in `.reposkein/local/embeddings/` (gitignored — never committed, never required). The cache is invalidated per-node when the document content changes. On any embedding error, `semantic_find` silently falls back to the lexical result. Enabling embeddings never changes the committed graph.
 

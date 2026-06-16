@@ -167,19 +167,52 @@ Then set `REPOSKEIN_STORE=neo4j` and the `NEO4J_*` env vars on the MCP server. (
 
 ## Optional: semantic embeddings for `semantic_find`
 
-By default, `semantic_find` is **deterministic and lexical** (BM25F — zero-infra, no keys needed). You can opt into **hybrid embedding** (lexical + cosine, fused via RRF) by setting env vars on the MCP server:
+By default, `semantic_find` is **deterministic and lexical** (BM25F — zero-infra, no keys). You can opt into a **hybrid** tier (lexical + embedding cosine, fused via RRF) for fuzzier/conceptual queries. It's **default-off**; vectors are cached in `.reposkein/local/embeddings/` (gitignored, never committed); and on any embedding error `semantic_find` falls back to lexical automatically. Set the env vars on the MCP server, restart your agent, and **pick one** of three setups:
 
-| Provider | When to use | Config |
-| --- | --- | --- |
-| `none` (default) | always works, deterministic | — |
-| `voyage` | best retrieval quality (code-specialized, cloud API) | `REPOSKEIN_EMBED_PROVIDER=voyage`, `VOYAGE_API_KEY=...` |
-| `http` | local/offline model, no egress | `REPOSKEIN_EMBED_PROVIDER=http`, `REPOSKEIN_EMBED_URL=...`, `REPOSKEIN_EMBED_MODEL=...` |
+### A) Voyage AI — cloud, easiest, best code retrieval
 
-Embedding vectors are cached in `.reposkein/local/embeddings/` (gitignored — never in committed JSONL). On any embedding error, `semantic_find` falls back to lexical automatically.
+[Get an API key](https://dashboard.voyageai.com/), then:
 
-> **Privacy:** with `REPOSKEIN_EMBED_PROVIDER=voyage`, code text is sent to Voyage AI's API. For offline operation, use the `http` provider with a local model (e.g. `voyage-4-nano` via [huggingface.co/voyageai/voyage-4-nano](https://huggingface.co/voyageai/voyage-4-nano)).
+```sh
+REPOSKEIN_EMBED_PROVIDER=voyage
+VOYAGE_API_KEY=pa-...
+# optional: REPOSKEIN_EMBED_MODEL=voyage-code-3   # default — code-specialized
+# optional: REPOSKEIN_EMBED_DIMS=1024             # default; 256|512|1024|2048
+```
 
-See [`mcp/README.md`](mcp/README.md#optional-semantic-embeddings) for full configuration details.
+> **Privacy:** this sends the document strings (qualified names, signatures, summaries) to Voyage's API. If you have code-egress restrictions, use a local option below.
+
+### B) Ollama — local, easiest off-the-shelf, no key
+
+[Ollama](https://ollama.com) exposes an OpenAI-compatible endpoint and runs ready-made embedding models:
+
+```sh
+ollama pull nomic-embed-text     # 768-dim; or mxbai-embed-large (1024), bge-m3 (1024)
+```
+```sh
+REPOSKEIN_EMBED_PROVIDER=http
+REPOSKEIN_EMBED_URL=http://127.0.0.1:11434/v1/embeddings
+REPOSKEIN_EMBED_MODEL=nomic-embed-text
+REPOSKEIN_EMBED_DIMS=768          # must match the model's output dims
+```
+
+### C) Voyage's open model, self-hosted — offline + Voyage quality
+
+`voyage-4-nano` (Apache-2.0) is a custom Qwen3-based model Ollama can't run, so RepoSkein ships a **one-command server** for it in [`embed-server/`](embed-server/):
+
+```sh
+cd embed-server && docker compose up -d    # first boot downloads the model
+```
+```sh
+REPOSKEIN_EMBED_PROVIDER=http
+REPOSKEIN_EMBED_URL=http://127.0.0.1:8080/v1/embeddings
+REPOSKEIN_EMBED_MODEL=voyage-4-nano
+REPOSKEIN_EMBED_DIMS=1024         # must equal EMBED_DIMS in embed-server/docker-compose.yml
+```
+
+Everything stays on your machine. See [`embed-server/README.md`](embed-server/README.md) for GPU, dims, and using other models.
+
+> `REPOSKEIN_EMBED_DIMS` on the client **must match** the model's actual output dimension, or cosine scoring is skipped.
 
 ---
 
@@ -226,6 +259,7 @@ indexer/   Rust workspace: core, lang-{python,ts,rust,go,java,csharp}, lang-comm
 mcp/       @reposkein/mcp — the TypeScript MCP server (tools + graph-store backends)
 mcp/bench/ benchmarks: retrieval efficiency (Track 1) + end-task SWE-bench harness (Track 2)
 skills/    reposkein-graph-rag + reposkein-setup — cross-agent skills (skills.sh)
+embed-server/ one-command local embedding server (voyage-4-nano) for the optional hybrid semantic_find
 ```
 
 ## License
