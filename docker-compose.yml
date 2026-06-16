@@ -26,13 +26,16 @@ services:
     image: ghcr.io/reposkein/reposkein-embed:latest
     build: ./embed-server
     ports:
-      - "8080:8080"
+      # Bind to localhost only by default — the embed server is a local helper,
+      # not a service to expose on the LAN. To expose on all interfaces
+      # (e.g. a shared dev machine), change to "8080:8080".
+      - "127.0.0.1:8080:8080"
     environment:
       EMBED_MODEL: voyageai/voyage-4-nano
       EMBED_DIMS: "1024" # voyage-4-nano Matryoshka: 2048 | 1024 | 512 | 256
       # HF_TOKEN: "<token>"          # only for gated/private models
     volumes:
-      - hf-cache:/root/.cache/huggingface # persist the model across restarts
+      - hf-cache:/home/app/.cache/huggingface # persist the model across restarts
     restart: unless-stopped
     # NVIDIA GPU only (Docker can't use Apple Silicon Metal). Uncomment:
     # deploy:

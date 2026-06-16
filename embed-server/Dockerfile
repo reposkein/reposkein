@@ -3,7 +3,7 @@
 # (`docker run --gpus all ...`) and torch will use it automatically.
 #
 #   docker build -t reposkein-embed .
-#   docker run -p 8080:8080 -v reposkein-hf:/root/.cache/huggingface reposkein-embed
+#   docker run -p 127.0.0.1:8080:8080 -v reposkein-hf:/home/app/.cache/huggingface reposkein-embed
 #
 # First request downloads the model into the mounted HF cache (persist it via the
 # volume so restarts are instant).
@@ -12,6 +12,9 @@ FROM python:3.11-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl \
  && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user so the container doesn't run as root.
+RUN useradd -m app
 
 WORKDIR /app
 COPY requirements.txt .
@@ -24,10 +27,15 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
  && pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
+# Give the non-root user ownership of the app directory
+RUN chown -R app:app /app
 
+# Point HF_HOME to the app user's home so the model cache is writable under a volume.
 ENV EMBED_MODEL=voyageai/voyage-4-nano \
     EMBED_DIMS=1024 \
-    HF_HOME=/root/.cache/huggingface
+    HF_HOME=/home/app/.cache/huggingface
+
+USER app
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
