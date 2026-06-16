@@ -55,6 +55,32 @@ fn first_line(node: TsNode, source: &[u8]) -> String {
         .to_string()
 }
 
+/// Extracts a bare type name from a heritage base node, stripping any type
+/// arguments. Handles:
+///   - `type_identifier` / `identifier` → text directly
+///   - `generic_type` → the `name` field (e.g. `Foo<T>` → `Foo`)
+///   - anything else → text with `<…>` stripped as a fallback
+fn base_type_name(node: TsNode, source: &[u8]) -> String {
+    match node.kind() {
+        "type_identifier" | "identifier" => text(node, source).to_string(),
+        "generic_type" => {
+            // generic_type has a `name` field (type_identifier or nested_type_identifier)
+            node.child_by_field_name("name")
+                .map(|n| text(n, source).to_string())
+                .unwrap_or_else(|| strip_angle_brackets(text(node, source)))
+        }
+        _ => strip_angle_brackets(text(node, source)),
+    }
+}
+
+/// Strips everything from the first `<` to the matching `>` (type arguments).
+fn strip_angle_brackets(s: &str) -> String {
+    match s.find('<') {
+        Some(i) => s[..i].to_string(),
+        None => s.to_string(),
+    }
+}
+
 impl<'a> Walk<'a> {
     pub fn new(repo: &'a str, rel_path: &'a str, source: &'a [u8]) -> Self {
         Walk {
@@ -239,27 +265,33 @@ impl<'a> Walk<'a> {
                                 match clause.kind() {
                                     "extends_clause" => {
                                         if let Some(base) = clause.child_by_field_name("value") {
-                                            self.pending_heritage.push(
-                                                reposkein_core::heritage::PendingHeritage {
-                                                    decl_scope: scope.to_vec(),
-                                                    from_name: name.clone(),
-                                                    edge_type: "INHERITS".to_string(),
-                                                    base_name: text(base, self.source).to_string(),
-                                                },
-                                            );
+                                            // Use base_type_name to strip generic type args
+                                            // e.g. `extends Base<T>` → "Base".
+                                            let bn = base_type_name(base, self.source);
+                                            if !bn.is_empty() {
+                                                self.pending_heritage.push(
+                                                    reposkein_core::heritage::PendingHeritage {
+                                                        decl_scope: scope.to_vec(),
+                                                        from_name: name.clone(),
+                                                        edge_type: "INHERITS".to_string(),
+                                                        base_name: bn,
+                                                    },
+                                                );
+                                            }
                                         }
                                     }
                                     "implements_clause" => {
                                         let mut ic = clause.walk();
                                         for ty in clause.named_children(&mut ic) {
-                                            if ty.kind() == "type_identifier" {
+                                            // Strip type args (e.g. `implements Foo<T>` → "Foo")
+                                            let bn = base_type_name(ty, self.source);
+                                            if !bn.is_empty() {
                                                 self.pending_heritage.push(
                                                     reposkein_core::heritage::PendingHeritage {
                                                         decl_scope: scope.to_vec(),
                                                         from_name: name.clone(),
                                                         edge_type: "IMPLEMENTS".to_string(),
-                                                        base_name: text(ty, self.source)
-                                                            .to_string(),
+                                                        base_name: bn,
                                                     },
                                                 );
                                             }
@@ -291,6 +323,29 @@ impl<'a> Walk<'a> {
                     self.declared.insert(name.clone(), id.clone());
                     self.edges
                         .push(Edge::new(parent_id.to_string(), "DEFINES", id));
+
+                    // Heritage: `interface A extends B, C<T>` → INHERITS A→B, A→C.
+                    // extends_type_clause is a named child (not a field) of
+                    // interface_declaration; its `type` fields are the bases.
+                    let mut hc = child.walk();
+                    for h in child.named_children(&mut hc) {
+                        if h.kind() == "extends_type_clause" {
+                            let mut tc = h.walk();
+                            for base_ty in h.named_children(&mut tc) {
+                                let bn = base_type_name(base_ty, self.source);
+                                if !bn.is_empty() {
+                                    self.pending_heritage.push(
+                                        reposkein_core::heritage::PendingHeritage {
+                                            decl_scope: scope.to_vec(),
+                                            from_name: name.clone(),
+                                            edge_type: "INHERITS".to_string(),
+                                            base_name: bn,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
                 "enum_declaration" => {
                     let name = name_of(child, self.source);
@@ -494,5 +549,68 @@ mod tests {
                 n.id
             );
         }
+    }
+
+    #[test]
+    fn interface_extends_emits_inherits_in_file() {
+        // `interface B {} interface A extends B {}` → INHERITS A→B
+        let w = run(b"interface B {}\ninterface A extends B {}\n");
+        let a = w
+            .nodes
+            .iter()
+            .find(|n| n.id == "rs1:r:iface:m.ts#A")
+            .expect("interface A");
+        let b = w
+            .nodes
+            .iter()
+            .find(|n| n.id == "rs1:r:iface:m.ts#B")
+            .expect("interface B");
+        assert!(
+            w.edges
+                .iter()
+                .any(|e| e.from == a.id && e.typ == "INHERITS" && e.to == b.id),
+            "A must INHERITS B"
+        );
+    }
+
+    #[test]
+    fn interface_extends_multiple_bases() {
+        // `interface A extends B, C {}` → INHERITS A→B, A→C
+        let w = run(b"interface B {}\ninterface C {}\ninterface A extends B, C {}\n");
+        let a_id = "rs1:r:iface:m.ts#A";
+        let b_id = "rs1:r:iface:m.ts#B";
+        let c_id = "rs1:r:iface:m.ts#C";
+        assert!(w
+            .edges
+            .iter()
+            .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == b_id));
+        assert!(w
+            .edges
+            .iter()
+            .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == c_id));
+    }
+
+    #[test]
+    fn class_extends_with_type_args_strips_to_base() {
+        // `class Base {} class C extends Base<T> {}` → INHERITS C→Base (not "Base<T>")
+        let w = run(b"class Base {}\nclass C extends Base<number> {}\n");
+        let c_id = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("C"))
+            .map(|n| n.id.clone())
+            .expect("class C");
+        let base_id = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("Base"))
+            .map(|n| n.id.clone())
+            .expect("class Base");
+        assert!(
+            w.edges
+                .iter()
+                .any(|e| e.from == c_id && e.typ == "INHERITS" && e.to == base_id),
+            "C must INHERITS Base (type args stripped)"
+        );
     }
 }

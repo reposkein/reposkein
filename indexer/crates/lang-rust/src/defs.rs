@@ -188,6 +188,22 @@ impl<'a> Walk<'a> {
                     let qualified = Self::qualified(scope, &name);
                     let id = self.iface_id(&qualified);
                     self.push_type(id, "Interface", &qualified, child, parent_id);
+                    // Supertrait bounds: `trait A: B + C {}` → INHERITS A→B, A→C.
+                    if let Some(bounds) = child.child_by_field_name("bounds") {
+                        let mut bc = bounds.walk();
+                        for bound in bounds.named_children(&mut bc) {
+                            let base = type_name(bound, self.source);
+                            if !base.is_empty() {
+                                self.pending_heritage
+                                    .push(reposkein_core::heritage::PendingHeritage {
+                                        decl_scope: scope.to_vec(),
+                                        from_name: name.clone(),
+                                        edge_type: "INHERITS".to_string(),
+                                        base_name: base,
+                                    });
+                            }
+                        }
+                    }
                 }
                 "enum_item" => {
                     let name = name_of(child, self.source);
@@ -412,6 +428,66 @@ mod tests {
         assert!(
             ids.contains(&"rs1:r:func:m.rs#tests.it_works@0"),
             "fn in #[cfg(test)] mod"
+        );
+    }
+
+    #[test]
+    fn trait_supertrait_emits_inherits_in_file() {
+        // `trait B {} trait A: B {}` → INHERITS A→B (in-file resolution)
+        let w = run(b"trait B {}\ntrait A: B {}\n");
+        let a = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("A"))
+            .map(|n| n.id.clone())
+            .expect("trait A");
+        let b = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("B"))
+            .map(|n| n.id.clone())
+            .expect("trait B");
+        assert!(
+            w.edges
+                .iter()
+                .any(|e| e.from == a && e.typ == "INHERITS" && e.to == b),
+            "A must INHERITS B"
+        );
+    }
+
+    #[test]
+    fn trait_multiple_supertraits() {
+        // `trait C {} trait D {} trait A: C + D {}` → INHERITS A→C and A→D
+        let w = run(b"trait C {}\ntrait D {}\ntrait A: C + D {}\n");
+        let a_id = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("A"))
+            .map(|n| n.id.clone())
+            .expect("trait A");
+        let c_id = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("C"))
+            .map(|n| n.id.clone())
+            .expect("trait C");
+        let d_id = w
+            .nodes
+            .iter()
+            .find(|n| n.props.get("name").and_then(|v| v.as_str()) == Some("D"))
+            .map(|n| n.id.clone())
+            .expect("trait D");
+        assert!(
+            w.edges
+                .iter()
+                .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == c_id),
+            "A must INHERITS C"
+        );
+        assert!(
+            w.edges
+                .iter()
+                .any(|e| e.from == a_id && e.typ == "INHERITS" && e.to == d_id),
+            "A must INHERITS D"
         );
     }
 }
