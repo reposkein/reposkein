@@ -18,6 +18,7 @@ import { FilterHUD } from "../panels/FilterHUD";
 import { SearchPanel } from "../panels/SearchPanel";
 import { LegendPanel } from "../panels/LegendPanel";
 import { LensSwitcher } from "../panels/LensSwitcher";
+import { MinimapPanel } from "../panels/MinimapPanel";
 import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
 import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
@@ -203,6 +204,7 @@ function View() {
       {store.status.kind === "ready" && <LensSwitcher />}
       {store.status.kind === "ready" && <FilterHUD />}
       {store.status.kind === "ready" && <LegendPanel />}
+      {store.status.kind === "ready" && store.model && <MinimapPanel />}
       <LoaderGate />
       {store.status.kind === "error" && <Overlay text={`Error: ${store.status.message}`} error />}
     </div>

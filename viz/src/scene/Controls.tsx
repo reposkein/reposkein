@@ -6,6 +6,20 @@ import CameraControlsImpl from "camera-controls";
 import { useStore } from "../state/store";
 import { representativeFor, visibleClusters } from "../data/clientModel";
 
+/** Latest camera target (orbit pivot) in world space, published each frame so
+ *  the minimap (which lives outside the Canvas) can draw a viewport indicator
+ *  and a click on the minimap can fly the camera there. */
+let cameraTarget: { x: number; y: number; z: number } | null = null;
+export function getCameraTarget(): { x: number; y: number; z: number } | null {
+  return cameraTarget;
+}
+/** Imperatively recenter the camera's orbit target near a world position
+ *  (keeping the current distance/angle). Best-effort; no-op before mount. */
+let flyToWorld: ((x: number, y: number, z: number) => void) | null = null;
+export function recenterCamera(x: number, y: number, z: number): void {
+  flyToWorld?.(x, y, z);
+}
+
 /** How long (ms) of no interaction before the gentle idle azimuth drift kicks
  *  in, and how fast it rotates (radians / second). */
 const IDLE_AFTER_MS = 4000;
@@ -112,10 +126,31 @@ export function Controls() {
     // collapse / select); the other reads are intentionally not deps.
   }, [store.fitNonce, model]);
 
+  // Register the imperative recenter for the minimap; publish target on unmount.
+  useEffect(() => {
+    flyToWorld = (x, y, z) => {
+      const controls = controlsRef.current;
+      if (!controls) return;
+      // Move the orbit target (and the camera by the same delta) so distance +
+      // angle are preserved; the minimap recenters the view, it doesn't zoom.
+      void controls.moveTo(x, y, z, true);
+      lastInteractionRef.current = performance.now();
+      invalidate();
+    };
+    return () => {
+      flyToWorld = null;
+      cameraTarget = null;
+    };
+  }, [invalidate]);
+
   // --- idle drift ----------------------------------------------------------
+  const targetVec = useMemo(() => new THREE.Vector3(), []);
   useFrame((_, delta) => {
     const controls = controlsRef.current;
     if (!controls) return;
+    // Publish the current orbit target for the minimap viewport indicator.
+    controls.getTarget(targetVec);
+    cameraTarget = { x: targetVec.x, y: targetVec.y, z: targetVec.z };
     const now = performance.now();
     // Any active user interaction resets the idle timer.
     if (controls.active) {
