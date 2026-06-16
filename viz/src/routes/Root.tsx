@@ -8,6 +8,8 @@ import { EdgeLines } from "../scene/EdgeLines";
 import { Labels } from "../scene/Labels";
 import { Controls } from "../scene/Controls";
 import { DetailPanel } from "../panels/DetailPanel";
+import { FilterHUD } from "../panels/FilterHUD";
+import { SearchPanel } from "../panels/SearchPanel";
 
 export function Root() {
   return (
@@ -73,6 +75,8 @@ function View() {
 
       <HeaderBar />
       {store.status.kind === "ready" && <DetailPanel />}
+      {store.status.kind === "ready" && <FilterHUD />}
+      {store.status.kind === "ready" && <SearchPanel />}
       {store.status.kind === "loading" && <Overlay text={`Charting the sky… (${store.status.phase})`} />}
       {store.status.kind === "error" && <Overlay text={`Error: ${store.status.message}`} error />}
     </div>

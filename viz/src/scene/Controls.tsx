@@ -46,6 +46,26 @@ export function Controls() {
     const controls = controlsRef.current;
     if (!controls || !model) return;
 
+    // focusTarget (from search): fly to a specific node.
+    if (store.focusTarget) {
+      const clusterKey =
+        model.clusterOfNode.get(store.focusTarget) ?? store.focusTarget;
+      const idx = model.indexByKey.get(clusterKey);
+      if (idx !== undefined) {
+        const { sphere, pt } = reusable;
+        pt.set(
+          model.positions[idx * 3]!,
+          model.positions[idx * 3 + 1]!,
+          model.positions[idx * 3 + 2]!
+        );
+        sphere.set(pt, 60 * FIT_PADDING);
+        void controls.fitToSphere(sphere, true);
+        lastInteractionRef.current = performance.now();
+        invalidate();
+        return;
+      }
+    }
+
     // If a single star is selected, frame just that node; otherwise frame the
     // whole currently-visible set.
     let keys: string[];
