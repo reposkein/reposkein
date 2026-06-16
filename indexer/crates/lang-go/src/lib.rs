@@ -100,6 +100,97 @@ mod resolve_tests {
     use reposkein_core::resolve::resolve;
 
     #[test]
+    fn go_composite_literal_resolves_to_instantiates() {
+        use reposkein_core::resolve::resolve_full;
+        // type Foo struct{} in a.go; caller() in b.go uses Foo{}.
+        let a_ctx = FileContext {
+            repo: "r",
+            rel_path: "pkg/a.go",
+            file_id: "rs1:r:file:pkg/a.go",
+            source: b"package p\ntype Foo struct{}\n",
+        };
+        let b_ctx = FileContext {
+            repo: "r",
+            rel_path: "pkg/b.go",
+            file_id: "rs1:r:file:pkg/b.go",
+            source: b"package p\nfunc caller() { _ = Foo{} }\n",
+        };
+        let a = GoExtractor.extract(&a_ctx);
+        let b = GoExtractor.extract(&b_ctx);
+        let mut nodes = a.nodes.clone();
+        nodes.extend(b.nodes.clone());
+        let mut constructions = a.constructions.clone();
+        constructions.extend(b.constructions.clone());
+        let (edges, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let inst = edges.iter().find(|e| e.typ == "INSTANTIATES");
+        assert!(inst.is_some(), "Foo{{}} must resolve to INSTANTIATES edge");
+        let inst = inst.unwrap();
+        assert!(inst.to.contains("Foo"), "INSTANTIATES must point to Foo class node");
+    }
+
+    #[test]
+    fn go_ref_composite_literal_resolves_to_instantiates() {
+        use reposkein_core::resolve::resolve_full;
+        let a_ctx = FileContext {
+            repo: "r",
+            rel_path: "pkg/a.go",
+            file_id: "rs1:r:file:pkg/a.go",
+            source: b"package p\ntype Bar struct{}\n",
+        };
+        let b_ctx = FileContext {
+            repo: "r",
+            rel_path: "pkg/b.go",
+            file_id: "rs1:r:file:pkg/b.go",
+            source: b"package p\nfunc caller() { _ = &Bar{} }\n",
+        };
+        let a = GoExtractor.extract(&a_ctx);
+        let b = GoExtractor.extract(&b_ctx);
+        let mut nodes = a.nodes.clone();
+        nodes.extend(b.nodes.clone());
+        let mut constructions = a.constructions.clone();
+        constructions.extend(b.constructions.clone());
+        let (edges, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        assert!(
+            edges.iter().any(|e| e.typ == "INSTANTIATES"),
+            "&Bar{{}} must resolve to INSTANTIATES edge"
+        );
+    }
+
+    #[test]
+    fn go_slice_literal_does_not_resolve_to_instantiates() {
+        use reposkein_core::resolve::resolve_full;
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "pkg/m.go",
+            file_id: "rs1:r:file:pkg/m.go",
+            source: b"package p\nfunc caller() { _ = []int{1, 2} }\n",
+        };
+        let out = GoExtractor.extract(&ctx);
+        let (edges, _, _) =
+            resolve_full(&out.nodes, &[], &[], &[], &[], &out.constructions, "r");
+        assert!(
+            !edges.iter().any(|e| e.typ == "INSTANTIATES"),
+            "[]int{{}} must NOT produce INSTANTIATES edge"
+        );
+    }
+
+    #[test]
+    fn go_composite_literal_extraction_is_deterministic() {
+        let ctx = FileContext {
+            repo: "r",
+            rel_path: "pkg/m.go",
+            file_id: "rs1:r:file:pkg/m.go",
+            source: b"package p\ntype Foo struct{}\nfunc caller() { _ = Foo{}; _ = &Foo{} }\n",
+        };
+        let a = GoExtractor.extract(&ctx);
+        let b = GoExtractor.extract(&ctx);
+        assert_eq!(
+            a.constructions, b.constructions,
+            "construction extraction must be deterministic"
+        );
+    }
+
+    #[test]
     fn intra_package_bare_call_resolves() {
         // pkg/a.go defines Helper; pkg/b.go's Run calls Helper() bare (same package).
         let a_ctx = FileContext {
