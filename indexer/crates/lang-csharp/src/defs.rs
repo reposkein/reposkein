@@ -47,17 +47,21 @@ fn arity(node: TsNode) -> usize {
 }
 
 /// Extract a simple identifier text from a type reference node that may be a
-/// `generic_name` or wrapped — try the node itself first, then first identifier child.
+/// `generic_name` or wrapped — try the node itself first, then the LAST
+/// identifier child (so `Ns.Base` → `Base`, not `Ns`).
 fn extract_base_name(node: TsNode, src: &[u8]) -> String {
     if node.kind() == "identifier" {
         return text(node, src).to_string();
     }
-    // For qualified_name (e.g. `A.B`): find first identifier child.
+    // For qualified_name (e.g. `Ns.Base`): use the LAST identifier child so
+    // we get the type name, not the namespace prefix.
     let mut c = node.walk();
-    for child in node.named_children(&mut c) {
-        if child.kind() == "identifier" {
-            return text(child, src).to_string();
-        }
+    let last_ident = node
+        .named_children(&mut c)
+        .filter(|n| n.kind() == "identifier")
+        .last();
+    if let Some(child) = last_ident {
+        return text(child, src).to_string();
     }
     // Fallback: use full text.
     text(node, src).to_string()
@@ -551,5 +555,35 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.id == "rs1:r:func:N/Svc.cs#N.C.m@0"));
+    }
+
+    /// Regression: for `class C : N.Base`, the base-name extraction must use
+    /// the LAST segment of the qualified name (`Base`), not the first (`N`).
+    /// Without the fix the heritage edge is dropped (N is not a declared type);
+    /// with the fix `base_name = "Base"` resolves to the in-file class and the
+    /// INHERITS edge is emitted.
+    #[test]
+    fn qualified_base_name_uses_last_segment() {
+        // namespace N { class Base {} class C : N.Base {} }
+        // Both Base and C are in namespace N, so heritage::resolve will find
+        // N.Base in the declared map when base_name == "Base" (last segment).
+        let w = run(b"namespace N { class Base {} class C : N.Base {} }");
+        // With the fix: INHERITS edge from C → Base must exist.
+        assert!(
+            w.edges
+                .iter()
+                .any(|e| e.typ == "INHERITS" && e.to == "rs1:r:class:N/Svc.cs#N.Base"),
+            "C must inherit from N.Base (resolved via last segment of qualified name)"
+        );
+        // Sanity: no edge must target a node with id containing just the namespace prefix "N"
+        // as the type (which would be the pre-fix bug: base_name = "N").
+        let has_ns_target = w
+            .edges
+            .iter()
+            .any(|e| (e.typ == "INHERITS" || e.typ == "IMPLEMENTS") && e.to.ends_with("#N"));
+        assert!(
+            !has_ns_target,
+            "heritage edge must not target the namespace segment"
+        );
     }
 }

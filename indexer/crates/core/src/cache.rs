@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 /// Bump to invalidate every cache entry (e.g. when extractor logic changes
 /// the ExtractOutput for unchanged source).
-pub const EXTRACT_CACHE_SCHEMA: u32 = 7;
+/// Bumped 7→8: C# base-name fix (last segment of qualified base) changes
+/// heritage edges for C# files with qualified base types.
+pub const EXTRACT_CACHE_SCHEMA: u32 = 8;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {
