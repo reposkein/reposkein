@@ -25,6 +25,13 @@ on:
 permissions:
   contents: read
 
+# Opt JavaScript actions that still declare `node20` in their metadata (e.g.
+# actions/upload-artifact@v5) into the Node 24 runtime ahead of GitHub's forced
+# migration. Clears the deprecation annotations; safe — these actions run
+# identically on node24. Remove once the actions ship native node24 metadata.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
