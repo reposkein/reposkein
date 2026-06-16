@@ -8,6 +8,7 @@ import { StarField } from "../scene/StarField";
 import { NebulaHalos } from "../scene/NebulaHalos";
 import { ConstellationLines } from "../scene/ConstellationLines";
 import { EdgeLines } from "../scene/EdgeLines";
+import { FlowParticles } from "../scene/FlowParticles";
 import { Labels } from "../scene/Labels";
 import { Controls } from "../scene/Controls";
 import { TemporalLinks } from "../scene/TemporalLinks";
@@ -122,6 +123,7 @@ function View() {
             <ConstellationLines />
             <StarField />
             <EdgeLines />
+            <FlowParticles />
             <TemporalLinks />
             <Labels />
           </>

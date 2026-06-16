@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
-import { bundleEdges, visibleClusters } from "../data/clientModel";
+import { bundleEdges, filterDrawEdges, visibleClusters } from "../data/clientModel";
 import { edgeColor, bundleOpacity } from "./encoding";
 
 /** Extracts the galaxy prefix from a cluster key (for cross-repo detection).
@@ -37,37 +37,18 @@ export function EdgeLines() {
   const geometry = useMemo(() => {
     const visible = visibleClusters(model, store.expanded);
 
-    // Confidence-audit mode: show ONLY low-confidence edges so the resolver's
-    // guesses are visible. "ambiguous" → ambiguous only; "ambiguous+name" →
-    // also include name_match. Overrides the normal confidence/type filters.
-    const auditResolutions =
-      store.audit === "ambiguous"
-        ? new Set(["ambiguous"])
-        : store.audit === "ambiguous+name"
-        ? new Set(["ambiguous", "name_match"])
-        : null;
-
     // Impact overlay: the set of node ids that participate (source + callers).
     const impactSet = store.impact
       ? new Set<string>([store.impact.sourceId, ...store.impact.impacted])
       : null;
 
-    // Apply edge type / confidence / audit filters before bundling.
-    const { edgeTypes, minConfidence } = store.filters;
-    const needsFilter =
-      auditResolutions !== null || edgeTypes.size > 0 || minConfidence > 0;
-    const filteredModel = needsFilter
-      ? {
-          ...model,
-          drawEdges: model.drawEdges.filter((e) => {
-            if (auditResolutions) return auditResolutions.has(e.resolution);
-            return (
-              (edgeTypes.size === 0 || !edgeTypes.has(e.type)) &&
-              e.confidence >= minConfidence
-            );
-          }),
-        }
-      : model;
+    // Apply edge type / confidence / audit filters before bundling (shared
+    // gate so flow particles render on EXACTLY the same edges).
+    const filteredModel = filterDrawEdges(model, {
+      edgeTypes: store.filters.edgeTypes,
+      minConfidence: store.filters.minConfidence,
+      audit: store.audit,
+    });
 
     const bundles = bundleEdges(filteredModel, visible);
 
