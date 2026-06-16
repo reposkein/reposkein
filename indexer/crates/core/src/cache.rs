@@ -22,7 +22,10 @@ use std::path::{Path, PathBuf};
 /// Bumped 10→11: Go struct/interface embedding → RawHeritage; Python module
 /// aliases (`import foo as f`) → RawModuleAlias; constructor sites → new
 /// RawConstruction (INSTANTIATES edges). All three change extractor output.
-pub const EXTRACT_CACHE_SCHEMA: u32 = 11;
+/// Bumped 11→12: Rust associated-function constructors (`Foo::new()`) and
+/// Go composite literals (`Foo{}`, `&Foo{}`) now emit RawConstruction →
+/// INSTANTIATES edges. Both change extractor output for Rust and Go files.
+pub const EXTRACT_CACHE_SCHEMA: u32 = 12;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {
@@ -165,6 +168,17 @@ mod tests {
         cache.put("r", "a.py", "h2", &edited);
         assert!(cache.get("r", "a.py", "h1").is_none());
         assert_eq!(cache.get("r", "a.py", "h2"), Some(edited));
+    }
+
+    #[test]
+    fn cache_schema_is_12() {
+        // Bumped 11→12: Rust Foo::new() associated-function constructors +
+        // Go composite-literal INSTANTIATES sites change extractor output.
+        assert_eq!(
+            EXTRACT_CACHE_SCHEMA,
+            12,
+            "bump cache schema when extractor output changes"
+        );
     }
 
     #[test]
