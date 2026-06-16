@@ -16,7 +16,10 @@ use std::path::{Path, PathBuf};
 /// Bumped 8→9: TS export-from re-exports (barrel files) → new IMPORTS edges;
 /// TS interface-extends + Rust supertrait in-file INHERITS edges; TS base
 /// type-args stripped; Python Variable ids now unique()-ordinal-disambiguated.
-pub const EXTRACT_CACHE_SCHEMA: u32 = 9;
+/// Bumped 9→10: heritage moved to resolver-time RawHeritage; cross-file
+/// INHERITS/IMPLEMENTS edges added; heritage edges gain resolution/confidence
+/// props; Python dotted bases captured; C# label-refine is now cross-file.
+pub const EXTRACT_CACHE_SCHEMA: u32 = 10;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {
