@@ -15,6 +15,7 @@ import { FilterHUD } from "../panels/FilterHUD";
 import { SearchPanel } from "../panels/SearchPanel";
 import { LegendPanel } from "../panels/LegendPanel";
 import { LensSwitcher } from "../panels/LensSwitcher";
+import { BRAND } from "../scene/encoding";
 
 export function Root() {
   return (
@@ -155,7 +156,7 @@ function HeaderBar() {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontWeight: 600 }}>RepoSkein Constellation</span>
+        <span style={{ fontWeight: 600, color: BRAND.amber }}>RepoSkein Constellation</span>
         {store.model && (
           <button
             onClick={() => store.resetView()}
@@ -165,9 +166,9 @@ function HeaderBar() {
               padding: "2px 10px",
               fontSize: 11,
               borderRadius: 5,
-              border: "1px solid rgba(120,150,210,0.4)",
-              background: "rgba(90,120,180,0.18)",
-              color: "rgba(210,220,240,0.85)",
+              border: `1px solid ${BRAND.amber}66`,
+              background: `${BRAND.amber}1f`,
+              color: BRAND.cream,
               cursor: "pointer",
               letterSpacing: 0.3,
             }}

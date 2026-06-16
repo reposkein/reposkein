@@ -6,10 +6,35 @@ import type { ClusterKind } from "../data/cluster";
 /** [r,g,b] in 0..1. */
 export type RGB = [number, number, number];
 
-const hex = (h: string): RGB => {
+export const hex = (h: string): RGB => {
   const n = parseInt(h.replace("#", ""), 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 };
+
+/** RepoSkein brand palette — the single source of truth for accent colors used
+ *  by selection / hover / impact highlights and UI chrome. These are ACCENTS:
+ *  the per-node-kind and per-edge-type hues below stay distinct and legible;
+ *  the brand colors only harmonize the chrome and call out the focused element.
+ *
+ *  amber  — primary accent: selection, the "frame all" / active chrome.
+ *  teal   — secondary accent: hover highlight, covering tests, links.
+ *  cream  — neutral light text / faint UI lines.
+ *  navy   — the deep background (already ~the scene bg + fog color). */
+export const BRAND = {
+  amber: "#F2B84B",
+  teal: "#2DD4BF",
+  cream: "#EAE7DC",
+  navy: "#070A12",
+} as const;
+
+/** Pre-parsed brand RGB triples for the GPU buffers (avoid re-parsing hex per
+ *  frame / per node). */
+export const BRAND_RGB = {
+  amber: hex(BRAND.amber),
+  teal: hex(BRAND.teal),
+  cream: hex(BRAND.cream),
+  navy: hex(BRAND.navy),
+} as const;
 
 /** Node color by graph label/kind, with cluster-level fallbacks. */
 export function nodeColor(clusterKind: ClusterKind, symbolKind?: string): RGB {

@@ -3,14 +3,21 @@ import { type ThreeEvent, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { useStore } from "../state/store";
 import { representativeFor, visibleClusters } from "../data/clientModel";
-import { nodeColor, nodeSize } from "./encoding";
+import { nodeColor, nodeSize, BRAND_RGB } from "./encoding";
 import { isTestNode } from "../data/classify";
 import { TYPE_EMPHASIS_KINDS } from "../data/lens";
 import type { RGB } from "./encoding";
 
-/** Accent colors for the impact overlay (design: impacted vs covering tests). */
-const IMPACT_ACCENT: RGB = [1.0, 0.42, 0.32]; // warm coral — impacted callers
-const COVERING_ACCENT: RGB = [0.45, 1.0, 0.55]; // green — covering tests
+/** Accent colors for the impact overlay (design: impacted vs covering tests).
+ *  Harmonized to the brand palette: amber calls out impacted callers, teal the
+ *  covering tests — the same two accents the rest of the UI uses for focus. */
+const IMPACT_ACCENT: RGB = BRAND_RGB.amber; // impacted callers
+const COVERING_ACCENT: RGB = BRAND_RGB.teal; // covering tests
+/** Selection / hover accents (brand amber / teal). The selected star is tinted
+ *  amber and the hovered star teal so the focused element reads instantly
+ *  without collapsing the per-kind color encoding of everything else. */
+const SELECT_ACCENT: RGB = BRAND_RGB.amber;
+const HOVER_ACCENT: RGB = BRAND_RGB.teal;
 /** Multiplier applied to nodes outside the active overlay focus. */
 const DIM_GAIN = 0.18;
 
@@ -92,6 +99,17 @@ export function StarField() {
     return set;
   }, [store.emphasis, model, visible]);
 
+  // Visible representatives of the selected / hovered node, so the focused star
+  // can be tinted with the brand accent at any LOD (works on collapsed cores).
+  const selectedRep = useMemo(() => {
+    if (!store.selected) return null;
+    return representativeFor(model, store.selected, new Set(visible));
+  }, [store.selected, model, visible]);
+  const hoveredRep = useMemo(() => {
+    if (!hovered) return null;
+    return representativeFor(model, hovered, new Set(visible));
+  }, [hovered, model, visible]);
+
   const { geometry, keysAt } = useMemo(() => {
     // Apply kind filter: exclude clusters whose symbolKind is in the hidden set.
     const filtered =
@@ -151,6 +169,17 @@ export function StarField() {
         }
       }
 
+      // Selection / hover accent (brand amber / teal). Subordinate to the
+      // impact overlay's own coloring (which owns the scene when active); hover
+      // takes visual priority over a lingering selection on the same star.
+      if (!impactReps) {
+        if (hoveredRep && key === hoveredRep) {
+          [r, g, b] = HOVER_ACCENT;
+        } else if (selectedRep && key === selectedRep) {
+          [r, g, b] = SELECT_ACCENT;
+        }
+      }
+
       // Dim stars outside the hovered neighborhood; brighten everything (gain)
       // so the brightest cores bloom.
       let gain = EMISSIVE_GAIN;
@@ -168,7 +197,7 @@ export function StarField() {
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
     return { geometry: geo, keysAt };
-  }, [visible, model, highlightKeys, store.filters, impactReps, testReps, store.emphasis]);
+  }, [visible, model, highlightKeys, store.filters, impactReps, testReps, store.emphasis, selectedRep, hoveredRep]);
 
   // Entrance animation: ease opacity + point size from 0 on first appearance.
   const entranceStart = useRef<number | null>(null);
