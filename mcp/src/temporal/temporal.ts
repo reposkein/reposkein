@@ -17,6 +17,7 @@ import {
   existsSync,
   readFileSync,
   writeFileSync,
+  renameSync,
   mkdirSync,
   readdirSync,
   unlinkSync,
@@ -101,13 +102,16 @@ function readCache(path: string): TemporalStats | null {
   }
 }
 
-/** Atomic-ish write: write to a temp file then rename (best-effort on all platforms). */
+/** Atomic write: write to a .tmp file then rename (best-effort on all platforms). */
 function writeCache(path: string, stats: TemporalStats): void {
+  const tmp = `${path}.tmp`;
   try {
     mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, JSON.stringify(stats));
+    writeFileSync(tmp, JSON.stringify(stats));
+    renameSync(tmp, path);
   } catch {
     // best-effort; a write failure must not break the tool call
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* ignore */ }
   }
 }
 

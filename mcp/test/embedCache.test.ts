@@ -331,4 +331,14 @@ describe("embedCorpus", () => {
     const path = cachePath(tmpDir, goodProvider);
     expect(existsSync(path)).toBe(true);
   });
+
+  // ——— M5: atomic writes — no leftover .tmp ———
+
+  it("M5: after a successful saveCache, no .tmp file is left behind", async () => {
+    const provider = new MockProvider({ dims: 4 });
+    await embedCorpus(provider, tmpDir, [NODE_A, NODE_B]);
+    const path = cachePath(tmpDir, provider);
+    expect(existsSync(path)).toBe(true);
+    expect(existsSync(`${path}.tmp`)).toBe(false);
+  });
 });

@@ -100,6 +100,47 @@ describe("providerFromEnv", () => {
     expect(p!.dims()).toBe(512);
   });
 
+  it("M2: throws when REPOSKEIN_EMBED_DIMS is not a positive integer (voyage)", async () => {
+    await expect(
+      providerFromEnv({
+        REPOSKEIN_EMBED_PROVIDER: "voyage",
+        VOYAGE_API_KEY: "test-key",
+        REPOSKEIN_EMBED_DIMS: "abc",
+      })
+    ).rejects.toThrow(/REPOSKEIN_EMBED_DIMS/);
+  });
+
+  it("M2: throws when REPOSKEIN_EMBED_DIMS is zero (voyage)", async () => {
+    await expect(
+      providerFromEnv({
+        REPOSKEIN_EMBED_PROVIDER: "voyage",
+        VOYAGE_API_KEY: "test-key",
+        REPOSKEIN_EMBED_DIMS: "0",
+      })
+    ).rejects.toThrow(/REPOSKEIN_EMBED_DIMS/);
+  });
+
+  it("M2: throws when REPOSKEIN_EMBED_DIMS is negative (voyage)", async () => {
+    await expect(
+      providerFromEnv({
+        REPOSKEIN_EMBED_PROVIDER: "voyage",
+        VOYAGE_API_KEY: "test-key",
+        REPOSKEIN_EMBED_DIMS: "-128",
+      })
+    ).rejects.toThrow(/REPOSKEIN_EMBED_DIMS/);
+  });
+
+  it("M2: throws when REPOSKEIN_EMBED_DIMS is non-integer float (http)", async () => {
+    await expect(
+      providerFromEnv({
+        REPOSKEIN_EMBED_PROVIDER: "http",
+        REPOSKEIN_EMBED_URL: "http://127.0.0.1:8080/embed",
+        REPOSKEIN_EMBED_MODEL: "voyage-4-nano",
+        REPOSKEIN_EMBED_DIMS: "1.5",
+      })
+    ).rejects.toThrow(/REPOSKEIN_EMBED_DIMS/);
+  });
+
   it("throws when REPOSKEIN_EMBED_PROVIDER=voyage but VOYAGE_API_KEY missing", async () => {
     await expect(
       providerFromEnv({ REPOSKEIN_EMBED_PROVIDER: "voyage" })

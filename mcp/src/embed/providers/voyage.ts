@@ -45,7 +45,18 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
     }
     this._apiKey = apiKey;
     this._modelId = env["REPOSKEIN_EMBED_MODEL"] ?? DEFAULT_MODEL;
-    this._dims = env["REPOSKEIN_EMBED_DIMS"] ? parseInt(env["REPOSKEIN_EMBED_DIMS"], 10) : DEFAULT_DIMS;
+    const rawDims = env["REPOSKEIN_EMBED_DIMS"];
+    if (rawDims !== undefined) {
+      const d = Number(rawDims);
+      if (!Number.isInteger(d) || d <= 0) {
+        throw new Error(
+          `Invalid REPOSKEIN_EMBED_DIMS="${rawDims}" — must be a positive integer (e.g. 256, 512, 1024, 2048)`
+        );
+      }
+      this._dims = d;
+    } else {
+      this._dims = DEFAULT_DIMS;
+    }
   }
 
   id(): string { return this._id; }

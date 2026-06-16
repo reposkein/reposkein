@@ -17,7 +17,7 @@
  * fall back to the lexical result.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import type { EmbeddingProvider } from "./provider.js";
@@ -86,17 +86,20 @@ export function loadCache(path: string): Map<string, EmbedRecord> {
   return map;
 }
 
-/** Rewrite the cache file (sorted by id, atomic-write style). Best-effort. */
+/** Rewrite the cache file (sorted by id). Atomic: write to .tmp then rename. Best-effort. */
 export function saveCache(path: string, records: Map<string, EmbedRecord>): void {
   const lines = [...records.keys()].sort().map((id) => {
     const r = records.get(id)!;
     return JSON.stringify({ id: r.id, doc_hash: r.doc_hash, v: r.v });
   });
+  const tmp = `${path}.tmp`;
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, lines.length ? lines.join("\n") + "\n" : "");
+    writeFileSync(tmp, lines.length ? lines.join("\n") + "\n" : "");
+    renameSync(tmp, path);
   } catch {
     // best-effort; write failure must not break the tool call
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* ignore */ }
   }
 }
 
