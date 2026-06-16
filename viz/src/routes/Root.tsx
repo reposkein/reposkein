@@ -5,6 +5,7 @@ import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { StoreProvider, useStore } from "../state/store";
 import { StarField } from "../scene/StarField";
+import { NebulaHalos } from "../scene/NebulaHalos";
 import { EdgeLines } from "../scene/EdgeLines";
 import { Labels } from "../scene/Labels";
 import { Controls } from "../scene/Controls";
@@ -116,6 +117,7 @@ function View() {
         <Stars radius={600} depth={120} count={2600} factor={6} saturation={0} fade speed={0.6} />
         {store.status.kind === "ready" && store.model && (
           <>
+            <NebulaHalos />
             <StarField />
             <EdgeLines />
             <TemporalLinks />
