@@ -17,10 +17,31 @@ import { allocateParticles } from "./flow";
 const PARTICLE_BUDGET = 3000;
 /** Fraction of an edge a particle traverses per second (subtle drift). */
 const FLOW_SPEED = 0.32;
-/** Particle point size (small + additive so the flow reads as a gentle pulse). */
-const PARTICLE_SIZE = 1.7;
+/** Particle point size in WORLD units (sizeAttenuation). Small + round + additive
+ *  so the flow reads as a gentle pulse, clearly smaller than the star nodes
+ *  (which use base size 3). */
+const PARTICLE_SIZE = 0.8;
 /** Color/alpha multiplier — kept low so the motion is subtle by default. */
 const PARTICLE_GAIN = 0.55;
+
+/** A soft radial-gradient sprite so particles render as round glowing pulses
+ *  (a bare pointsMaterial draws hard squares). Built once, module-level. */
+let SPRITE: THREE.CanvasTexture | null = null;
+function softSprite(): THREE.CanvasTexture {
+  if (SPRITE) return SPRITE;
+  const s = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = s;
+  const ctx = canvas.getContext("2d")!;
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.4, "rgba(255,255,255,0.5)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, s, s);
+  SPRITE = new THREE.CanvasTexture(canvas);
+  return SPRITE;
+}
 
 /** Edge-direction flow particles (design §P1): a SINGLE additive THREE.Points
  *  buffer of small pulses that travel from each visible bundle's SOURCE (caller)
@@ -152,9 +173,10 @@ export function FlowParticles() {
       <pointsMaterial
         size={PARTICLE_SIZE}
         sizeAttenuation
+        map={softSprite()}
         vertexColors
         transparent
-        opacity={0.9}
+        opacity={0.85}
         depthWrite={false}
         blending={THREE.AdditiveBlending}
       />
