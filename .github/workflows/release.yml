@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-binaries:
     name: build ${{ matrix.platform_key }}
@@ -88,10 +92,18 @@ jobs:
           merge-multiple: true
       - name: List artifacts
         run: ls -l bin-dist
+      - name: Generate SHA256SUMS
+        run: |
+          cd bin-dist
+          sha256sum reposkein-indexer-* > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
       - name: Create / update the release with the binaries
         uses: softprops/action-gh-release@v2
         with:
-          files: bin-dist/*
+          files: |
+            bin-dist/reposkein-indexer-*
+            bin-dist/SHA256SUMS
           fail_on_unmatched_files: true
           generate_release_notes: true
 
@@ -100,6 +112,9 @@ jobs:
     needs: release
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: mcp
@@ -119,15 +134,40 @@ jobs:
           VERSION="${REF#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Publishing version ${VERSION}"
+      - name: Assert committed package version matches tag
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "${PKG_VERSION}" != "${{ steps.ver.outputs.version }}" ]; then
+            echo "ERROR: package.json version (${PKG_VERSION}) does not match tag (${{ steps.ver.outputs.version }})" >&2
+            exit 1
+          fi
       - name: Install + build
         run: |
           npm ci
           npm run build
+      - name: Download SHA256SUMS and bake binary-digests.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "v${{ steps.ver.outputs.version }}" -p SHA256SUMS -O SHA256SUMS
+          node --input-type=module <<'EOF'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const lines = readFileSync("SHA256SUMS", "utf8").trim().split("\n");
+          const map = {};
+          for (const line of lines) {
+            const m = line.match(/^([0-9a-f]{64})\s+(.+)$/);
+            if (m) map[m[2].trim()] = m[1];
+          }
+          writeFileSync("binary-digests.json", JSON.stringify(map, null, 2) + "\n");
+          console.log("binary-digests.json:", JSON.stringify(map, null, 2));
+          EOF
       - name: Set package version to the tag
         run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
       - name: Publish to npm
         if: ${{ env.NPM_TOKEN != '' }}
-        run: npm publish --access public
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
       - name: Skipped publish (no NPM_TOKEN)
