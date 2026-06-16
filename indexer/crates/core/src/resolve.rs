@@ -271,6 +271,12 @@ pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &
 /// *original* name, so aliases match the target). This is the committed
 /// `external_calls` data a federation-load stitch uses to create cross-repo
 /// CALLS edges (design: cross-repo-calls.md, Option A).
+///
+/// The third return value is the per-deriving-type list of heritage bases that
+/// could NOT be resolved in-repo (sorted-unique `(edge_type, base_name)`), which
+/// `lib.rs` gates by federation child-scope to write the committed
+/// `external_heritage` cross-repo-candidate prop (design: cross-repo-heritage.md).
+#[allow(clippy::type_complexity)]
 pub fn resolve_full(
     nodes: &[Node],
     imports: &[RawImport],
@@ -279,7 +285,11 @@ pub fn resolve_full(
     module_aliases_raw: &[RawModuleAlias],
     constructions: &[RawConstruction],
     repo: &str,
-) -> (Vec<Edge>, Vec<(String, Vec<String>)>) {
+) -> (
+    Vec<Edge>,
+    Vec<(String, Vec<String>)>,
+    Vec<(String, Vec<(String, String)>)>,
+) {
     let files = file_paths(nodes);
 
     // Build function indexes FIRST (needed for glob expansion in resolve_imports).
@@ -325,7 +335,8 @@ pub fn resolve_full(
     }
 
     let (mut edges, import_targets) = resolve_imports(imports, &files, repo, &by_file_funcs);
-    let mut heritage_edges = resolve_heritage(nodes, heritage, &import_targets, repo);
+    let (mut heritage_edges, unresolved_heritage) =
+        resolve_heritage_full(nodes, heritage, &import_targets, repo);
     edges.append(&mut heritage_edges);
 
     // Build module-alias index: (importing_file_id, local_alias) -> target_path.
@@ -498,7 +509,7 @@ pub fn resolve_full(
         .into_iter()
         .map(|(k, set)| (k, set.into_iter().collect()))
         .collect();
-    (edges, external_out)
+    (edges, external_out, unresolved_heritage)
 }
 
 /// A lightweight view of the type nodes (Class/Interface/Enum) for heritage.
@@ -535,8 +546,24 @@ pub fn resolve_heritage(
     nodes: &[Node],
     heritage: &[RawHeritage],
     import_targets: &ImportTargets,
-    _repo: &str,
+    repo: &str,
 ) -> Vec<Edge> {
+    resolve_heritage_full(nodes, heritage, import_targets, repo).0
+}
+
+/// Like [`resolve_heritage`], but additionally returns, per deriving type id,
+/// the sorted-unique list of `(edge_type, base_name)` bases that could NOT be
+/// resolved IN-REPO (`resolve_base` returned `None` — either out-of-repo or
+/// ambiguous). `lib.rs` applies the federation child-scope gate to decide which
+/// of these become committed `external_heritage` cross-repo candidates (design:
+/// cross-repo-heritage.md §2.2/§2.3). This keeps `resolve.rs` repo-agnostic.
+#[allow(clippy::type_complexity)]
+pub fn resolve_heritage_full(
+    nodes: &[Node],
+    heritage: &[RawHeritage],
+    import_targets: &ImportTargets,
+    _repo: &str,
+) -> (Vec<Edge>, Vec<(String, Vec<(String, String)>)>) {
     let types = type_views(nodes);
 
     // Indexes (all BTreeMap; value vectors sorted → deterministic).
@@ -569,6 +596,8 @@ pub fn resolve_heritage(
 
     // (from_id, to_id) -> (resolution, confidence, edge_type); best-confidence wins.
     let mut agg: BTreeMap<(String, String), (&'static str, f64, String)> = BTreeMap::new();
+    // from_id -> sorted-unique (edge_type, base_name) bases unresolved in-repo.
+    let mut unresolved: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
     for h in heritage {
         let Some((to_id, res, conf)) = resolve_base(
             h,
@@ -579,6 +608,12 @@ pub fn resolve_heritage(
             &by_id_qual,
             &by_id_dir,
         ) else {
+            // Unresolved in-repo (out-of-repo base OR in-repo-ambiguous). Surface
+            // it; lib.rs's child-scope gate decides if it's a cross-repo candidate.
+            unresolved
+                .entry(h.from_id.clone())
+                .or_default()
+                .insert((h.edge_type.clone(), h.base_name.clone()));
             continue;
         };
         // D-CS: C# refines edge_type from the resolved target's label.
@@ -606,7 +641,11 @@ pub fn resolve_heritage(
         e.props.insert("confidence".to_string(), json!(conf));
         edges.push(e);
     }
-    edges
+    let unresolved_out: Vec<(String, Vec<(String, String)>)> = unresolved
+        .into_iter()
+        .map(|(k, set)| (k, set.into_iter().collect()))
+        .collect();
+    (edges, unresolved_out)
 }
 
 /// Resolves RawConstruction facts → INSTANTIATES edges.
@@ -1173,6 +1212,37 @@ mod tests {
     }
 
     #[test]
+    fn resolve_heritage_full_surfaces_out_of_repo_base() {
+        // Derived class B has base A that is NOT defined in this repo and not
+        // import-resolvable in-repo → resolve_base returns None → surfaced as
+        // an unresolved (edge_type, base_name) for the deriving type.
+        let derived = type_node("r", "Class", "class", "svc/b.py", "B");
+        let nodes = vec![derived.clone()];
+        let h = vec![raw_h(&derived.id, "svc/b.py", "A", "INHERITS")];
+        let (edges, unresolved) = resolve_heritage_full(&nodes, &h, &ImportTargets::new(), "r");
+        assert!(edges.is_empty(), "no in-repo edge for an out-of-repo base");
+        assert_eq!(
+            unresolved,
+            vec![(
+                derived.id.clone(),
+                vec![("INHERITS".to_string(), "A".to_string())]
+            )]
+        );
+    }
+
+    #[test]
+    fn resolve_heritage_full_no_unresolved_when_base_resolves() {
+        // A is in-repo (repo-wide unique) → resolved as an edge, NOT surfaced.
+        let base = type_node("r", "Class", "class", "base/a.py", "A");
+        let derived = type_node("r", "Class", "class", "svc/b.py", "B");
+        let nodes = vec![base, derived.clone()];
+        let h = vec![raw_h(&derived.id, "svc/b.py", "A", "INHERITS")];
+        let (edges, unresolved) = resolve_heritage_full(&nodes, &h, &ImportTargets::new(), "r");
+        assert_eq!(edges.len(), 1, "in-repo base resolves to one edge");
+        assert!(unresolved.is_empty(), "resolved base is not surfaced");
+    }
+
+    #[test]
     fn pub_use_chain_resolves_to_original_definition() {
         // b.rs defines Thing(); a.rs `pub use crate::b::Thing`; c.rs `use crate::a::Thing` + calls Thing().
         let mut nodes = vec![
@@ -1236,7 +1306,8 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
+        let (edges, external, _heritage) =
+            resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
         assert!(
             edges.iter().all(|e| e.typ != "CALLS"),
             "no in-repo CALLS edge"
@@ -1260,7 +1331,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "h", None)];
-        let (_e, external) = resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
+        let (_e, external, _heritage) = resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
         assert_eq!(
             external,
             vec![(caller.id.clone(), vec!["helper".to_string()])]
@@ -1274,7 +1345,7 @@ mod tests {
         let caller = func_node("r", "svc.py", "run", 0);
         let nodes = vec![file_node("r", "svc.py"), caller.clone()];
         let calls = vec![call(&caller.id, "svc.py", "run", "print", None)];
-        let (_e, external) = resolve_full(&nodes, &[], &calls, &[], &[], &[], "r");
+        let (_e, external, _heritage) = resolve_full(&nodes, &[], &calls, &[], &[], &[], "r");
         assert!(
             external.is_empty(),
             "non-imported unresolved call is not recorded"
@@ -1301,7 +1372,8 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
+        let (edges, external, _heritage) =
+            resolve_full(&nodes, &imports, &calls, &[], &[], &[], "r");
         assert!(edges.iter().any(|e| e.typ == "CALLS" && e.to == helper.id));
         assert!(
             external.is_empty(),
@@ -1479,7 +1551,7 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("f"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == bar_fn.id)
@@ -1508,7 +1580,7 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("foo"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == bar_fn.id)
@@ -1536,7 +1608,7 @@ mod tests {
             vec!["a/b.py".into(), "a/b/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "go", Some("x"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == go_fn.id)
@@ -1570,7 +1642,7 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "missing", Some("f"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         // No CALLS edge at all: rung 1.5 hard-stops on miss (does not fall to name_match)
         let calls_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "CALLS").collect();
         assert!(
@@ -1588,7 +1660,7 @@ mod tests {
         let nodes = vec![caller.clone(), method_fn.clone()];
         // No module aliases at all
         let calls = vec![call(&caller.id, "svc.py", "run", "method", Some("obj"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &[], &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &[], &[], "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "CALLS" && e.to == method_fn.id)
@@ -1612,7 +1684,7 @@ mod tests {
             vec!["some_module.py".into()],
         )];
         let calls = vec![call(&m_caller.id, "m.py", "Svc.run", "help", Some("self"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
         assert_eq!(
             e.to, m_callee.id,
@@ -1641,7 +1713,7 @@ mod tests {
         )];
         // receiver is "a.b" (a chained receiver — not a single identifier)
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("a.b"))];
-        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         // "a.b" is not in module_aliases → rung 1.5 misses → falls to rungs 6/7
         let e = edges
             .iter()
@@ -1672,8 +1744,8 @@ mod tests {
             vec!["foo.py".into(), "foo/__init__.py".into()],
         )];
         let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("f"))];
-        let (edges_a, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
-        let (edges_b, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges_a, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
+        let (edges_b, _, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, &[], "r");
         assert_eq!(
             edges_a, edges_b,
             "module alias resolution must be deterministic"
@@ -1714,7 +1786,7 @@ mod tests {
             &id::file_id("r", "m.ts"),
             "Foo",
         )];
-        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "INSTANTIATES")
@@ -1737,7 +1809,7 @@ mod tests {
             &id::file_id("r", "a/svc.py"),
             "Foo",
         )];
-        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
         let e = edges
             .iter()
             .find(|e| e.typ == "INSTANTIATES")
@@ -1758,7 +1830,7 @@ mod tests {
             &id::file_id("r", "svc.py"),
             "Foo",
         )];
-        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
         assert!(
             edges.iter().all(|e| e.typ != "INSTANTIATES"),
             "ambiguous → no edge"
@@ -1774,7 +1846,7 @@ mod tests {
             raw_construction(&caller.id, "m.ts", &id::file_id("r", "m.ts"), "Foo"),
             raw_construction(&caller.id, "m.ts", &id::file_id("r", "m.ts"), "Foo"),
         ];
-        let (edges, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
         let e = edges.iter().find(|e| e.typ == "INSTANTIATES").unwrap();
         assert_eq!(e.props["sites"], json!(2));
     }
@@ -1791,7 +1863,7 @@ mod tests {
             callee_name: "Foo".to_string(),
             receiver: None,
         };
-        let (edges, _) = resolve_full(&nodes, &[], &[raw_call], &[], &[], &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &[raw_call], &[], &[], &[], "r");
         assert!(
             edges
                 .iter()
@@ -1817,7 +1889,7 @@ mod tests {
             callee_name: "helper".to_string(),
             receiver: None,
         };
-        let (edges, _) = resolve_full(&nodes, &[], &[raw_call], &[], &[], &[], "r");
+        let (edges, _, _) = resolve_full(&nodes, &[], &[raw_call], &[], &[], &[], "r");
         let e = edges.iter().find(|e| e.typ == "CALLS").expect("CALLS edge");
         assert_eq!(e.to, free.id, "same-file free-fn wins");
         assert_eq!(e.props["resolution"], json!("exact"));
@@ -1846,7 +1918,7 @@ mod tests {
             callee_name: "Foo".to_string(),
             receiver: None,
         };
-        let (edges, external) = resolve_full(&nodes, &imports, &[raw_call], &[], &[], &[], "r");
+        let (edges, external, _) = resolve_full(&nodes, &imports, &[raw_call], &[], &[], &[], "r");
         assert!(
             edges.iter().any(|e| e.typ == "INSTANTIATES"),
             "INSTANTIATES emitted"
@@ -1868,8 +1940,8 @@ mod tests {
             &id::file_id("r", "m.ts"),
             "Foo",
         )];
-        let (a, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
-        let (b, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let (a, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
+        let (b, _, _) = resolve_full(&nodes, &[], &[], &[], &[], &constructions, "r");
         assert_eq!(a, b, "INSTANTIATES resolution must be deterministic");
     }
 }

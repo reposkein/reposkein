@@ -207,7 +207,7 @@ pub fn index_tree_with(
         }
     }
 
-    let (mut resolved, external) = resolve::resolve_full(
+    let (mut resolved, external, unresolved_heritage) = resolve::resolve_full(
         &nodes,
         &all_imports,
         &all_calls,
@@ -315,6 +315,50 @@ pub fn index_tree_with(
         }
     }
 
+    // Cross-repo heritage candidates (XRH-M1): for each in-repo-unresolved
+    // heritage base whose import target falls under a federated child's
+    // root_path, record "<edge_type>|<base_name>" on the deriving type node.
+    // Child-scoped → library bases + non-federated repos + in-repo-ambiguous
+    // bases record nothing (byte-identical). A load-time stitch resolves the
+    // base by name in the child and creates the cross-repo edge (design:
+    // cross-repo-heritage.md §2.3-2.5).
+    if !children.is_empty() {
+        // Map each deriving type id → its file id (the file the heritage fact
+        // came from), needed to find the deriving file's imports.
+        let from_file: BTreeMap<&str, &str> = all_heritage
+            .iter()
+            .map(|h| (h.from_id.as_str(), h.from_file_id.as_str()))
+            .collect();
+        // from_id -> sorted-unique "<edge_type>|<base_name>".
+        let mut ext_heritage: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (from_id, bases) in &unresolved_heritage {
+            let Some(from_file_id) = from_file.get(from_id.as_str()) else {
+                continue;
+            };
+            for (edge_type, base_name) in bases {
+                // Child-scope gate: the deriving file imports `base_name` (as a
+                // local binding) from a path under some child's root_path. Reuses
+                // the `external_import_targets` `starts_with("{rel_path}/")` test.
+                if base_under_child_root(&all_imports, from_file_id, base_name, &children) {
+                    ext_heritage
+                        .entry(from_id.clone())
+                        .or_default()
+                        .insert(format!("{edge_type}|{base_name}"));
+                }
+            }
+        }
+        if !ext_heritage.is_empty() {
+            for n in &mut nodes {
+                if let Some(set) = ext_heritage.get(&n.id) {
+                    n.props.insert(
+                        "external_heritage".to_string(),
+                        Value::Array(set.iter().cloned().map(Value::String).collect()),
+                    );
+                }
+            }
+        }
+    }
+
     let edges = drop_dangling_edges(&nodes, edges);
 
     Ok(IndexOutput {
@@ -322,6 +366,36 @@ pub fn index_tree_with(
         children,
         warnings,
     })
+}
+
+/// True when the deriving file (`from_file_id`) has an import that binds
+/// `base_name` (as a local symbol) AND whose candidate paths land under some
+/// federated child's `root_path`. This is the cross-repo-heritage child-scope
+/// gate: it reuses the exact `starts_with("{rel_path}/")` predicate that
+/// `external_import_targets` uses, so library bases and in-repo-ambiguous bases
+/// (which have no child-prefixed import) are excluded (design §2.3).
+fn base_under_child_root(
+    imports: &[extractor::RawImport],
+    from_file_id: &str,
+    base_name: &str,
+    children: &[ChildRepoInfo],
+) -> bool {
+    for imp in imports {
+        if imp.importing_file_id != from_file_id {
+            continue;
+        }
+        // The import must bind `base_name` (its local name in the deriving file).
+        if !imp.symbols.iter().any(|(local, _orig)| local == base_name) {
+            continue;
+        }
+        for child in children {
+            let prefix = format!("{}/", child.rel_path);
+            if imp.candidate_paths.iter().any(|p| p.starts_with(&prefix)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Removes edges whose endpoints are not present in the node set. Dangling
@@ -617,6 +691,159 @@ mod tests {
                 .iter()
                 .all(|n| !n.props.contains_key("external_import_targets")),
             "no external_import_targets without federated children"
+        );
+    }
+
+    /// Emits, for `svc.py`, a deriving Class `PaymentService` that INHERITS a
+    /// base named `BaseService` imported from a path under `vendor/childA/`
+    /// (a federated child boundary). `BaseService` is NOT defined in the parent,
+    /// so the resolver can't resolve it in-repo → cross-repo heritage candidate.
+    /// `edge_label` controls the provisional edge_type (INHERITS by default;
+    /// "INHERITS" with a C#-style interface base still stores INHERITS — the
+    /// refinement to IMPLEMENTS happens at stitch time).
+    struct XrHeritageStub {
+        base_name: &'static str,
+        edge_type: &'static str,
+    }
+    impl extractor::Extractor for XrHeritageStub {
+        fn language(&self) -> &'static str {
+            "python"
+        }
+        fn extract(&self, ctx: &extractor::FileContext) -> extractor::ExtractOutput {
+            let mut out = extractor::ExtractOutput::default();
+            if ctx.rel_path == "svc.py" {
+                let svc_id = format!("rs1:{}:class:svc.py#PaymentService@0", ctx.repo);
+                out.nodes.push(
+                    Node::new(svc_id.clone(), "Class")
+                        .set("name", json!("PaymentService"))
+                        .set("qualified_name", json!("PaymentService"))
+                        .set("file_path", json!("svc.py"))
+                        .set("start_line", json!(1))
+                        .set("end_line", json!(2))
+                        .set("content_hash", json!("h")),
+                );
+                out.edges.push(Edge::new(ctx.file_id, "DEFINES", &svc_id));
+                out.imports.push(extractor::RawImport {
+                    importing_file_id: ctx.file_id.to_string(),
+                    importing_path: ctx.rel_path.to_string(),
+                    symbols: vec![(self.base_name.to_string(), self.base_name.to_string())],
+                    candidate_paths: vec![format!("vendor/childA/{}.py", self.base_name)],
+                    reexport: false,
+                });
+                out.heritage.push(extractor::RawHeritage {
+                    from_id: svc_id,
+                    from_path: ctx.rel_path.to_string(),
+                    from_file_id: ctx.file_id.to_string(),
+                    edge_type: self.edge_type.to_string(),
+                    base_name: self.base_name.to_string(),
+                    label_refine: false,
+                });
+            }
+            out
+        }
+    }
+
+    fn xr_heritage_fixture() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("svc.py"), b"x = 1\n").unwrap();
+        fs::create_dir_all(root.join("vendor/childA/.reposkein")).unwrap();
+        fs::write(
+            root.join("vendor/childA/.reposkein/meta.json"),
+            b"{\"repo_id\":\"childa\"}",
+        )
+        .unwrap();
+        fs::write(root.join("vendor/childA/BaseService.py"), b"y = 2\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn external_heritage_records_child_scoped_base() {
+        let dir = xr_heritage_fixture();
+        let stub = XrHeritageStub {
+            base_name: "BaseService",
+            edge_type: "INHERITS",
+        };
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let out = index_tree_with(
+            dir.path(),
+            "rootid",
+            "root",
+            extractors,
+            IndexOptions {
+                federation: true,
+                cache: None,
+            },
+        )
+        .unwrap();
+
+        let svc = out
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "rs1:rootid:class:svc.py#PaymentService@0")
+            .expect("PaymentService Class node");
+        assert_eq!(
+            svc.props.get("external_heritage"),
+            Some(&json!(["INHERITS|BaseService"])),
+            "deriving type records the child-scoped base as external_heritage"
+        );
+        // The base is NOT resolved as an in-repo heritage edge.
+        assert!(
+            !out.graph
+                .edges
+                .iter()
+                .any(|e| e.from == "rs1:rootid:class:svc.py#PaymentService@0"
+                    && (e.typ == "INHERITS" || e.typ == "IMPLEMENTS")),
+            "no in-repo heritage edge for an out-of-repo base"
+        );
+    }
+
+    #[test]
+    fn external_heritage_absent_when_no_federation() {
+        // Same deriving class + import, but federation disabled → no children →
+        // no external_heritage (byte-identical to today).
+        let dir = xr_heritage_fixture();
+        let stub = XrHeritageStub {
+            base_name: "BaseService",
+            edge_type: "INHERITS",
+        };
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let g = index_tree(dir.path(), "rootid", "root", extractors).unwrap();
+        assert!(
+            g.nodes
+                .iter()
+                .all(|n| !n.props.contains_key("external_heritage")),
+            "no external_heritage without federated children"
+        );
+    }
+
+    #[test]
+    fn external_heritage_is_deterministic_across_runs() {
+        let dir = xr_heritage_fixture();
+        let stub = XrHeritageStub {
+            base_name: "BaseService",
+            edge_type: "INHERITS",
+        };
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let opts = IndexOptions {
+            federation: true,
+            cache: None,
+        };
+        let g1 = index_tree_with(dir.path(), "rootid", "root", extractors, opts)
+            .unwrap()
+            .graph;
+        let g2 = index_tree_with(dir.path(), "rootid", "root", extractors, opts)
+            .unwrap()
+            .graph;
+        assert_eq!(
+            jsonl::nodes_to_jsonl(&g1.nodes),
+            jsonl::nodes_to_jsonl(&g2.nodes),
+            "external_heritage nodes must be byte-identical across runs"
+        );
+        assert_eq!(
+            jsonl::edges_to_jsonl(&g1.edges),
+            jsonl::edges_to_jsonl(&g2.edges)
         );
     }
 
