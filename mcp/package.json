@@ -47,7 +47,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "start": "node dist/index.js",
-    "prepare": "npm run build && node scripts/bundle-skill.mjs",
+    "prepare": "npm run build && node scripts/bundle-skill.mjs && node scripts/bundle-viz.mjs",
     "postinstall": "node scripts/postinstall.mjs",
     "bench": "tsx bench/run.ts"
   },

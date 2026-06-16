@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
 import { runDoctor } from "./cli/doctor.js";
+import { runView, parseViewArgs } from "./cli/view.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -252,6 +253,12 @@ if (import.meta.url === pathToFileURL(process.argv[1]!).href) {
     const json = rest.includes("--json");
     const path = rest.find((a) => !a.startsWith("-")) ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
     runDoctor(path, json)
+      .then((code) => process.exit(code))
+      .catch((err) => { console.error(err); process.exit(1); });
+  } else if (sub === "view") {
+    const { repoPath, opts } = parseViewArgs(process.argv.slice(3));
+    const vRepoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID) ?? "repo";
+    runView(repoPath, vRepoId, opts)
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
   } else {
