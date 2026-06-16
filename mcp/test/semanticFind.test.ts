@@ -172,6 +172,41 @@ describe("makeSemanticFind — embedding integration", () => {
     expect(body.results.length).toBeGreaterThan(0);
   });
 
+  it("H1: hybrid results have a non-zero fused score (not the lexical BM25F score)", async () => {
+    const provider = new MockProvider({ dims: 4 });
+    const handler = makeSemanticFind(makeStore(), "testrepo", tmpDir, provider);
+    const result = await handler({ query: "validate token" });
+    const body = JSON.parse((result.content[0] as { text: string }).text);
+    expect(body.ranking).toBe("hybrid");
+    // RRF scores are always positive (1/(k+rank) > 0)
+    for (const r of body.results as Array<{ score: number }>) {
+      expect(r.score).toBeGreaterThan(0);
+    }
+  });
+
+  it("H1: hybrid results include a `via` field with a valid value", async () => {
+    const provider = new MockProvider({ dims: 4 });
+    const handler = makeSemanticFind(makeStore(), "testrepo", tmpDir, provider);
+    const result = await handler({ query: "validate token" });
+    const body = JSON.parse((result.content[0] as { text: string }).text);
+    expect(body.ranking).toBe("hybrid");
+    const validVia = new Set(["lexical", "embedding", "both"]);
+    for (const r of body.results as Array<{ via?: string }>) {
+      expect(r.via).toBeDefined();
+      expect(validVia.has(r.via!)).toBe(true);
+    }
+  });
+
+  it("H1: pure-lexical mode (providerOverride=null) has no `via` field in results", async () => {
+    const handler = makeSemanticFind(makeStore(), "testrepo", tmpDir, null);
+    const result = await handler({ query: "validate token" });
+    const body = JSON.parse((result.content[0] as { text: string }).text);
+    expect(body.ranking).toBeUndefined();
+    for (const r of body.results as Array<{ via?: string }>) {
+      expect(r.via).toBeUndefined();
+    }
+  });
+
   it("FALLBACK: when provider throws, result is identical to pure-lexical (no error propagated)", async () => {
     // Pure-lexical baseline
     const lexicalHandler = makeSemanticFind(makeStore(), "testrepo", tmpDir, null);

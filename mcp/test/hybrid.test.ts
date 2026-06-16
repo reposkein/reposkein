@@ -80,6 +80,32 @@ describe("cosineRank", () => {
     expect(result.map((r) => r.id)).not.toContain("id:zero");
     expect(result.map((r) => r.id)).toContain("id:ok");
   });
+
+  it("M1: skips corpus vectors with wrong dimensionality (no NaN/partial score)", () => {
+    const q = [1, 0]; // 2-dim query
+    const vecs = new Map([
+      ["id:wrong-dim", [1, 0, 0, 0]], // 4-dim — mismatch
+      ["id:right-dim", [1, 0]],        // 2-dim — matches
+    ]);
+    const result = cosineRank(q, vecs);
+    // dim-mismatched vector must be skipped entirely
+    expect(result.map((r) => r.id)).not.toContain("id:wrong-dim");
+    expect(result.map((r) => r.id)).toContain("id:right-dim");
+    // No NaN scores
+    for (const item of result) {
+      expect(isNaN(item.score)).toBe(false);
+    }
+  });
+
+  it("M1: query vector with wrong dims vs ALL corpus → returns empty (no plausible matches)", () => {
+    const q = [1, 0, 0]; // 3-dim
+    const vecs = new Map([
+      ["id:a", [1, 0]], // 2-dim — mismatch
+      ["id:b", [0, 1]], // 2-dim — mismatch
+    ]);
+    const result = cosineRank(q, vecs);
+    expect(result.length).toBe(0);
+  });
 });
 
 // ——— rrf ———

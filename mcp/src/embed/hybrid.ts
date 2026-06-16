@@ -20,6 +20,9 @@ export interface RankedItem {
   score: number;
 }
 
+/** How a result was found in a hybrid search. */
+export type ViaKind = "lexical" | "embedding" | "both";
+
 /**
  * Brute-force cosine similarity between a query vector and all corpus vectors.
  * Returns items with cosine score, sorted descending by score, then ascending by id (ties).
@@ -36,6 +39,9 @@ export function cosineRank(
   const results: RankedItem[] = [];
 
   for (const [id, vec] of corpusVecs) {
+    // M1: skip corpus vectors with a different dimensionality than the query vector.
+    // A dim mismatch should produce no match (not a plausible-but-wrong similarity).
+    if (vec.length !== queryVec.length) continue;
     const vecNorm = l2norm(vec);
     if (vecNorm === 0) continue;
     const dot = dotProduct(queryVec, vec);
@@ -106,7 +112,8 @@ export function rrf(
 // ——— Vector math helpers ———
 
 function dotProduct(a: number[], b: number[]): number {
-  const len = Math.min(a.length, b.length);
+  // Callers (cosineRank) must have already verified a.length === b.length.
+  const len = a.length; // both lengths are equal at this point
   let sum = 0;
   for (let i = 0; i < len; i++) {
     sum += (a[i] ?? 0) * (b[i] ?? 0);

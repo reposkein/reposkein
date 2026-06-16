@@ -24,7 +24,7 @@ import type { ToolResult } from "./readCypher.js";
 import type { EmbeddingProvider } from "../embed/provider.js";
 import { providerFromEnv } from "../embed/provider.js";
 import { embedCorpus } from "../embed/cache.js";
-import { cosineRank, rrf } from "../embed/hybrid.js";
+import { cosineRank, rrf, type ViaKind } from "../embed/hybrid.js";
 
 export interface SemanticFindArgs {
   query: string;
@@ -84,7 +84,11 @@ export function makeSemanticFind(
 
       let ranking: "lexical" | "hybrid" = "lexical";
       let providerModelId: string | null = null;
-      let fusedIds: string[] | null = null;
+      let fusedResults: Array<{ id: string; score: number }> | null = null;
+
+      // Track which list(s) each id appeared in (for the `via` field in hybrid mode)
+      let lexicalIdSet: Set<string> | null = null;
+      let cosineIdSet: Set<string> | null = null;
 
       if (provider !== null) {
         // Attempt hybrid embedding path — catch all errors → fallback to lexical
@@ -101,9 +105,13 @@ export function makeSemanticFind(
             const cosineItems = cosineRanked;
 
             const fused = rrf(lexicalItems, cosineItems);
-            fusedIds = fused.map((r) => r.id);
+            fusedResults = fused.map((r) => ({ id: r.id, score: r.score }));
             ranking = "hybrid";
             providerModelId = provider.modelId();
+
+            // Track membership for `via` classification
+            lexicalIdSet = new Set(lexicalItems.map((r) => r.id));
+            cosineIdSet = new Set(cosineItems.map((r) => r.id));
           }
         } catch (e) {
           // Any embedding error → fall back to lexical silently (log to stderr)
@@ -118,8 +126,10 @@ export function makeSemanticFind(
       const lexicalById = new Map(lexicalRanked.map((r) => [r.node.id, r]));
 
       let rankedIds: string[];
-      if (ranking === "hybrid" && fusedIds !== null) {
-        rankedIds = fusedIds.slice(0, limit);
+      let fusedScoreById: Map<string, number> | null = null;
+      if (ranking === "hybrid" && fusedResults !== null) {
+        fusedScoreById = new Map(fusedResults.map((r) => [r.id, r.score]));
+        rankedIds = fusedResults.slice(0, limit).map((r) => r.id);
       } else {
         rankedIds = lexicalRanked.slice(0, limit).map((r) => r.node.id);
       }
@@ -128,15 +138,31 @@ export function makeSemanticFind(
         const node = nodeById.get(id);
         if (!node) return null;
         const lexical = lexicalById.get(id);
+
+        // H1: in hybrid mode surface the fused RRF score as `score`; add `via` label.
+        let score: number;
+        let via: ViaKind | undefined;
+        if (ranking === "hybrid" && fusedScoreById !== null) {
+          score = fusedScoreById.get(id) ?? 0;
+          const inLex = lexicalIdSet?.has(id) ?? false;
+          const inCos = cosineIdSet?.has(id) ?? false;
+          via = inLex && inCos ? "both" : inCos ? "embedding" : "lexical";
+        } else {
+          score = lexical?.score ?? 0;
+        }
+
         const result: Record<string, unknown> = {
           node_id: node.id,
           qualified_name: node.qualified_name,
           file_path: node.file_path,
           kind: node.kind,
           repo_id: node.repo_id,
-          score: lexical?.score ?? 0,
+          score,
           matched: lexical?.matched ?? [],
         };
+        if (via !== undefined) {
+          result["via"] = via;
+        }
         // Include summary only when present (keeps payload lean; absence is informative)
         if (node.summary) {
           result["summary"] = node.summary;
