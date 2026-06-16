@@ -124,4 +124,67 @@ describe("buildFederatedGraph", () => {
     expect(out[0]!.to).toBe("rs1:B:func:base.py#helper@0");
     expect(out[0]!.props.confidence).toBe(0.6);
   });
+
+  it("stitches a cross-repo INHERITS edge from external_heritage to a unique child Class", () => {
+    const parent =
+      `{"id":"rs1:A:class:svc.py#PaymentService@0","labels":["Class"],"name":"PaymentService","external_heritage":["INHERITS|BaseService"]}` + "\n";
+    const child = `{"id":"rs1:B:class:base.py#BaseService@0","labels":["Class"],"name":"BaseService"}` + "\n";
+    const g = buildFederatedGraph([
+      { repoId: "A", nodesText: parent, edgesText: "" },
+      { repoId: "B", nodesText: child, edgesText: "" },
+    ]);
+    const inh = g.edges.find((e) => e.from === "rs1:A:class:svc.py#PaymentService@0" && e.type === "INHERITS");
+    expect(inh).toBeTruthy();
+    expect(inh!.to).toBe("rs1:B:class:base.py#BaseService@0");
+    expect(inh!.props.cross_repo).toBe(true);
+    expect(inh!.props.stitched).toBe(true);
+    expect(inh!.props.resolution).toBe("name_match");
+    expect(inh!.props.confidence).toBe(0.7);
+  });
+
+  it("refines a cross-repo heritage edge to IMPLEMENTS when the child target is an Interface", () => {
+    // Provisional INHERITS (C# base_list) but child target is an Interface → IMPLEMENTS.
+    const parent =
+      `{"id":"rs1:A:class:svc.cs#PaymentService@0","labels":["Class"],"name":"PaymentService","external_heritage":["INHERITS|IPaymentBase"]}` + "\n";
+    const child = `{"id":"rs1:B:iface:base.cs#IPaymentBase@0","labels":["Interface"],"name":"IPaymentBase"}` + "\n";
+    const g = buildFederatedGraph([
+      { repoId: "A", nodesText: parent, edgesText: "" },
+      { repoId: "B", nodesText: child, edgesText: "" },
+    ]);
+    const impl = g.edges.find((e) => e.from === "rs1:A:class:svc.cs#PaymentService@0" && e.type === "IMPLEMENTS");
+    expect(impl).toBeTruthy();
+    expect(impl!.to).toBe("rs1:B:iface:base.cs#IPaymentBase@0");
+    expect(g.edges.some((e) => e.from === "rs1:A:class:svc.cs#PaymentService@0" && e.type === "INHERITS")).toBe(false);
+  });
+
+  it("skips an ambiguous cross-repo heritage base (defined in two child repos)", () => {
+    const parent =
+      `{"id":"rs1:A:class:svc.py#PaymentService@0","labels":["Class"],"name":"PaymentService","external_heritage":["INHERITS|BaseService"]}` + "\n";
+    const b = `{"id":"rs1:B:class:base.py#BaseService@0","labels":["Class"],"name":"BaseService"}` + "\n";
+    const c = `{"id":"rs1:C:class:other.py#BaseService@0","labels":["Class"],"name":"BaseService"}` + "\n";
+    const g = buildFederatedGraph([
+      { repoId: "A", nodesText: parent, edgesText: "" },
+      { repoId: "B", nodesText: b, edgesText: "" },
+      { repoId: "C", nodesText: c, edgesText: "" },
+    ]);
+    expect(
+      g.edges.some(
+        (e) =>
+          e.from === "rs1:A:class:svc.py#PaymentService@0" && (e.type === "INHERITS" || e.type === "IMPLEMENTS"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not stitch heritage to a same-repo base (cross-repo only)", () => {
+    const same =
+      `{"id":"rs1:A:class:svc.py#PaymentService@0","labels":["Class"],"name":"PaymentService","external_heritage":["INHERITS|BaseService"]}\n` +
+      `{"id":"rs1:A:class:base.py#BaseService@0","labels":["Class"],"name":"BaseService"}\n`;
+    const g = buildFederatedGraph([{ repoId: "A", nodesText: same, edgesText: "" }]);
+    expect(
+      g.edges.some(
+        (e) =>
+          e.from === "rs1:A:class:svc.py#PaymentService@0" && (e.type === "INHERITS" || e.type === "IMPLEMENTS"),
+      ),
+    ).toBe(false);
+  });
 });

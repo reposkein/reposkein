@@ -198,5 +198,43 @@ export function buildFederatedGraph(repos: RepoSource[]): ParsedGraph {
     }
   }
 
+  // 4) Cross-repo heritage (XRH-M3): inject INHERITS/IMPLEMENTS edges from each
+  //    deriving type's external_heritage "<edge_type>|<base_name>" specs to the
+  //    matching base TYPE node in another repo. Mirrors the Neo4j
+  //    stitch_cross_repo_heritage: unique-only (ambiguous skipped, D-AMBIG),
+  //    cross-repo only, and the edge type is refined from the child target's
+  //    label (Interface→IMPLEMENTS, Class→INHERITS, else keep provisional).
+  const typeByName = new Map<string, { id: string; repoId: string; label: string }[]>();
+  for (const n of nodes) {
+    const label = n.labels.find((l) => l === "Class" || l === "Interface" || l === "Enum");
+    if (!label) continue;
+    const nm = typeof n.props.name === "string" ? n.props.name : null;
+    if (!nm) continue;
+    (typeByName.get(nm) ?? typeByName.set(nm, []).get(nm)!).push({ id: n.id, repoId: n.repoId, label });
+  }
+  for (const arr of typeByName.values()) arr.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  for (const n of nodes) {
+    const eh = n.props.external_heritage;
+    if (!Array.isArray(eh)) continue;
+    const specs = [...new Set(eh.filter((x): x is string => typeof x === "string"))].sort();
+    for (const spec of specs) {
+      const sep = spec.indexOf("|");
+      if (sep < 0) continue;
+      const provisional = spec.slice(0, sep);
+      const baseName = spec.slice(sep + 1);
+      const all = (typeByName.get(baseName) ?? []).filter((m) => m.repoId !== n.repoId);
+      if (all.length !== 1) continue; // D-AMBIG: unique only
+      const b = all[0]!;
+      const type = b.label === "Interface" ? "IMPLEMENTS" : b.label === "Class" ? "INHERITS" : provisional;
+      edges.push({
+        from: n.id,
+        type,
+        to: b.id,
+        props: { resolution: "name_match", confidence: 0.7, cross_repo: true, stitched: true },
+      });
+    }
+  }
+
   return { byId, callsFrom, callsTo, nodes, edges };
 }
