@@ -41,6 +41,27 @@ pub struct RawCall {
     pub receiver: Option<String>,
 }
 
+/// A heritage relationship (INHERITS/IMPLEMENTS) before cross-file resolution.
+/// The deriving (`from`) side is already resolved to a frozen node id by the
+/// language walk; only `base_name` needs repo-wide resolution by `core::resolve`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawHeritage {
+    /// Stable id of the deriving type node (Class/Interface/Enum), already frozen.
+    pub from_id: String,
+    /// The deriving file's repo-relative path (same-dir rung + import lookup).
+    pub from_path: String,
+    /// The deriving file's File-node id (it is the importer of its base).
+    pub from_file_id: String,
+    /// edge_type as the language determined it (provisional when `label_refine`).
+    pub edge_type: String,
+    /// The base type's simple (last-segment) name, generics stripped.
+    pub base_name: String,
+    /// True only for C# `base_list`: the resolver may override `edge_type` from
+    /// the resolved target's label. False when syntax is authoritative.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub label_refine: bool,
+}
+
 /// Nodes and edges contributed by an extractor for a single file.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtractOutput {
@@ -48,6 +69,8 @@ pub struct ExtractOutput {
     pub edges: Vec<Edge>,
     pub imports: Vec<RawImport>,
     pub calls: Vec<RawCall>,
+    #[serde(default)]
+    pub heritage: Vec<RawHeritage>,
 }
 
 pub trait Extractor {
@@ -90,6 +113,14 @@ mod tests {
             caller_qualified: "f".into(),
             callee_name: "g".into(),
             receiver: None,
+        });
+        out.heritage.push(RawHeritage {
+            from_id: "rs1:r:class:a.py#B".into(),
+            from_path: "a.py".into(),
+            from_file_id: "rs1:r:file:a.py".into(),
+            edge_type: "INHERITS".into(),
+            base_name: "A".into(),
+            label_refine: false,
         });
 
         let text = serde_json::to_string(&out).unwrap();
