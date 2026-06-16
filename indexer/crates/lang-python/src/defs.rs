@@ -28,6 +28,7 @@ pub struct Walk<'a> {
     used: HashMap<String, u32>,
     declared: std::collections::HashMap<String, String>,
     pending_heritage: Vec<reposkein_core::heritage::PendingHeritage>,
+    pub heritage: Vec<reposkein_core::extractor::RawHeritage>,
 }
 
 /// Number of positional/keyword parameters (the @arity disambiguator).
@@ -55,6 +56,7 @@ impl<'a> Walk<'a> {
             used: HashMap::new(),
             declared: std::collections::HashMap::new(),
             pending_heritage: Vec::new(),
+            heritage: Vec::new(),
         }
     }
 
@@ -164,13 +166,26 @@ impl<'a> Walk<'a> {
                     if let Some(supers) = child.child_by_field_name("superclasses") {
                         let mut sc = supers.walk();
                         for base in supers.named_children(&mut sc) {
-                            if base.kind() == "identifier" {
+                            let base_name = match base.kind() {
+                                "identifier" => text(base, self.source).to_string(),
+                                "attribute" | "dotted_name" => {
+                                    // Take the last identifier child (e.g. `a.b.Base` → `Base`).
+                                    let mut bc = base.walk();
+                                    base.named_children(&mut bc)
+                                        .filter(|n| n.kind() == "identifier")
+                                        .last()
+                                        .map(|n| text(n, self.source).to_string())
+                                        .unwrap_or_default()
+                                }
+                                _ => String::new(),
+                            };
+                            if !base_name.is_empty() {
                                 self.pending_heritage.push(
                                     reposkein_core::heritage::PendingHeritage {
                                         decl_scope: scope.to_vec(),
                                         from_name: name.clone(),
                                         edge_type: "INHERITS".to_string(),
-                                        base_name: text(base, self.source).to_string(),
+                                        base_name,
                                     },
                                 );
                             }
@@ -244,10 +259,18 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// Resolves deferred heritage edges (call once after the top-level walk).
-    pub fn finalize_heritage(&mut self) {
-        let e = reposkein_core::heritage::resolve(&self.pending_heritage, &self.declared);
-        self.edges.extend(e);
+    /// Lowers pending heritage → RawHeritage (from-side resolved in-file; base
+    /// resolved repo-wide by core::resolve). Call once after the top-level walk.
+    pub fn lower_heritage(&mut self) {
+        let from_file_id = reposkein_core::id::file_id(self.repo, self.rel_path);
+        let mut raw = reposkein_core::heritage::lower(
+            &self.pending_heritage,
+            &self.declared,
+            self.rel_path,
+            &from_file_id,
+            false,
+        );
+        self.heritage.append(&mut raw);
     }
 }
 
@@ -261,7 +284,7 @@ mod tests {
         // Leak nothing: build a Walk borrowing the inputs, walk the root.
         let mut w = Walk::new("r", "m.py", "rs1:r:file:m.py", src);
         w.walk(tree.root_node(), &[], "rs1:r:file:m.py", ScopeKind::Module);
-        w.finalize_heritage();
+        w.lower_heritage();
         w
     }
 
@@ -315,10 +338,13 @@ mod tests {
             .iter()
             .any(|e| e.from == "rs1:r:class:m.py#Foo" && e.typ == "DEFINES" && e.to == m.id));
 
-        // Foo INHERITS Base (resolved intra-file).
-        assert!(w.edges.iter().any(|e| e.from == "rs1:r:class:m.py#Foo"
-            && e.typ == "INHERITS"
-            && e.to == "rs1:r:class:m.py#Base"));
+        // Foo emits RawHeritage INHERITS Base.
+        assert!(w
+            .heritage
+            .iter()
+            .any(|h| h.from_id == "rs1:r:class:m.py#Foo"
+                && h.edge_type == "INHERITS"
+                && h.base_name == "Base"));
     }
 
     #[test]
@@ -428,10 +454,10 @@ mod tests {
             .find(|n| n.props.get("qualified_name") == Some(&json!("Outer.A")))
             .unwrap();
         assert!(
-            w.edges
+            w.heritage
                 .iter()
-                .any(|e| e.from == b.id && e.typ == "INHERITS" && e.to == a.id),
-            "nested B(A) should INHERITS the sibling Outer.A (was previously dropped)"
+                .any(|h| h.from_id == b.id && h.edge_type == "INHERITS" && h.base_name == "A"),
+            "nested B(A) should emit RawHeritage INHERITS A"
         );
     }
 
