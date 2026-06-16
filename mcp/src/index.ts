@@ -16,6 +16,7 @@ import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
 import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
 import { makeSemanticFind } from "./tools/semanticFind.js";
 import { makeTemporalContext } from "./tools/temporalContext.js";
+import { makeImpact } from "./tools/impact.js";
 import { resolveRepoId } from "./store/repoId.js";
 
 /** Selects the store backend.
@@ -195,6 +196,29 @@ export async function main(): Promise<void> {
         return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
       }
       return temporalContext(args);
+    }
+  );
+
+  const impact = repoId ? makeImpact(store, repoId) : null;
+  server.registerTool(
+    "impact",
+    {
+      title: "Change impact + covering tests",
+      description:
+        "Given a function/class, return its transitive callers (what could break if you change it) split into impacted code vs the tests that cover it (what to run). Resolves by node_id, file_path+name, or name. federated:true spans nested repos.",
+      inputSchema: {
+        node_id: z.string().optional(),
+        file_path: z.string().optional(),
+        name: z.string().optional(),
+        depth: z.number().int().min(1).max(5).optional(),
+        federated: z.boolean().optional(),
+      },
+    },
+    async (args) => {
+      if (!impact) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return impact(args);
     }
   );
 

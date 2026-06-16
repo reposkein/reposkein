@@ -52,6 +52,12 @@ grep when the graph can answer structurally.
   (co-change). Use before a cross-cutting change to discover files that should
   also be touched. Output is advisory (derived from git history, not the static
   graph); treat co-change as a hypothesis to verify, not a guaranteed dependency.
+- **`impact`** — before editing a function, call `impact` to see its transitive
+  callers (what could break) and which tests cover it (what to run). Resolves by
+  `node_id`, `file_path`+`name`, or `name`. Returns `impacted` (non-test callers)
+  and `covering_tests` (test-file callers), with counts and a `truncated` flag.
+  Bounded by `depth` (1–5, default 3) and 500-node cap. `federated:true` spans
+  nested repos.
 
 ## Workflow Rules
 
