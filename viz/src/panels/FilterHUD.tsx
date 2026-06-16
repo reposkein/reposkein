@@ -16,9 +16,12 @@ const EDGE_TYPES = ["CALLS", "IMPORTS", "INHERITS", "IMPLEMENTS", "INSTANTIATES"
 export function FilterHUD() {
   const store = useStore();
   const [open, setOpen] = useState(true);
-  const { filters } = store;
+  const { filters, audit } = store;
   const hasFilters =
-    filters.kinds.size > 0 || filters.edgeTypes.size > 0 || filters.minConfidence > 0;
+    filters.kinds.size > 0 ||
+    filters.edgeTypes.size > 0 ||
+    filters.minConfidence > 0 ||
+    audit !== "off";
 
   return (
     <div
@@ -111,6 +114,43 @@ export function FilterHUD() {
             })}
           </div>
 
+          {/* Confidence-audit mode (resolver-quality debugging). Shows ONLY
+              low-confidence edges so you can SEE where the type-free resolver
+              is guessing. */}
+          <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4 }}>
+            CONFIDENCE AUDIT {audit !== "off" ? "● ON" : ""}
+          </div>
+          <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+            <AuditButton
+              label="Ambiguous only"
+              hint="Show ONLY ambiguous (guessed) edges; hide everything else"
+              on={audit === "ambiguous"}
+              onClick={() =>
+                store.setAudit(audit === "ambiguous" ? "off" : "ambiguous")
+              }
+            />
+            <AuditButton
+              label="+ name_match"
+              hint="Also include name_match edges (still low-confidence)"
+              on={audit === "ambiguous+name"}
+              onClick={() =>
+                store.setAudit(audit === "ambiguous+name" ? "off" : "ambiguous+name")
+              }
+            />
+          </div>
+          {audit !== "off" && (
+            <div
+              style={{
+                fontSize: 10,
+                lineHeight: 1.4,
+                color: "#ffb454",
+                marginBottom: 8,
+              }}
+            >
+              Showing only low-confidence edges — where the resolver is guessing.
+            </div>
+          )}
+
           {/* Confidence slider */}
           <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4 }}>
             MIN CONFIDENCE: {filters.minConfidence.toFixed(2)}
@@ -146,5 +186,37 @@ export function FilterHUD() {
         </div>
       )}
     </div>
+  );
+}
+
+function AuditButton({
+  label,
+  hint,
+  on,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  on: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={hint}
+      style={{
+        flex: 1,
+        background: on ? "rgba(255,180,84,0.22)" : "rgba(255,255,255,0.05)",
+        border: `1px solid ${on ? "#ffb454" : "rgba(255,255,255,0.12)"}`,
+        color: on ? "#ffd9a0" : "rgba(255,255,255,0.65)",
+        borderRadius: 6,
+        padding: "3px 6px",
+        cursor: "pointer",
+        fontSize: 10,
+        fontWeight: on ? 600 : 400,
+      }}
+    >
+      {label}
+    </button>
   );
 }
