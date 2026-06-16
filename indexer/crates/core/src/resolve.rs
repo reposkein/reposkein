@@ -2149,10 +2149,12 @@ mod tests {
         let calls = vec![call(&caller.id, "m.py", "run", "qux", Some("x"))];
         let (edges, _, _) = resolve_full(&nodes, &[], &calls, &[], &[], &constructions, "r");
         // Falls through to rung 6/7: qux exists elsewhere → name_match 0.5
-        let e = edges.iter().find(|e| e.typ == "CALLS");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == qux_elsewhere.id);
         assert!(
             e.is_some(),
-            "should fall through to name_match, not return empty"
+            "should fall through to name_match targeting qux_elsewhere, not return empty"
         );
         let e = e.unwrap();
         assert_eq!(

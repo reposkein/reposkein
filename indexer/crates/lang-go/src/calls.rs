@@ -116,12 +116,44 @@ fn bound_local_for_go(composite_node: TsNode, source: &[u8]) -> Option<String> {
         }
         "var_spec" => {
             // name: identifier list, value: expression list
-            // Simple case: single name, single value
-            let name = binding_parent.child_by_field_name("name")?;
-            if name.kind() != "identifier" {
+            // Guard: only single-name, single-value var specs (e.g. `var x = Foo{}`).
+            // Multi-name: `var a, b = Foo{}, Bar{}` has an expression_list on both
+            // sides with len > 1; skip those to avoid attributing the wrong name.
+            let left = binding_parent.child_by_field_name("name")?;
+            let right_opt = binding_parent.child_by_field_name("value");
+            // Check name count: if `name` is an expression_list with >1 children, skip.
+            let name_count = if left.kind() == "expression_list" {
+                let mut lc = left.walk();
+                left.named_children(&mut lc).count()
+            } else {
+                1
+            };
+            if name_count != 1 {
                 return None;
             }
-            let ident_name = text(name, source).to_string();
+            // Check value count similarly
+            if let Some(right) = right_opt {
+                let val_count = if right.kind() == "expression_list" {
+                    let mut rc = right.walk();
+                    right.named_children(&mut rc).count()
+                } else {
+                    1
+                };
+                if val_count != 1 {
+                    return None;
+                }
+            }
+            let ident_node = if left.kind() == "expression_list" {
+                let mut lc = left.walk();
+                let first = left.named_children(&mut lc).next()?;
+                first
+            } else {
+                left
+            };
+            if ident_node.kind() != "identifier" {
+                return None;
+            }
+            let ident_name = text(ident_node, source).to_string();
             if ident_name == "_" {
                 return None;
             }
