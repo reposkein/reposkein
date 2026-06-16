@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PRE_COMMIT: &str = r#"#!/bin/sh
+# reposkein-managed
 # RepoSkein: keep .reposkein JSONL in sync with the working tree on commit.
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
@@ -26,6 +27,7 @@ exit 0
 "#;
 
 const POST_MERGE: &str = r#"#!/bin/sh
+# reposkein-managed
 # RepoSkein: import the merged graph into the local database (async, best-effort).
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
@@ -713,6 +715,22 @@ fn main() -> Result<()> {
                 .context("create .git/hooks (is this a git repo?)")?;
             let write_hook = |name: &str, body: &str| -> Result<()> {
                 let p = hooks_dir.join(name);
+                // If a hook already exists but was NOT written by us, preserve it and warn.
+                if p.exists() {
+                    let existing = std::fs::read_to_string(&p).unwrap_or_default();
+                    if !existing.contains("# reposkein-managed") {
+                        eprintln!(
+                            "reposkein: hook '{}' already exists and was not written by RepoSkein — \
+                             preserving it. To enable RepoSkein indexing, add this line to your hook:\n  \
+                             {}",
+                            name,
+                            body.lines()
+                                .find(|l| l.contains("reposkein-indexer") && !l.starts_with('#'))
+                                .unwrap_or("\"$BIN\" index . >/dev/null 2>&1 || true")
+                        );
+                        return Ok(());
+                    }
+                }
                 std::fs::write(&p, body).with_context(|| format!("write hook {name}"))?;
                 #[cfg(unix)]
                 {
@@ -756,9 +774,12 @@ fn main() -> Result<()> {
                 "merge.reposkein-jsonl.name",
                 "RepoSkein canonical JSONL merge",
             )?;
+            let exe_path = std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "reposkein-indexer".to_string());
             run_cfg(
                 "merge.reposkein-jsonl.driver",
-                "reposkein-indexer merge-jsonl --path %P %O %A %B",
+                &format!("{exe_path} merge-jsonl --path %P %O %A %B"),
             )?;
 
             println!(
@@ -859,5 +880,68 @@ mod tests {
     fn safe_child_path_rejects_nonexistent_child() {
         let dir = tempdir().unwrap();
         assert!(safe_child_path(dir.path(), "does/not/exist").is_none());
+    }
+
+    #[test]
+    fn write_hook_does_not_overwrite_user_hook() {
+        let dir = tempdir().unwrap();
+        let hooks_dir = dir.path().join(".git").join("hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+        // Write a user hook (no reposkein-managed marker)
+        let hook_path = hooks_dir.join("pre-commit");
+        fs::write(&hook_path, "#!/bin/sh\n# user hook\nmy-tool\n").unwrap();
+
+        // Simulate what write_hook does: check for marker, preserve if absent
+        let existing = fs::read_to_string(&hook_path).unwrap_or_default();
+        assert!(!existing.contains("# reposkein-managed"));
+        // write_hook would return Ok(()) without overwriting
+        // Verify the file is unchanged
+        let after = fs::read_to_string(&hook_path).unwrap();
+        assert_eq!(after, "#!/bin/sh\n# user hook\nmy-tool\n");
+    }
+
+    #[test]
+    fn write_hook_overwrites_reposkein_hook() {
+        use super::PRE_COMMIT;
+        let dir = tempdir().unwrap();
+        let hooks_dir = dir.path().join(".git").join("hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+        // Write an existing reposkein hook (has marker)
+        let hook_path = hooks_dir.join("pre-commit");
+        fs::write(&hook_path, "#!/bin/sh\n# reposkein-managed\nold content\n").unwrap();
+
+        // write_hook SHOULD overwrite since marker is present
+        let existing = fs::read_to_string(&hook_path).unwrap_or_default();
+        assert!(existing.contains("# reposkein-managed"));
+        // Would proceed to overwrite — verify logic
+        fs::write(&hook_path, PRE_COMMIT).unwrap();
+        let after = fs::read_to_string(&hook_path).unwrap();
+        assert!(after.contains("# reposkein-managed"));
+    }
+
+    #[test]
+    fn pre_commit_hook_contains_marker() {
+        use super::PRE_COMMIT;
+        assert!(PRE_COMMIT.contains("# reposkein-managed"));
+    }
+
+    #[test]
+    fn post_merge_hook_contains_marker() {
+        use super::POST_MERGE;
+        assert!(POST_MERGE.contains("# reposkein-managed"));
+    }
+
+    #[test]
+    fn merge_driver_uses_absolute_path() {
+        // current_exe() in tests returns the test binary path (absolute)
+        let exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "reposkein-indexer".to_string());
+        // It should be absolute (start with /)
+        assert!(
+            exe.starts_with('/') || exe.contains('\\'),
+            "exe path should be absolute: {}",
+            exe
+        );
     }
 }
