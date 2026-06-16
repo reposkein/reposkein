@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import React, { useMemo } from "react";
 import {
   createColumnHelper,
   flexRender,
@@ -115,20 +115,7 @@ export function DetailPanel() {
       )}
 
       <Section title="Semantic summary">
-        {rec.semanticSummary ? (
-          <>
-            <p style={{ margin: "4px 0", fontSize: 13, lineHeight: 1.5 }}>{rec.semanticSummary}</p>
-            {stale && (
-              <div style={{ fontSize: 11, color: "#ffb454" }}>
-                ⚠ summary may be stale (summary_of_hash ≠ content_hash)
-              </div>
-            )}
-          </>
-        ) : (
-          <div style={{ fontSize: 12, opacity: 0.55 }}>
-            No summary yet — write one with the <code>write_semantic_summary</code> MCP tool.
-          </div>
-        )}
+        <SummaryBlock summary={rec.semanticSummary} stale={stale} />
       </Section>
 
       <Section title={`Incident edges (${incident.length})`}>
@@ -177,6 +164,73 @@ export function DetailPanel() {
         )}
       </Section>
     </Shell>
+  );
+}
+
+/** Renders the semantic summary with inline code highlighting and stale badge. */
+function SummaryBlock({
+  summary,
+  stale,
+}: {
+  summary: string | null;
+  stale: boolean;
+}) {
+  if (!summary) {
+    return (
+      <div style={{ fontSize: 12, opacity: 0.55 }}>
+        No summary yet — agents write these as they explore.
+      </div>
+    );
+  }
+
+  // Split summary into paragraphs, then render inline code spans.
+  const paragraphs = summary.split(/\n\n+/);
+
+  function renderInlineCode(text: string): React.ReactNode[] {
+    const parts = text.split(/`([^`]+)`/);
+    return parts.map((part, i) =>
+      i % 2 === 1 ? (
+        <code
+          key={i}
+          style={{
+            background: "rgba(255,255,255,0.1)",
+            borderRadius: 3,
+            padding: "0 3px",
+            fontFamily: "monospace",
+          }}
+        >
+          {part}
+        </code>
+      ) : (
+        part
+      )
+    );
+  }
+
+  return (
+    <div>
+      {stale && (
+        <span
+          style={{
+            display: "inline-block",
+            background: "#ffb454",
+            color: "#000",
+            borderRadius: 10,
+            padding: "1px 7px",
+            fontSize: 10,
+            fontWeight: 700,
+            marginBottom: 4,
+          }}
+        >
+          ⚠ STALE
+        </span>
+      )}
+      {paragraphs.map((para, i) => (
+        <p key={i} style={{ margin: "4px 0", fontSize: 13, lineHeight: 1.5 }}>
+          {renderInlineCode(para)}
+        </p>
+      ))}
+    </div>
   );
 }
 
