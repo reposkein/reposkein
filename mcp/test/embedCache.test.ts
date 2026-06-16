@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,8 +16,55 @@ import {
   saveCache,
   embedCorpus,
 } from "../src/embed/cache.js";
-import { MockProvider } from "./embedProvider.test.js";
+import { MockProvider, hashVec } from "./embedProvider.test.js";
+import type { EmbeddingProvider, EmbedKind } from "../src/embed/provider.js";
 import type { CorpusNode } from "../src/store/GraphStore.js";
+
+/**
+ * A MockProvider variant that returns the wrong number of vectors (simulates a buggy/
+ * misbehaving provider). Used to verify that embedCorpus throws rather than persisting
+ * corrupt data.
+ */
+class WrongCountProvider implements EmbeddingProvider {
+  private readonly _dims: number;
+  private readonly _returnExtra: boolean;
+  constructor(opts: { dims?: number; returnExtra?: boolean } = {}) {
+    this._dims = opts.dims ?? 4;
+    // If true returns one extra vector; if false returns one fewer.
+    this._returnExtra = opts.returnExtra ?? false;
+  }
+  id(): string { return "wrong-count"; }
+  modelId(): string { return "wrong-count-v1"; }
+  dims(): number { return this._dims; }
+  async embed(texts: string[], _kind: EmbedKind): Promise<number[][]> {
+    const correct = texts.map((t) => hashVec(t, this._dims));
+    if (this._returnExtra) {
+      correct.push(hashVec("extra", this._dims)); // one too many
+    } else {
+      correct.pop(); // one too few
+    }
+    return correct;
+  }
+}
+
+/**
+ * A MockProvider variant that returns vectors with the wrong dimensionality (simulates
+ * a model returning fewer/more dims than configured).
+ */
+class WrongDimsProvider implements EmbeddingProvider {
+  private readonly _declaredDims: number;
+  private readonly _actualDims: number;
+  constructor(opts: { declaredDims: number; actualDims: number }) {
+    this._declaredDims = opts.declaredDims;
+    this._actualDims = opts.actualDims;
+  }
+  id(): string { return "wrong-dims"; }
+  modelId(): string { return "wrong-dims-v1"; }
+  dims(): number { return this._declaredDims; }
+  async embed(texts: string[], _kind: EmbedKind): Promise<number[][]> {
+    return texts.map((t) => hashVec(t, this._actualDims));
+  }
+}
 
 // Helper to build minimal CorpusNode
 function cn(
@@ -231,5 +278,57 @@ describe("embedCorpus", () => {
     const provider = new MockProvider({ dims: 4 });
     provider.throwError = new Error("network failure");
     await expect(embedCorpus(provider, tmpDir, [NODE_A])).rejects.toThrow("network failure");
+  });
+
+  // ——— H2: mismatched batch count / wrong dims → throw, never write ———
+
+  it("H2: provider returns fewer vectors than texts → throws and writes nothing to cache", async () => {
+    const provider = new WrongCountProvider({ dims: 4, returnExtra: false });
+    const corpus = [NODE_A, NODE_B];
+    await expect(embedCorpus(provider, tmpDir, corpus)).rejects.toThrow(/count mismatch/i);
+
+    // No cache file should have been written
+    const embedDir = join(tmpDir, ".reposkein", "local", "embeddings");
+    if (existsSync(embedDir)) {
+      const files = readdirSync(embedDir).filter((f) => f.endsWith(".jsonl"));
+      expect(files.length).toBe(0);
+    }
+  });
+
+  it("H2: provider returns more vectors than texts → throws and writes nothing to cache", async () => {
+    const provider = new WrongCountProvider({ dims: 4, returnExtra: true });
+    const corpus = [NODE_A, NODE_B];
+    await expect(embedCorpus(provider, tmpDir, corpus)).rejects.toThrow(/count mismatch/i);
+
+    const embedDir = join(tmpDir, ".reposkein", "local", "embeddings");
+    if (existsSync(embedDir)) {
+      const files = readdirSync(embedDir).filter((f) => f.endsWith(".jsonl"));
+      expect(files.length).toBe(0);
+    }
+  });
+
+  it("H2: provider returns wrong-dims vector → throws and writes nothing to cache", async () => {
+    const provider = new WrongDimsProvider({ declaredDims: 4, actualDims: 8 });
+    const corpus = [NODE_A, NODE_B];
+    await expect(embedCorpus(provider, tmpDir, corpus)).rejects.toThrow(/dims/i);
+
+    const embedDir = join(tmpDir, ".reposkein", "local", "embeddings");
+    if (existsSync(embedDir)) {
+      const files = readdirSync(embedDir).filter((f) => f.endsWith(".jsonl"));
+      expect(files.length).toBe(0);
+    }
+  });
+
+  it("H2: after a mismatch error, a subsequent good call succeeds and writes the cache", async () => {
+    // First call with broken provider (should throw but not corrupt)
+    const badProvider = new WrongCountProvider({ dims: 4, returnExtra: false });
+    await expect(embedCorpus(badProvider, tmpDir, [NODE_A, NODE_B])).rejects.toThrow();
+
+    // Second call with a good provider (same cache dir, different provider id → different file)
+    const goodProvider = new MockProvider({ dims: 4 });
+    const result = await embedCorpus(goodProvider, tmpDir, [NODE_A, NODE_B]);
+    expect(result.size).toBe(2);
+    const path = cachePath(tmpDir, goodProvider);
+    expect(existsSync(path)).toBe(true);
   });
 });

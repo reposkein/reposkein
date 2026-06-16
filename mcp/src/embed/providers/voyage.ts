@@ -85,7 +85,18 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
       if (!Array.isArray(json.embeddings)) {
         throw new Error(`Voyage API response missing embeddings array: ${JSON.stringify(json)}`);
       }
+      if (json.embeddings.length !== batch.length) {
+        throw new Error(
+          `Voyage API returned ${json.embeddings.length} embeddings for batch of ${batch.length} texts — batch count mismatch`
+        );
+      }
       results.push(...json.embeddings);
+    }
+
+    if (results.length !== texts.length) {
+      throw new Error(
+        `Voyage API returned ${results.length} total embeddings for ${texts.length} input texts — total count mismatch`
+      );
     }
 
     return results;

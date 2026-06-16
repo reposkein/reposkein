@@ -82,12 +82,24 @@ export class HttpEmbeddingProvider implements EmbeddingProvider {
 
     // OpenAI-compatible shape: { data: [{ embedding: [...] }, ...] }
     if ("data" in json && Array.isArray(json.data)) {
-      return (json as OpenAIEmbedResponse).data.map((d) => d.embedding);
+      const out = (json as OpenAIEmbedResponse).data.map((d) => d.embedding);
+      if (out.length !== texts.length) {
+        throw new Error(
+          `HTTP embedding server returned ${out.length} embeddings for ${texts.length} input texts — count mismatch`
+        );
+      }
+      return out;
     }
 
     // Voyage-style shape: { embeddings: [[...], ...] }
     if ("embeddings" in json && Array.isArray((json as VoyageEmbedResponse).embeddings)) {
-      return (json as VoyageEmbedResponse).embeddings;
+      const out = (json as VoyageEmbedResponse).embeddings;
+      if (out.length !== texts.length) {
+        throw new Error(
+          `HTTP embedding server returned ${out.length} embeddings for ${texts.length} input texts — count mismatch`
+        );
+      }
+      return out;
     }
 
     throw new Error(`Unrecognized embedding server response shape: ${JSON.stringify(json)}`);

@@ -142,12 +142,28 @@ export async function embedCorpus(
     const texts = toEmbed.map((n) => docStrings.get(n.id)!);
     const vectors = await provider.embed(texts, "document");
 
+    // Guard: provider must return exactly as many vectors as we sent.
+    // A count mismatch means the provider is broken or mis-aligned — throw so
+    // the caller's try/catch falls back to lexical.  Never write corrupt data.
+    if (vectors.length !== toEmbed.length) {
+      throw new Error(
+        `Embedding provider returned ${vectors.length} vectors for ${toEmbed.length} texts — count mismatch; refusing to cache`
+      );
+    }
+
+    const expectedDims = provider.dims();
     for (let i = 0; i < toEmbed.length; i++) {
+      const vec = vectors[i];
+      if (!Array.isArray(vec) || vec.length !== expectedDims) {
+        throw new Error(
+          `Embedding provider returned a vector with ${Array.isArray(vec) ? vec.length : "undefined"} dims at index ${i}; expected ${expectedDims} — refusing to cache`
+        );
+      }
       const node = toEmbed[i]!;
       cache.set(node.id, {
         id: node.id,
         doc_hash: docHashes.get(node.id)!,
-        v: vectors[i]!,
+        v: vec,
       });
     }
 
