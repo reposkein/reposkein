@@ -1,7 +1,7 @@
 //! Cross-file resolution: turns RawImport/RawCall facts into IMPORTS/CALLS
 //! edges. Language-agnostic — operates on Function names and File paths.
 
-use crate::extractor::{RawCall, RawHeritage, RawImport};
+use crate::extractor::{RawCall, RawHeritage, RawImport, RawModuleAlias};
 use crate::id;
 use crate::model::{Edge, Node};
 use serde_json::{json, Value};
@@ -154,13 +154,15 @@ fn round2(x: f64) -> f64 {
 }
 
 /// Resolves one call into zero or more (target_id, resolution, confidence).
+#[allow(clippy::too_many_arguments)]
 fn resolve_one(
     c: &RawCall,
     by_name: &BTreeMap<String, Vec<String>>, // name -> sorted func ids
     by_file_freefn: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> module-level fn ids only
     by_file_qual: &BTreeMap<(String, String), String>,        // (path,qualified) -> id
     import_targets: &ImportTargets, // (importing_file_id, local) -> (path, original)
-    by_id_dir: &BTreeMap<String, String>, // func id -> directory of its file
+    module_aliases: &BTreeMap<(String, String), String>, // (importing_file_id, alias) -> target_path
+    by_id_dir: &BTreeMap<String, String>,                // func id -> directory of its file
     caller_file_id: &str,
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
@@ -172,6 +174,24 @@ fn resolve_one(
             let target_q = format!("{class}.{}", c.callee_name);
             if let Some(id) = by_file_qual.get(&(c.caller_path.clone(), target_q)) {
                 return vec![(id.clone(), "exact", 1.0)];
+            }
+        }
+    }
+    // Rung 1.5: module-alias attribute call (f.bar() where f is a known module alias).
+    // Inserted AFTER the self/cls/this guard and BEFORE the receiver.is_none() block.
+    if let Some(alias) = &c.receiver {
+        if !matches!(alias.as_str(), "self" | "cls" | "this") {
+            if let Some(target_path) =
+                module_aliases.get(&(caller_file_id.to_string(), alias.clone()))
+            {
+                if let Some(ids) = by_file_freefn.get(&(target_path.clone(), c.callee_name.clone()))
+                {
+                    return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
+                }
+                // Alias is known but callee not found as a free function in the target module.
+                // HARD STOP: do NOT fall through to name_match rungs, since the module is
+                // known and the function simply isn't there (avoid false positives).
+                return Vec::new();
             }
         }
     }
@@ -243,7 +263,7 @@ fn resolve_one(
 
 /// Edges (unchanged) — see [`resolve_full`].
 pub fn resolve(nodes: &[Node], imports: &[RawImport], calls: &[RawCall], repo: &str) -> Vec<Edge> {
-    resolve_full(nodes, imports, calls, &[], repo).0
+    resolve_full(nodes, imports, calls, &[], &[], repo).0
 }
 
 /// Like [`resolve`], but also returns, per caller Function id, the sorted+deduped
@@ -256,6 +276,7 @@ pub fn resolve_full(
     imports: &[RawImport],
     calls: &[RawCall],
     heritage: &[RawHeritage],
+    module_aliases_raw: &[RawModuleAlias],
     repo: &str,
 ) -> (Vec<Edge>, Vec<(String, Vec<String>)>) {
     let files = file_paths(nodes);
@@ -306,6 +327,19 @@ pub fn resolve_full(
     let mut heritage_edges = resolve_heritage(nodes, heritage, &import_targets, repo);
     edges.append(&mut heritage_edges);
 
+    // Build module-alias index: (importing_file_id, local_alias) -> target_path.
+    // BTreeMap ensures deterministic iteration order.
+    let mut module_aliases: BTreeMap<(String, String), String> = BTreeMap::new();
+    for ma in module_aliases_raw {
+        let Some(target) = ma.candidate_paths.iter().find(|p| files.contains(*p)) else {
+            continue;
+        };
+        module_aliases.insert(
+            (ma.importing_file_id.clone(), ma.local_alias.clone()),
+            target.clone(),
+        );
+    }
+
     // ALL imported local→original bindings (incl. cross-repo imports that
     // resolve_imports filtered out, since their target file isn't in-repo).
     let mut imported_originals: HashMap<(String, String), String> = HashMap::new();
@@ -328,6 +362,7 @@ pub fn resolve_full(
             &by_file_freefn,
             &by_file_qual,
             &import_targets,
+            &module_aliases,
             &by_id_dir,
             &caller_file_id,
         );
@@ -1018,7 +1053,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], "r");
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], "r");
         assert!(
             edges.iter().all(|e| e.typ != "CALLS"),
             "no in-repo CALLS edge"
@@ -1042,7 +1077,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "h", None)];
-        let (_e, external) = resolve_full(&nodes, &imports, &calls, &[], "r");
+        let (_e, external) = resolve_full(&nodes, &imports, &calls, &[], &[], "r");
         assert_eq!(
             external,
             vec![(caller.id.clone(), vec!["helper".to_string()])]
@@ -1056,7 +1091,7 @@ mod tests {
         let caller = func_node("r", "svc.py", "run", 0);
         let nodes = vec![file_node("r", "svc.py"), caller.clone()];
         let calls = vec![call(&caller.id, "svc.py", "run", "print", None)];
-        let (_e, external) = resolve_full(&nodes, &[], &calls, &[], "r");
+        let (_e, external) = resolve_full(&nodes, &[], &calls, &[], &[], "r");
         assert!(
             external.is_empty(),
             "non-imported unresolved call is not recorded"
@@ -1083,7 +1118,7 @@ mod tests {
             reexport: false,
         }];
         let calls = vec![call(&caller.id, "svc.py", "run", "helper", None)];
-        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], "r");
+        let (edges, external) = resolve_full(&nodes, &imports, &calls, &[], &[], "r");
         assert!(edges.iter().any(|e| e.typ == "CALLS" && e.to == helper.id));
         assert!(
             external.is_empty(),
@@ -1223,6 +1258,242 @@ mod tests {
             amb.len(),
             2,
             "repo-wide ambiguous fan-out unchanged when no same-dir candidate"
+        );
+    }
+
+    // --- Module-alias resolver tests (design §10, resolver test plan) ---
+
+    fn mk_module_alias(
+        importing_file_id: &str,
+        importing_path: &str,
+        local_alias: &str,
+        candidate_paths: Vec<String>,
+    ) -> crate::extractor::RawModuleAlias {
+        crate::extractor::RawModuleAlias {
+            importing_file_id: importing_file_id.to_string(),
+            importing_path: importing_path.to_string(),
+            local_alias: local_alias.to_string(),
+            candidate_paths,
+        }
+    }
+
+    #[test]
+    fn module_alias_call_is_exact() {
+        // `import foo as f; f.bar()` where `foo.py` defines `bar` → CALLS edge
+        // to foo.py#bar, resolution="exact", confidence=1.0 (rung 1.5).
+        let caller = func_node("r", "svc.py", "run", 0);
+        let bar_fn = func_node("r", "foo.py", "bar", 0);
+        let nodes = vec![
+            file_node("r", "svc.py"),
+            file_node("r", "foo.py"),
+            caller.clone(),
+            bar_fn.clone(),
+        ];
+        let aliases = vec![mk_module_alias(
+            &id::file_id("r", "svc.py"),
+            "svc.py",
+            "f",
+            vec!["foo.py".into(), "foo/__init__.py".into()],
+        )];
+        let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("f"))];
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == bar_fn.id)
+            .expect("CALLS edge to foo.py#bar");
+        assert_eq!(e.from, caller.id);
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+    }
+
+    #[test]
+    fn bare_module_import_call_is_exact() {
+        // `import foo; foo.bar()` where `foo.py` defines `bar` → CALLS edge,
+        // resolution="exact", confidence=1.0.
+        let caller = func_node("r", "svc.py", "run", 0);
+        let bar_fn = func_node("r", "foo.py", "bar", 0);
+        let nodes = vec![
+            file_node("r", "svc.py"),
+            file_node("r", "foo.py"),
+            caller.clone(),
+            bar_fn.clone(),
+        ];
+        let aliases = vec![mk_module_alias(
+            &id::file_id("r", "svc.py"),
+            "svc.py",
+            "foo",
+            vec!["foo.py".into(), "foo/__init__.py".into()],
+        )];
+        let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("foo"))];
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == bar_fn.id)
+            .expect("CALLS edge to foo.py#bar via bare import alias");
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+    }
+
+    #[test]
+    fn dotted_alias_call_is_exact() {
+        // `import a.b as x; x.go()` where `a/b.py` defines `go` → CALLS edge
+        // to a/b.py#go, resolution="exact", confidence=1.0.
+        let caller = func_node("r", "svc.py", "run", 0);
+        let go_fn = func_node("r", "a/b.py", "go", 0);
+        let nodes = vec![
+            file_node("r", "svc.py"),
+            file_node("r", "a/b.py"),
+            caller.clone(),
+            go_fn.clone(),
+        ];
+        let aliases = vec![mk_module_alias(
+            &id::file_id("r", "svc.py"),
+            "svc.py",
+            "x",
+            vec!["a/b.py".into(), "a/b/__init__.py".into()],
+        )];
+        let calls = vec![call(&caller.id, "svc.py", "run", "go", Some("x"))];
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == go_fn.id)
+            .expect("CALLS edge to a/b.py#go via dotted alias");
+        assert_eq!(e.props["resolution"], json!("exact"));
+        assert_eq!(e.props["confidence"], json!(1.0));
+    }
+
+    #[test]
+    fn module_alias_unknown_callee_returns_empty() {
+        // `import foo as f; f.missing()` where `foo.py` does NOT define `missing`
+        // → rung 1.5 fires on alias lookup, callee absent → empty (no CALLS edge).
+        // Hard-stop: does NOT fall through to name_match.
+        let caller = func_node("r", "svc.py", "run", 0);
+        // foo.py defines "bar" but NOT "missing"
+        let bar_fn = func_node("r", "foo.py", "bar", 0);
+        // "missing" also exists in another file to test hard-stop (no name_match fallthrough)
+        let missing_elsewhere = func_node("r", "other.py", "missing", 0);
+        let nodes = vec![
+            file_node("r", "svc.py"),
+            file_node("r", "foo.py"),
+            file_node("r", "other.py"),
+            caller.clone(),
+            bar_fn,
+            missing_elsewhere.clone(),
+        ];
+        let aliases = vec![mk_module_alias(
+            &id::file_id("r", "svc.py"),
+            "svc.py",
+            "f",
+            vec!["foo.py".into(), "foo/__init__.py".into()],
+        )];
+        let calls = vec![call(&caller.id, "svc.py", "run", "missing", Some("f"))];
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        // No CALLS edge at all: rung 1.5 hard-stops on miss (does not fall to name_match)
+        let calls_edges: Vec<&Edge> = edges.iter().filter(|e| e.typ == "CALLS").collect();
+        assert!(
+            calls_edges.is_empty(),
+            "known alias with unknown callee must produce NO CALLS edge (rung 1.5 hard-stop)"
+        );
+    }
+
+    #[test]
+    fn non_alias_attribute_call_falls_through_to_name_match() {
+        // `obj.method()` where `obj` is NOT a module alias → falls through to rungs 6/7
+        // and gets name_match/0.5 (or ambiguous) as before. No regression.
+        let caller = func_node("r", "svc.py", "run", 0);
+        let method_fn = func_node("r", "other.py", "method", 0);
+        let nodes = vec![caller.clone(), method_fn.clone()];
+        // No module aliases at all
+        let calls = vec![call(&caller.id, "svc.py", "run", "method", Some("obj"))];
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &[], "r");
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == method_fn.id)
+            .expect("attribute call to method falls through to name_match");
+        // Rungs 6/7: name_match/0.5 for a single match
+        assert_eq!(e.props["resolution"], json!("name_match"));
+        assert_eq!(e.props["confidence"], json!(0.5));
+    }
+
+    #[test]
+    fn self_method_not_intercepted_by_alias_rung() {
+        // `self.helper()` must be handled by rung 1 (self/cls guard fires BEFORE rung 1.5).
+        let m_caller = func_node("r", "m.py", "Svc.run", 1);
+        let m_callee = func_node("r", "m.py", "Svc.help", 1);
+        // Also add a module alias named "self" to prove rung 1 fires first
+        let nodes = vec![m_caller.clone(), m_callee.clone()];
+        let aliases = vec![mk_module_alias(
+            &id::file_id("r", "m.py"),
+            "m.py",
+            "self", // alias named "self" — should never match rung 1.5
+            vec!["some_module.py".into()],
+        )];
+        let calls = vec![call(&m_caller.id, "m.py", "Svc.run", "help", Some("self"))];
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let e = edges.iter().find(|e| e.typ == "CALLS").unwrap();
+        assert_eq!(
+            e.to, m_callee.id,
+            "self.helper resolved to same-class method"
+        );
+        assert_eq!(
+            e.props["resolution"],
+            json!("exact"),
+            "self method resolution is exact (rung 1)"
+        );
+    }
+
+    #[test]
+    fn chained_receiver_falls_through_to_name_match() {
+        // `a.b.bar()` → receiver is "a.b"; no module alias key matches "a.b"
+        // (keys are single identifiers). Falls through to rungs 6/7 unchanged.
+        let caller = func_node("r", "svc.py", "run", 0);
+        let bar_fn = func_node("r", "foo.py", "bar", 0);
+        let nodes = vec![caller.clone(), bar_fn.clone()];
+        // Module alias only for "a" (single-segment); "a.b" won't match rung 1.5
+        let aliases = vec![mk_module_alias(
+            &id::file_id("r", "svc.py"),
+            "svc.py",
+            "a",
+            vec!["foo.py".into()],
+        )];
+        // receiver is "a.b" (a chained receiver — not a single identifier)
+        let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("a.b"))];
+        let (edges, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        // "a.b" is not in module_aliases → rung 1.5 misses → falls to rungs 6/7
+        let e = edges
+            .iter()
+            .find(|e| e.typ == "CALLS" && e.to == bar_fn.id)
+            .expect("chained receiver falls through to name_match");
+        assert_eq!(
+            e.props["resolution"],
+            json!("name_match"),
+            "chained receiver attribute call uses name_match (rungs 6/7)"
+        );
+    }
+
+    #[test]
+    fn module_alias_resolution_is_deterministic() {
+        // Run twice with module aliases → byte-identical results.
+        let caller = func_node("r", "svc.py", "run", 0);
+        let bar_fn = func_node("r", "foo.py", "bar", 0);
+        let nodes = vec![
+            file_node("r", "svc.py"),
+            file_node("r", "foo.py"),
+            caller.clone(),
+            bar_fn.clone(),
+        ];
+        let aliases = vec![mk_module_alias(
+            &id::file_id("r", "svc.py"),
+            "svc.py",
+            "f",
+            vec!["foo.py".into(), "foo/__init__.py".into()],
+        )];
+        let calls = vec![call(&caller.id, "svc.py", "run", "bar", Some("f"))];
+        let (edges_a, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        let (edges_b, _) = resolve_full(&nodes, &[], &calls, &[], &aliases, "r");
+        assert_eq!(
+            edges_a, edges_b,
+            "module alias resolution must be deterministic"
         );
     }
 }
