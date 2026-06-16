@@ -71,9 +71,35 @@ export function bundleOpacity(
   return Math.min(1, Math.max(EDGE_OPACITY_FLOOR, boosted));
 }
 
-/** Node size: base + k·log(1 + degree). Cluster cores are larger. */
+/** Node size: base + k·log(1 + degree). Cluster cores are larger.
+ *  Clamped to [NODE_SIZE_MIN, NODE_SIZE_MAX] so hubs stand out but
+ *  nothing is enormous. */
+export const NODE_SIZE_MIN = 1.0;
+export const NODE_SIZE_MAX = 12.0;
+
 export function nodeSize(clusterKind: ClusterKind, degree: number): number {
   const base =
     clusterKind === "galaxy" ? 6 : clusterKind === "dir" ? 3.5 : clusterKind === "file" ? 2.6 : 1.4;
-  return base + 0.9 * Math.log(1 + degree);
+  const raw = base + 0.9 * Math.log(1 + degree);
+  return Math.min(NODE_SIZE_MAX, Math.max(NODE_SIZE_MIN, raw));
 }
+
+/** Metadata tables for the Legend panel (single source of truth). */
+export const EDGE_TYPE_META: { type: string; color: string; label: string }[] = [
+  { type: "CALLS",        color: "#ffd166", label: "Calls" },
+  { type: "IMPORTS",      color: "#6ea8ff", label: "Imports" },
+  { type: "INSTANTIATES", color: "#ef8aff", label: "Instantiates" },
+  { type: "IMPLEMENTS",   color: "#5fe0e0", label: "Implements" },
+  { type: "INHERITS",     color: "#7ce08a", label: "Inherits" },
+];
+
+export const NODE_KIND_META: { kind: string; color: string; label: string }[] = [
+  { kind: "galaxy",    color: "#ffffff", label: "Repo" },
+  { kind: "dir",       color: "#9aa7c7", label: "Directory" },
+  { kind: "file",      color: "#6ea8ff", label: "File" },
+  { kind: "Function",  color: "#ffe08a", label: "Function" },
+  { kind: "Class",     color: "#5fe0e0", label: "Class" },
+  { kind: "Interface", color: "#b98aff", label: "Interface" },
+  { kind: "Enum",      color: "#7ce08a", label: "Enum" },
+  { kind: "Variable",  color: "#9aa0a8", label: "Variable" },
+];
