@@ -59,6 +59,21 @@ export function DetailPanel() {
     return rows;
   }, [model, store.selected]);
 
+  function navigateToNode(id: string) {
+    const clusterKey = model.clusterOfNode.get(id) ?? id;
+    const chain = model.ancestors.get(clusterKey);
+    if (chain) {
+      for (const ak of chain) {
+        const c = model.byKey.get(ak);
+        if (c && c.children.length > 0 && !store.expanded.has(ak)) {
+          store.toggleExpand(ak);
+        }
+      }
+    }
+    store.select(id);
+    store.setFocusTarget(id);
+  }
+
   const columns = useMemo(
     () => [
       col.accessor("direction", { header: "dir" }),
@@ -149,7 +164,7 @@ export function DetailPanel() {
               {table.getRowModel().rows.map((row) => (
                 <tr
                   key={row.id}
-                  onClick={() => store.select(row.original.neighborId)}
+                  onClick={() => navigateToNode(row.original.neighborId)}
                   style={{ cursor: "pointer" }}
                 >
                   {row.getVisibleCells().map((cell) => (
