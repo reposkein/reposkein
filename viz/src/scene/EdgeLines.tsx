@@ -14,6 +14,12 @@ function galaxyOf(key: string): string {
   return parts[1] ?? key;
 }
 
+/** True if any element of `a` is in `b` (cheap set intersection test). */
+function setHasAny(a: Set<string>, b: Set<string>): boolean {
+  for (const x of a) if (b.has(x)) return true;
+  return false;
+}
+
 /** Relationship connections as a SINGLE additive LineSegments buffer
  *  (design §3.2 / §5). Raw edges are rolled up to the deepest currently-visible
  *  cluster representatives of their endpoints and AGGREGATED into per-pair
@@ -31,19 +37,37 @@ export function EdgeLines() {
   const geometry = useMemo(() => {
     const visible = visibleClusters(model, store.expanded);
 
-    // Apply edge type and confidence filters before bundling.
+    // Confidence-audit mode: show ONLY low-confidence edges so the resolver's
+    // guesses are visible. "ambiguous" → ambiguous only; "ambiguous+name" →
+    // also include name_match. Overrides the normal confidence/type filters.
+    const auditResolutions =
+      store.audit === "ambiguous"
+        ? new Set(["ambiguous"])
+        : store.audit === "ambiguous+name"
+        ? new Set(["ambiguous", "name_match"])
+        : null;
+
+    // Impact overlay: the set of node ids that participate (source + callers).
+    const impactSet = store.impact
+      ? new Set<string>([store.impact.sourceId, ...store.impact.impacted])
+      : null;
+
+    // Apply edge type / confidence / audit filters before bundling.
     const { edgeTypes, minConfidence } = store.filters;
-    const filteredModel =
-      edgeTypes.size > 0 || minConfidence > 0
-        ? {
-            ...model,
-            drawEdges: model.drawEdges.filter(
-              (e) =>
-                (edgeTypes.size === 0 || !edgeTypes.has(e.type)) &&
-                e.confidence >= minConfidence
-            ),
-          }
-        : model;
+    const needsFilter =
+      auditResolutions !== null || edgeTypes.size > 0 || minConfidence > 0;
+    const filteredModel = needsFilter
+      ? {
+          ...model,
+          drawEdges: model.drawEdges.filter((e) => {
+            if (auditResolutions) return auditResolutions.has(e.resolution);
+            return (
+              (edgeTypes.size === 0 || !edgeTypes.has(e.type)) &&
+              e.confidence >= minConfidence
+            );
+          }),
+        }
+      : model;
 
     const bundles = bundleEdges(filteredModel, visible);
 
@@ -75,6 +99,23 @@ export function EdgeLines() {
 
       let [r, g, bl] = edgeColor(b.dominantType);
       let a = bundleOpacity(b.bestResolution, b.count);
+
+      // Impact overlay: brighten bundles whose CALLS edges connect two members
+      // of the impact set (coral accent); dim everything else.
+      if (impactSet) {
+        const onImpactPath =
+          b.dominantType === "CALLS" &&
+          setHasAny(b.srcNodes, impactSet) &&
+          setHasAny(b.dstNodes, impactSet);
+        if (onImpactPath) {
+          r = 1.0;
+          g = 0.42;
+          bl = 0.32;
+          a = Math.min(1, a * 1.8);
+        } else {
+          a *= 0.08;
+        }
+      }
 
       // Hover focus: dim bundles not touching the hovered representative.
       if (hoveredRep) {
@@ -109,7 +150,7 @@ export function EdgeLines() {
     geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     return geo;
-  }, [model, store.expanded, hovered, store.filters]);
+  }, [model, store.expanded, hovered, store.filters, store.audit, store.impact]);
 
   const material = useMemo(
     () =>

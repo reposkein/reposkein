@@ -129,6 +129,8 @@ export function DetailPanel() {
         </div>
       )}
 
+      <ImpactControl />
+
       <Section title="Semantic summary">
         <SummaryBlock summary={rec.semanticSummary} stale={stale} />
       </Section>
@@ -179,6 +181,48 @@ export function DetailPanel() {
         )}
       </Section>
     </Shell>
+  );
+}
+
+/** Impact overlay toggle + counts. Computes transitive reverse-CALLS callers
+ *  of the selected node and the covering tests among them; highlights them in
+ *  the scene (coral = impacted, green = covering test) and dims the rest. */
+function ImpactControl() {
+  const store = useStore();
+  const active = store.impact !== null;
+  const impactedCount = store.impact?.impacted.size ?? 0;
+  const coveringCount = store.impact?.coveringTests.size ?? 0;
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        onClick={() => store.toggleImpact()}
+        title="Highlight transitive callers (reverse CALLS) and covering tests"
+        style={{
+          width: "100%",
+          padding: "5px 0",
+          borderRadius: 6,
+          background: active ? "rgba(255,107,82,0.22)" : "rgba(255,255,255,0.05)",
+          border: `1px solid ${active ? "#ff6b52" : "rgba(255,255,255,0.14)"}`,
+          color: active ? "#ffb9ab" : "rgba(255,255,255,0.75)",
+          cursor: "pointer",
+          fontSize: 12,
+          fontWeight: active ? 600 : 400,
+        }}
+      >
+        {active ? "Impact ON — click to clear" : "Impact"}
+      </button>
+      {active && (
+        <div style={{ display: "flex", gap: 8, marginTop: 6, fontSize: 11 }}>
+          <span style={{ color: "#ff8a73" }}>
+            ● {impactedCount} impacted
+          </span>
+          <span style={{ color: "#74ff8e" }}>
+            ● {coveringCount} covering test{coveringCount === 1 ? "" : "s"}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
