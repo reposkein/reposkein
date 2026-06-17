@@ -6,6 +6,26 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-17
+
+Cleanup / polish pass (the low-value backlog from the code audit). No behavior change.
+
+### Changed
+
+- **Viewer bundle is code-split** into `three` / `react-three` / `tanstack` vendor
+  chunks — smaller initial app chunk, faster first paint (static-export relative
+  paths preserved).
+- Removed dead code (`indexerBinPath`); recorded the intentional decision that
+  `impact`/`get_context_profile` neighborhoods are **CALLS-only** (`INSTANTIATES`
+  edges live in the graph for `read_cypher`/visualization but aren't traversed —
+  both backends agree); `view` now warns instead of silently using a placeholder
+  repo id; clarified the cross-repo-edge parity comments.
+
+### Internal
+
+- Added a 3-way merge property matrix (structure × summary divergence) locking the
+  JSONL merge-driver behavior; guarded the viewer screenshot capture singleton.
+
 ## [0.2.3] - 2026-06-17
 
 A hardening pass from a four-area code audit — correctness, robustness, and
