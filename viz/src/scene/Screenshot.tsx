@@ -25,6 +25,14 @@ export function CaptureBridge({ repoId }: { repoId: string | undefined }) {
   const { gl, scene, camera } = useThree();
 
   useEffect(() => {
+    // Defensive: only one CaptureBridge should be mounted at a time. If a
+    // second clobbers the singleton, the HUD button would silently drive the
+    // wrong (or a stale) renderer — warn in dev so it's caught early.
+    if (import.meta.env.DEV && captureFn !== null) {
+      console.warn(
+        "[Screenshot] captureFn already registered — a second CaptureBridge is mounted; the screenshot HUD will target the most recent one.",
+      );
+    }
     captureFn = () => {
       try {
         // Force a fresh render so the drawing buffer reflects the latest frame
