@@ -3,7 +3,7 @@ import { type ThreeEvent, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { useStore } from "../state/store";
 import { representativeFor, visibleClusters } from "../data/clientModel";
-import { nodeColor, nodeSize, BRAND_RGB } from "./encoding";
+import { nodeColor, nodeSize, BRAND_RGB, applyNodeFloor } from "./encoding";
 import { isTestNode } from "../data/classify";
 import { TYPE_EMPHASIS_KINDS } from "../data/lens";
 import { diffExpanded, easeOutCubic, MORPH_MS } from "./supernova";
@@ -209,15 +209,27 @@ export function StarField() {
       r *= gain;
       g *= gain;
       b *= gain;
-      colors[i * 3] = r;
-      colors[i * 3 + 1] = g;
-      colors[i * 3 + 2] = b;
-      sizes[i] = nodeSize(c.kind, deg);
+      // Emissive floor so a dimmed star never reaches pure black (stays a faint
+      // point of light under the web), preserving hue.
+      const [fr, fg, fb] = applyNodeFloor(r, g, b);
+      colors[i * 3] = fr;
+      colors[i * 3 + 1] = fg;
+      colors[i * 3 + 2] = fb;
+      // Per-vertex size (importance) with a focus bump — the focused node reads
+      // visibly larger. This feeds the REAL aSize attribute (see the material's
+      // onBeforeCompile), so importance sizing + the bump are actually applied.
+      const bump =
+        key === selectedRep || key === hoveredRep
+          ? 1.6
+          : focusReps?.has(key)
+          ? 1.25
+          : 1;
+      sizes[i] = nodeSize(c.kind, deg) * bump;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+    geo.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
     return { geometry: geo, keysAt };
   }, [visible, model, highlightKeys, store.filters, impactReps, focusReps, testReps, store.emphasis, selectedRep, hoveredRep]);
 
@@ -377,7 +389,10 @@ export function StarField() {
         t = 1 - Math.pow(1 - t, 3);
       }
       mat.opacity = 0.95 * t;
-      mat.size = 3 * (0.3 + 0.7 * t);
+      // Entrance/morph is a UNIFORM size multiplier that COMPOSES with the
+      // per-vertex aSize (gl_PointSize = size * aSize) — it must NOT overwrite
+      // the per-vertex sizing. Resting value 1.0 → gl_PointSize == aSize.
+      mat.size = 0.3 + 0.7 * t;
     }
 
     const now = performance.now();
@@ -497,10 +512,11 @@ export function StarField() {
         onPointerMove={handleMove}
         onPointerOut={handleOut}
         raycast={pointsRaycast}
+        renderOrder={10}
       >
         <pointsMaterial
           ref={materialRef}
-          size={3}
+          size={1}
           sizeAttenuation
           vertexColors
           transparent
@@ -508,6 +524,7 @@ export function StarField() {
           depthWrite={false}
           blending={THREE.AdditiveBlending}
           map={glow}
+          onBeforeCompile={starSizeShader}
         />
       </points>
       {/* Transient departing stars (collapse recession). Non-interactive; the
@@ -526,6 +543,19 @@ export function StarField() {
       </points>
     </>
   );
+}
+
+/** onBeforeCompile hook that makes the per-vertex `aSize` attribute REAL: the
+ *  stock PointsMaterial vertex shader sets `gl_PointSize = size;` from the scalar
+ *  uniform alone (so a per-vertex size attribute is silently ignored). We
+ *  declare `aSize` and MULTIPLY it into gl_PointSize, so importance sizing and
+ *  the focus size-bump actually render while the per-frame `size` uniform stays
+ *  a global entrance/morph multiplier that composes (gl_PointSize = size·aSize).
+ *  Mirrors the working pattern in NebulaHalos.tsx. */
+function starSizeShader(shader: THREE.WebGLProgramParametersWithUniforms): void {
+  shader.vertexShader = shader.vertexShader
+    .replace("uniform float size;", "uniform float size;\nattribute float aSize;")
+    .replace("gl_PointSize = size;", "gl_PointSize = size * aSize;");
 }
 
 /** A soft radial-gradient sprite so points look like round glowing stars. */
