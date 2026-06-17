@@ -6,6 +6,18 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-17
+
+### Fixed
+
+- **`reposkein-mcp` now starts when launched via a symlink** (global install /
+  container / MCP registry such as Glama). The entry-point guard compared
+  `import.meta.url` against `process.argv[1]` — but a global install runs the bin
+  through a symlink (e.g. `/usr/bin/reposkein-mcp`), whose path never equals the
+  resolved module path, so `main()` never ran and the server exited immediately
+  ("Connection closed"). The guard now resolves the symlink via `realpathSync`.
+  Together with 0.2.1's shebang, the globally-installed bin launches correctly.
+
 ## [0.2.1] - 2026-06-17
 
 ### Fixed

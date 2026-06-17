@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
 import { runDoctor } from "./cli/doctor.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -234,8 +234,21 @@ export async function main(): Promise<void> {
   await server.connect(transport);
 }
 
-// Run when invoked as the binary (not when imported by tests).
-if (import.meta.url === pathToFileURL(process.argv[1]!).href) {
+// Run when invoked as the binary (not when imported by tests). Global installs
+// expose the bin via a SYMLINK (e.g. /usr/bin/reposkein-mcp), so argv[1] (the
+// symlink) won't equal import.meta.url (the resolved module path) unless we
+// realpath it first — otherwise `main()` never runs and the server exits
+// immediately (mcp-proxy then reports "Connection closed").
+function invokedAsBin(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+if (invokedAsBin()) {
   const sub = process.argv[2];
   if (sub === "init") {
     const rest = process.argv.slice(3);
