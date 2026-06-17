@@ -5,10 +5,12 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  createHashHistory,
   RouterProvider,
   Outlet,
 } from "@tanstack/react-router";
 import { Root } from "./routes/Root";
+import { isStaticMode } from "./data/staticMode";
 
 const queryClient = new QueryClient();
 
@@ -28,7 +30,15 @@ const indexRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([indexRoute]);
-const router = createRouter({ routeTree });
+// Static export (`view --export`) is hosted at an unknown subpath (e.g. GitHub
+// Pages `/<repo>/`), where browser-history path routing wouldn't match `/` and
+// the router would render Not Found. Hash history is path-independent, so the
+// baked site works at any subpath / from file://. The local `view` server is
+// served at `/`, so it keeps clean browser-history URLs.
+const router = createRouter({
+  routeTree,
+  history: isStaticMode() ? createHashHistory() : undefined,
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
