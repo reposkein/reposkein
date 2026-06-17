@@ -278,6 +278,15 @@ function HeaderBar() {
           {store.model.repoId} · {counts?.nodes ?? 0} nodes · {counts?.edges ?? 0} edges
         </div>
       )}
+      {store.model && store.edgeStats.total > 0 && (
+        <div
+          style={{ fontSize: 11, opacity: 0.6, marginTop: 1 }}
+          title="Edge bundles currently drawn / total bundles before the render cap"
+        >
+          showing {store.edgeStats.drawn} of {store.edgeStats.total} connections
+          {store.edgeStats.drawn < store.edgeStats.total ? " (capped)" : ""}
+        </div>
+      )}
       <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>
         scroll = zoom · drag = orbit · click cluster = expand · click star = inspect · Esc / click space = back
       </div>

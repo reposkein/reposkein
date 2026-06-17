@@ -165,6 +165,21 @@ export function FilterHUD() {
             style={{ width: "100%", marginBottom: 8, accentColor: "#61afef" }}
           />
 
+          {/* Edge bundling strength: 1 = curves hug the hierarchy, 0 = straight
+              chords (reproduces the pre-bundling render). */}
+          <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4 }}>
+            EDGE BUNDLING: {store.bundleBeta.toFixed(2)}
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={store.bundleBeta}
+            onChange={(e) => store.setBundleBeta(parseFloat(e.target.value))}
+            style={{ width: "100%", marginBottom: 8, accentColor: "#61afef" }}
+          />
+
           {/* Temporal-coupling overlay (best-effort git co-change). Additive;
               degrades gracefully when no temporal data is available. */}
           <div style={{ fontSize: 10, opacity: 0.5, margin: "4px 0" }}>OVERLAYS</div>
