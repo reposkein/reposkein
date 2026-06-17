@@ -1,8 +1,14 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
-import { bundleEdges, filterDrawEdges, representativeFor, visibleClusters } from "../data/clientModel";
-import { edgeColor, bundleOpacity } from "./encoding";
+import {
+  selectVisibleEdges,
+  repOf,
+  hoveredRepOf,
+  focusRepsOf,
+} from "../data/clientModel";
+import { edgeColor, bundleOpacity, adaptiveEdgeScale } from "./encoding";
+import { buildBundledGeometry } from "./bundleGeometry";
 
 /** Extracts the galaxy prefix from a cluster key (for cross-repo detection).
  *  Cluster keys look like "galaxy:repoId", "dir:repoId:path", etc.
@@ -21,134 +27,107 @@ function setHasAny(a: Set<string>, b: Set<string>): boolean {
 }
 
 /** Relationship connections as a SINGLE additive LineSegments buffer
- *  (design §3.2 / §5). Raw edges are rolled up to the deepest currently-visible
- *  cluster representatives of their endpoints and AGGREGATED into per-pair
- *  bundles, so cluster↔cluster connections render at EVERY LOD — including the
- *  top level where only galaxy/dir cores are visible (the initial view shows a
- *  connected constellation). Self-loops are suppressed. Color encodes the
- *  bundle's dominant type; opacity encodes confidence/resolution with a
- *  minimum floor so connections are always visible. On hover, bundles not
- *  incident to the hovered representative are dimmed. One draw call. */
+ *  (design §1). ONE deterministic select→style→route pass: selectVisibleEdges
+ *  rolls raw edges up to the deepest currently-visible reps with the symbol→file
+ *  LOD clamp (so the default view is clean file-level arcs, not a hairball), a
+ *  fixed-order style pass composes LOD length falloff, impact, focus/incidence,
+ *  cross-repo brighten and adaptive global opacity, and buildBundledGeometry
+ *  routes each bundle along its hierarchy LCA path as a Holten-bundled curve.
+ *  bundleBeta=0 reproduces today's straight lines. One draw call. */
 export function EdgeLines() {
   const store = useStore();
   const model = store.model!;
   const hovered = store.hovered;
 
-  const geometry = useMemo(() => {
-    const visible = visibleClusters(model, store.expanded);
+  const { geometry, drawn, total } = useMemo(() => {
+    // STAGE A — selection + LOD roll-up. activeNodes (selected ∪ hovered ∪
+    // focus.nodes) make their files render at symbol granularity.
+    const activeNodes = [store.selected, hovered, ...(store.focus?.nodes ?? [])].filter(
+      Boolean,
+    ) as string[];
+    const { bundles, visible, total } = selectVisibleEdges(model, {
+      expanded: store.expanded,
+      filters: {
+        edgeTypes: store.filters.edgeTypes,
+        minConfidence: store.filters.minConfidence,
+        audit: store.audit,
+      },
+      activeNodes,
+    });
 
-    // Impact overlay: the set of node ids that participate (source + callers).
+    // Active rep set (incidence) + focusReps (wholly-inside) — via the shared
+    // rep helpers (no duplicated chain walks).
+    const selRep = store.selected ? repOf(model, store.selected, visible) : null;
+    const hovRep = hovered ? hoveredRepOf(model, hovered, visible) : null;
+    const focusReps = focusRepsOf(model, store.focus, visible);
+    const active = new Set<string>();
+    if (selRep) active.add(selRep);
+    if (hovRep) active.add(hovRep);
+    if (focusReps) for (const k of focusReps) active.add(k);
+    const focusActive = active.size > 0;
     const impactSet = store.impact
       ? new Set<string>([store.impact.sourceId, ...store.impact.impacted])
       : null;
 
-    // Neighborhood focus: visible reps inside the focused region. Bundles wholly
-    // inside it stay bright; everything else dims.
-    let focusReps: Set<string> | null = null;
-    if (store.focus) {
-      focusReps = new Set<string>();
-      for (const id of store.focus.nodes) {
-        const r = representativeFor(model, id, visible);
-        if (r) focusReps.add(r);
-      }
-    }
+    type Plan = { srcKey: string; dstKey: string; r: number; g: number; b: number; a: number };
+    const plan: Plan[] = [];
+    for (const bnd of bundles) {
+      if (!model.indexByKey.has(bnd.srcKey) || !model.indexByKey.has(bnd.dstKey)) continue;
+      let [r, g, b] = edgeColor(bnd.dominantType);
+      let a = bundleOpacity(bnd.bestResolution, bnd.count) * bnd.lengthAtten; // (1) LOD falloff
 
-    // Apply edge type / confidence / audit filters before bundling (shared
-    // gate so flow particles render on EXACTLY the same edges).
-    const filteredModel = filterDrawEdges(model, {
-      edgeTypes: store.filters.edgeTypes,
-      minConfidence: store.filters.minConfidence,
-      audit: store.audit,
-    });
-
-    const bundles = bundleEdges(filteredModel, visible);
-
-    // Deepest visible representative of the hovered node (if any), used to
-    // brighten incident bundles and dim the rest.
-    const hoveredKey = hovered ? model.clusterOfNode.get(hovered) ?? hovered : null;
-    let hoveredRep: string | null = null;
-    if (hoveredKey) {
-      const chain = model.ancestors.get(hoveredKey);
-      if (!chain) {
-        hoveredRep = visible.has(hoveredKey) ? hoveredKey : null;
-      } else {
-        for (let i = chain.length - 1; i >= 0; i--) {
-          if (visible.has(chain[i]!)) {
-            hoveredRep = chain[i]!;
-            break;
-          }
-        }
-      }
-    }
-
-    const positions: number[] = [];
-    const colors: number[] = [];
-
-    for (const b of bundles) {
-      const si = model.indexByKey.get(b.srcKey);
-      const di = model.indexByKey.get(b.dstKey);
-      if (si === undefined || di === undefined) continue;
-
-      let [r, g, bl] = edgeColor(b.dominantType);
-      let a = bundleOpacity(b.bestResolution, b.count);
-
-      // Impact overlay: brighten bundles whose CALLS edges connect two members
-      // of the impact set (coral accent); dim everything else.
       if (impactSet) {
-        const onImpactPath =
-          b.dominantType === "CALLS" &&
-          setHasAny(b.srcNodes, impactSet) &&
-          setHasAny(b.dstNodes, impactSet);
-        if (onImpactPath) {
-          r = 1.0;
+        // (2) impact overlay
+        const onPath =
+          bnd.dominantType === "CALLS" &&
+          setHasAny(bnd.srcNodes, impactSet) &&
+          setHasAny(bnd.dstNodes, impactSet);
+        if (onPath) {
+          r = 1;
           g = 0.42;
-          bl = 0.32;
+          b = 0.32;
           a = Math.min(1, a * 1.8);
         } else {
           a *= 0.08;
         }
       }
-
-      // Neighborhood focus: dim bundles not wholly inside the focused region.
-      if (focusReps) {
-        const inside = focusReps.has(b.srcKey) && focusReps.has(b.dstKey);
-        a = inside ? Math.min(1, a * 1.4) : a * 0.08;
+      if (focusActive) {
+        // (3) focus + context
+        const inside = focusReps ? focusReps.has(bnd.srcKey) && focusReps.has(bnd.dstKey) : false;
+        const incident = active.has(bnd.srcKey) || active.has(bnd.dstKey);
+        if (inside) a = Math.min(1, a * 1.5);
+        else if (incident) a = Math.min(1, a * 1.3);
+        else a *= 0.06; // context: dimmed, not gone
       }
-
-      // Hover focus: dim bundles not touching the hovered representative.
-      if (hoveredRep) {
-        const incident = b.srcKey === hoveredRep || b.dstKey === hoveredRep;
-        a = incident ? Math.min(1, a * 1.6) : a * 0.12;
-      }
-
-      // Cross-repo bundles (galaxies differ) get a brighter colour to stand out.
-      if (galaxyOf(b.srcKey) !== galaxyOf(b.dstKey)) {
+      if (galaxyOf(bnd.srcKey) !== galaxyOf(bnd.dstKey)) {
+        // (4) cross-repo brighten
         r = Math.min(1, r * 1.8);
         g = Math.min(1, g * 1.8);
-        bl = Math.min(1, bl * 1.8);
+        b = Math.min(1, b * 1.8);
       }
-
-      // Pre-multiply color by opacity for additive blending.
-      const cr = r * a;
-      const cg = g * a;
-      const cb = bl * a;
-
-      positions.push(
-        model.positions[si * 3]!,
-        model.positions[si * 3 + 1]!,
-        model.positions[si * 3 + 2]!,
-        model.positions[di * 3]!,
-        model.positions[di * 3 + 1]!,
-        model.positions[di * 3 + 2]!
-      );
-      colors.push(cr, cg, cb, cr, cg, cb);
+      plan.push({ srcKey: bnd.srcKey, dstKey: bnd.dstKey, r, g, b, a });
     }
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-    return geo;
-  }, [model, store.expanded, hovered, store.filters, store.audit, store.impact, store.focus]);
+    // (5) adaptive global opacity over the final drawn count.
+    const k = adaptiveEdgeScale(plan.length);
+    const geo = buildBundledGeometry(model, plan, store.bundleBeta, k);
+    return { geometry: geo, drawn: plan.length, total };
+  }, [
+    model,
+    store.expanded,
+    store.selected,
+    hovered,
+    store.filters,
+    store.audit,
+    store.impact,
+    store.focus,
+    store.bundleBeta,
+  ]);
+
+  // Post-commit (never during render): publish the "showing N of M" readout.
+  useEffect(() => {
+    store.setEdgeStats({ drawn, total });
+  }, [drawn, total]); // intentional: only republish when the stats change
 
   const material = useMemo(
     () =>
@@ -161,5 +140,5 @@ export function EdgeLines() {
     []
   );
 
-  return <lineSegments geometry={geometry} material={material} />;
+  return <lineSegments geometry={geometry} material={material} renderOrder={5} />;
 }
