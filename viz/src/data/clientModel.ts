@@ -28,6 +28,10 @@ export interface ClientModel {
   /** node id -> the deepest 'file' ancestor cluster key, or absent. Built once
    *  from the (sorted) tree so the LOD roll-up's fileOf is O(1) over edges. */
   fileByNode: Map<string, string>;
+  /** node id -> the set of node ids it shares a relationship edge with (BOTH
+   *  directions). Built ONCE per model so the hover 1-hop highlight is O(degree)
+   *  instead of an O(all-edges) scan per pointer-move. */
+  neighborsByNode: Map<string, Set<string>>;
 }
 
 export function fromWorker(r: WorkerResult): ClientModel {
@@ -89,6 +93,22 @@ export function fromWorker(r: WorkerResult): ClientModel {
     }
   }
 
+  // node id -> set of relationship-edge neighbors (both directions). Built once
+  // here so the hover 1-hop highlight never re-scans the full edge list.
+  const neighborsByNode = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    let s = neighborsByNode.get(a);
+    if (!s) {
+      s = new Set<string>();
+      neighborsByNode.set(a, s);
+    }
+    s.add(b);
+  };
+  for (const e of r.drawEdges) {
+    link(e.from, e.to);
+    link(e.to, e.from);
+  }
+
   return {
     repoId: r.repoId,
     repoRoot: r.repoRoot,
@@ -105,6 +125,7 @@ export function fromWorker(r: WorkerResult): ClientModel {
     ancestors,
     sceneDiag,
     fileByNode,
+    neighborsByNode,
   };
 }
 
@@ -190,6 +211,68 @@ export function fileOf(model: ClientModel, nodeId: string): string | null {
   return model.fileByNode.get(nodeId) ?? null;
 }
 
+/** Visible cluster representatives that should stay BRIGHT while hovering a
+ *  node: the hovered node's own rep + the reps of its 1-hop relationship
+ *  neighbors. O(degree) via the precomputed `neighborsByNode` adjacency (NOT a
+ *  per-hover scan over all edges). Returns null when nothing is hovered. */
+export function hoverHighlightReps(
+  model: ClientModel,
+  hoveredId: string | null,
+  visible: Set<string>,
+): Set<string> | null {
+  if (!hoveredId) return null;
+  const set = new Set<string>();
+  const self = representativeFor(model, hoveredId, visible);
+  if (self) set.add(self);
+  const neighbors = model.neighborsByNode.get(hoveredId);
+  if (neighbors) {
+    for (const nid of neighbors) {
+      const r = representativeFor(model, nid, visible);
+      if (r) set.add(r);
+    }
+  }
+  return set;
+}
+
+// --- Shared expand-reveal helpers ------------------------------------------
+// The "open every expandable cluster on a node's ancestor chain so the node
+// surfaces as a visible representative" walk was duplicated across the store
+// reducer (expandToReveal), TourController.revealAncestors, Root's keyboard-nav
+// + URL-node effects, and Breadcrumb.navigateToCrumb. These pure helpers are
+// the single source of truth: they return the cluster keys that should be
+// EXPANDED, and callers decide how to apply them (a fresh Set for the reducer,
+// or a sequence of toggleExpand dispatches for the imperative UI walks).
+
+/** The cluster keys on a node id's ancestor chain that are expandable
+ *  (children.length > 0), in root→self order. Walks `clusterOfNode` →
+ *  `ancestors` once; returns [] for an unknown node. Pure. */
+export function revealChainFor(model: ClientModel, nodeId: string): string[] {
+  const clusterKey = model.clusterOfNode.get(nodeId) ?? nodeId;
+  const chain = model.ancestors.get(clusterKey);
+  if (!chain) return [];
+  const out: string[] = [];
+  for (const ak of chain) {
+    const c = model.byKey.get(ak);
+    if (c && c.children.length > 0) out.push(ak);
+  }
+  return out;
+}
+
+/** Returns a NEW expanded set with every expandable ancestor cluster of each
+ *  node in `nodeIds` opened, so the highlighted members surface as visible
+ *  reps. The pure form used by the store reducer (impact / focus overlays). */
+export function expandToReveal(
+  model: ClientModel,
+  expanded: Set<string>,
+  nodeIds: Iterable<string>,
+): Set<string> {
+  const next = new Set(expanded);
+  for (const id of nodeIds) {
+    for (const ak of revealChainFor(model, id)) next.add(ak);
+  }
+  return next;
+}
+
 /** One rolled-up connection between two currently-visible cluster
  *  representatives (design §3.2). Aggregates every raw relationship edge that
  *  maps to the same `(srcKey, dstKey)` pair so cluster↔cluster bundles render
@@ -246,63 +329,9 @@ export function filterDrawEdges<M extends { drawEdges: DrawEdge[] }>(
   };
 }
 
+/** Resolution strength ranks (exact > name_match > ambiguous): picks a
+ *  bundle's strongest member resolution during roll-up. */
 const RES_RANK: Record<string, number> = { exact: 3, name_match: 2, ambiguous: 1 };
-
-/** Roll every relationship edge up to its visible cluster representatives and
- *  aggregate into per-pair bundles. Self-loops (both endpoints in the same
- *  collapsed cluster) are dropped. Pure & deterministic given `visible`. */
-export function bundleEdges(model: ClientModel, visible: Set<string>): EdgeBundle[] {
-  const byPair = new Map<string, EdgeBundle>();
-  const typeCounts = new Map<string, Map<string, number>>();
-
-  for (const e of model.drawEdges) {
-    const srcKey = representativeFor(model, e.from, visible);
-    const dstKey = representativeFor(model, e.to, visible);
-    if (!srcKey || !dstKey || srcKey === dstKey) continue; // suppress self-loops
-    const pairKey = `${srcKey} ${dstKey}`;
-
-    let b = byPair.get(pairKey);
-    if (!b) {
-      b = {
-        srcKey,
-        dstKey,
-        count: 0,
-        dominantType: e.type,
-        bestResolution: e.resolution,
-        srcNodes: new Set<string>(),
-        dstNodes: new Set<string>(),
-      };
-      byPair.set(pairKey, b);
-      typeCounts.set(pairKey, new Map());
-    }
-    b.count++;
-    b.srcNodes.add(e.from);
-    b.dstNodes.add(e.to);
-    if (RES_RANK[e.resolution]! > RES_RANK[b.bestResolution]!) b.bestResolution = e.resolution;
-
-    const tc = typeCounts.get(pairKey)!;
-    tc.set(e.type, (tc.get(e.type) ?? 0) + 1);
-  }
-
-  // Resolve dominant type per bundle (deterministic: highest count, then name).
-  for (const [pairKey, b] of byPair) {
-    const tc = typeCounts.get(pairKey)!;
-    let best = b.dominantType;
-    let bestN = -1;
-    for (const [t, n] of [...tc.entries()].sort((a, c) => (a[0] < c[0] ? -1 : 1))) {
-      if (n > bestN) {
-        bestN = n;
-        best = t;
-      }
-    }
-    b.dominantType = best;
-  }
-
-  // Deterministic emission order.
-  return [...byPair.values()].sort((a, b) =>
-    a.srcKey === b.srcKey ? (a.dstKey < b.dstKey ? -1 : 1) : a.srcKey < b.srcKey ? -1 : 1
-  );
-}
 
 // --- Unified edge selection + LOD roll-up (design §1.1) --------------------
 
@@ -347,9 +376,10 @@ function lodRepresentativeFor(
   return rep; // fallback: file not visible, keep symbol
 }
 
-/** The unified deterministic edge-selection pass (design §1.1). Subsumes
- *  `bundleEdges` with the symbol→file LOD clamp + length attenuation + a hard
- *  bundle cap. Pure & byte-stable given identical inputs.
+/** The unified deterministic edge-selection pass (design §1.1) — the SINGLE
+ *  edge roll-up. Rolls raw edges up to their visible cluster reps and aggregates
+ *  into per-pair bundles, adding the symbol→file LOD clamp + length attenuation
+ *  + a hard bundle cap. Pure & byte-stable given identical inputs.
  *
  *  Returns `drawn` bundles (post-cap, sorted) and `total` (PRE-cap count) so the
  *  HUD can show "N of M". */
@@ -446,7 +476,7 @@ export function selectVisibleEdges(
   const kept = sorted.length > MAX_BUNDLES ? sorted.slice(0, MAX_BUNDLES) : sorted;
 
   // Re-sort the kept set by (srcKey, dstKey) for a stable render/buffer order
-  // (matches bundleEdges' emission order so beta=0 reproduces today's render).
+  // (so beta=0 reproduces the pre-bundling straight-line render).
   kept.sort((a, b) =>
     a.srcKey === b.srcKey ? (a.dstKey < b.dstKey ? -1 : 1) : a.srcKey < b.srcKey ? -1 : 1,
   );

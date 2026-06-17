@@ -124,6 +124,11 @@ export function EdgeLines() {
     store.bundleBeta,
   ]);
 
+  // Dispose the previous geometry when the memo recomputes (deps change). r3f
+  // does NOT auto-dispose a manually `new`'d BufferGeometry, so without this the
+  // old GPU buffer leaks on every expand / filter / hover-driven rebuild.
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
   // Post-commit (never during render): publish the "showing N of M" readout.
   useEffect(() => {
     store.setEdgeStats({ drawn, total });
@@ -139,6 +144,9 @@ export function EdgeLines() {
       }),
     []
   );
+  // Material is memoized with empty deps (built once), but dispose it on unmount
+  // so its GPU program isn't leaked when the component goes away.
+  useEffect(() => () => material.dispose(), [material]);
 
   return <lineSegments geometry={geometry} material={material} renderOrder={5} />;
 }

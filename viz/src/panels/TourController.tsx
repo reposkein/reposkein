@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { buildTour, type TourStop } from "../data/tour";
+import { tourExpandKeys } from "../data/tourApply";
 import { BRAND } from "../scene/encoding";
 
 /** Dwell (ms) parked on each stop before auto-advancing while playing. Tuned a
@@ -46,17 +47,13 @@ export function TourController() {
       if (stop.collapsePrevious) store.resetExpansion();
       // 2. LENS — per-stop single lens (no fitNonce bump → won't yank the camera).
       store.setLens(stop.lens);
-      // 3. EXPAND (bounded). Module: open expandKeys one level (to files).
-      //    Node: reveal only the focus node's ancestor chain.
-      if (stop.kind === "module") {
-        for (const key of stop.expandKeys) {
-          const c = model.byKey.get(key);
-          if (c && c.children.length > 0 && !store.expanded.has(key)) {
-            store.toggleExpand(key);
-          }
-        }
-      } else if (stop.focusNodeId) {
-        revealAncestors(model, store, stop.focusNodeId);
+      // 3. EXPAND (bounded). The keys are computed against the INTENDED post-reset
+      //    expansion (resetExpansion sets expanded := {root}, but store.expanded
+      //    here is still the stale pre-reset render snapshot) — see tourExpandKeys.
+      //    Module: open expandKeys one level (files). Node: reveal the focus
+      //    node's ancestor chain. Each returned key is a real state change.
+      for (const key of tourExpandKeys(model, stop, store.expanded)) {
+        store.toggleExpand(key);
       }
       // 4. FOCUS / ISOLATE — select strictly before toggleFocus.
       if (stop.focusNodeId) {
@@ -265,24 +262,6 @@ export function TourController() {
       </div>
     </>
   );
-}
-
-/** Expand every cluster on a node's ancestor chain so it surfaces as a visible
- *  representative (mirrors the keyboard-nav reveal in Root/store). */
-function revealAncestors(
-  model: NonNullable<ReturnType<typeof useStore>["model"]>,
-  store: ReturnType<typeof useStore>,
-  nodeId: string,
-): void {
-  const clusterKey = model.clusterOfNode.get(nodeId) ?? nodeId;
-  const chain = model.ancestors.get(clusterKey);
-  if (!chain) return;
-  for (const ak of chain) {
-    const c = model.byKey.get(ak);
-    if (c && c.children.length > 0 && !store.expanded.has(ak)) {
-      store.toggleExpand(ak);
-    }
-  }
 }
 
 function TourBtn({

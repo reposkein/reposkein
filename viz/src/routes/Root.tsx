@@ -22,6 +22,7 @@ import { MinimapPanel } from "../panels/MinimapPanel";
 import { TourController } from "../panels/TourController";
 import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
+import { revealChainFor } from "../data/clientModel";
 import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
 
 export function Root() {
@@ -86,15 +87,8 @@ function View() {
       const next = pickNeighbor(model.drawEdges, store.selected, dir);
       if (!next) return;
       // Reveal (expand ancestors) → select → fly to it.
-      const clusterKey = model.clusterOfNode.get(next) ?? next;
-      const chain = model.ancestors.get(clusterKey);
-      if (chain) {
-        for (const ak of chain) {
-          const c = model.byKey.get(ak);
-          if (c && c.children.length > 0 && !store.expanded.has(ak)) {
-            store.toggleExpand(ak);
-          }
-        }
+      for (const ak of revealChainFor(model, next)) {
+        if (!store.expanded.has(ak)) store.toggleExpand(ak);
       }
       store.select(next);
       store.setFocusTarget(next);
@@ -110,15 +104,8 @@ function View() {
     const model = store.model;
     const id = nodeFromUrl;
     if (!model.records.has(id)) return; // unknown id, ignore
-    const clusterKey = model.clusterOfNode.get(id) ?? id;
-    const chain = model.ancestors.get(clusterKey);
-    if (chain) {
-      for (const ak of chain) {
-        const c = model.byKey.get(ak);
-        if (c && c.children.length > 0 && !store.expanded.has(ak)) {
-          store.toggleExpand(ak);
-        }
-      }
+    for (const ak of revealChainFor(model, id)) {
+      if (!store.expanded.has(ak)) store.toggleExpand(ak);
     }
     store.select(id);
     store.setFocusTarget(id);
@@ -326,13 +313,11 @@ function Breadcrumb() {
     // collapse anything deeper by toggling off.
     const chainIdx = chain.indexOf(key);
     if (chainIdx === -1) return;
-    // Expand all ancestors up to this key.
-    for (let i = 0; i <= chainIdx; i++) {
-      const k = chain[i]!;
-      const c = model.byKey.get(k);
-      if (c && c.children.length > 0 && !store.expanded.has(k)) {
-        store.toggleExpand(k);
-      }
+    // Expand all expandable ancestors up to (and including) this crumb. The
+    // crumb's own reveal chain IS root→crumb's expandable keys (the crumb is an
+    // ancestor of the selected node), so the shared helper gives the same set.
+    for (const k of revealChainFor(model, key)) {
+      if (!store.expanded.has(k)) store.toggleExpand(k);
     }
     // Collapse any expanded clusters deeper than chainIdx.
     for (const expandedKey of store.expanded) {

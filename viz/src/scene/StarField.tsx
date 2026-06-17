@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { type ThreeEvent, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { useStore } from "../state/store";
-import { representativeFor, visibleClusters } from "../data/clientModel";
+import { representativeFor, visibleClusters, hoverHighlightReps } from "../data/clientModel";
 import { nodeColor, nodeSize, BRAND_RGB, applyNodeFloor } from "./encoding";
 import { isTestNode } from "../data/classify";
 import { TYPE_EMPHASIS_KINDS } from "../data/lens";
 import { diffExpanded, easeOutCubic, MORPH_MS } from "./supernova";
+import { radialSprite, STAR_GLOW } from "./sprites";
 import type { RGB } from "./encoding";
 
 /** Accent colors for the impact overlay (design: impacted vs covering tests).
@@ -46,25 +47,12 @@ export function StarField() {
   );
 
   // Visible representatives that should stay BRIGHT while hovering: the hovered
-  // node's representative + the representatives of its 1-hop neighbors.
-  const highlightKeys = useMemo(() => {
-    if (!hovered) return null;
-    const visibleSet = new Set(visible);
-    const repOf = (nodeId: string) => representativeFor(model, nodeId, visibleSet);
-    const set = new Set<string>();
-    const self = repOf(hovered);
-    if (self) set.add(self);
-    for (const e of model.drawEdges) {
-      if (e.from === hovered) {
-        const r = repOf(e.to);
-        if (r) set.add(r);
-      } else if (e.to === hovered) {
-        const r = repOf(e.from);
-        if (r) set.add(r);
-      }
-    }
-    return set;
-  }, [hovered, model, visible]);
+  // node's representative + the representatives of its 1-hop neighbors. O(degree)
+  // via the model's precomputed adjacency (NOT a per-hover scan over all edges).
+  const highlightKeys = useMemo(
+    () => hoverHighlightReps(model, hovered, new Set(visible)),
+    [hovered, model, visible],
+  );
 
   // Impact overlay: roll impacted / covering-test node ids up to the visible
   // cluster representatives so the highlight shows even when collapsed.
@@ -233,6 +221,11 @@ export function StarField() {
     return { geometry: geo, keysAt };
   }, [visible, model, highlightKeys, store.filters, impactReps, focusReps, testReps, store.emphasis, selectedRep, hoveredRep]);
 
+  // Dispose the previous star buffer when the memo recomputes (expand / filter /
+  // overlay / hover recolor). r3f does NOT free a manually-`new`'d
+  // BufferGeometry passed via the geometry prop, so it would otherwise leak.
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
   // --- Supernova expand/collapse morph -------------------------------------
   // Children emerge FROM their parent cluster's position outward to their
   // laid-out positions on expand, and recede INTO the parent on collapse.
@@ -377,6 +370,9 @@ export function StarField() {
 
   // Geometry for the transient departing (collapse) buffer.
   const departGeo = useMemo(() => new THREE.BufferGeometry(), []);
+  // Dispose the transient departing buffer on unmount (built once, but still a
+  // GPU buffer that must be freed when the component goes away).
+  useEffect(() => () => departGeo.dispose(), [departGeo]);
 
   useFrame(({ invalidate }) => {
     const mat = materialRef.current;
@@ -491,17 +487,51 @@ export function StarField() {
     }
   };
 
+  // rAF-coalesced hover dispatch. A single mouse drag fires onPointerMove many
+  // times per frame; each store.hover() changes `hovered`, which re-runs the
+  // star recolor AND (in EdgeLines / FlowParticles) the entire edge roll-up +
+  // bundle tessellation. We coalesce to at MOST one dispatch per animation
+  // frame: handlers stash the latest target in a ref and schedule one rAF that
+  // commits it (skipping no-op repeats), so a drag costs one rebuild per frame
+  // instead of one per pointer event. (Deterministic build path untouched — this
+  // only rate-limits a UI event, no Math.random / no geometry math here.)
+  const pendingHoverRef = useRef<string | null>(null);
+  const hoverRafRef = useRef<number | null>(null);
+  const lastHoverRef = useRef<string | null>(hovered);
+  useEffect(() => {
+    // Keep the committed value in sync if hover is changed elsewhere (e.g. tour
+    // / selection clears) so the coalescer doesn't suppress a real change.
+    lastHoverRef.current = hovered;
+  }, [hovered]);
+  useEffect(
+    () => () => {
+      if (hoverRafRef.current !== null) cancelAnimationFrame(hoverRafRef.current);
+    },
+    [],
+  );
+  const queueHover = (id: string | null) => {
+    pendingHoverRef.current = id;
+    if (hoverRafRef.current !== null) return; // a frame is already scheduled
+    hoverRafRef.current = requestAnimationFrame(() => {
+      hoverRafRef.current = null;
+      const next = pendingHoverRef.current;
+      if (next === lastHoverRef.current) return; // no-op: nothing changed this frame
+      lastHoverRef.current = next;
+      store.hover(next);
+    });
+  };
+
   const handleMove = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
     const i = e.index;
     const key = i === undefined ? null : keysAt[i] ?? null;
     const c = key ? model.byKey.get(key) : null;
-    store.hover(c?.nodeId ?? key ?? null);
+    queueHover(c?.nodeId ?? key ?? null);
   };
 
-  const handleOut = () => store.hover(null);
+  const handleOut = () => queueHover(null);
 
-  const glow = useMemo(() => glowTexture(), []);
+  const glow = useMemo(() => radialSprite(STAR_GLOW), []);
 
   return (
     <>
@@ -556,26 +586,6 @@ function starSizeShader(shader: THREE.WebGLProgramParametersWithUniforms): void 
   shader.vertexShader = shader.vertexShader
     .replace("uniform float size;", "uniform float size;\nattribute float aSize;")
     .replace("gl_PointSize = size;", "gl_PointSize = size * aSize;");
-}
-
-/** A soft radial-gradient sprite so points look like round glowing stars. */
-let _glow: THREE.Texture | null = null;
-function glowTexture(): THREE.Texture {
-  if (_glow) return _glow;
-  const size = 64;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.4, "rgba(255,255,255,0.6)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.needsUpdate = true;
-  _glow = tex;
-  return tex;
 }
 
 // A picking threshold that keeps small stars clickable regardless of the

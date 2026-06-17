@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import GraphWorker from "../data/worker/graph.worker.ts?worker";
-import { fromWorker, type ClientModel } from "../data/clientModel";
+import { fromWorker, expandToReveal, type ClientModel } from "../data/clientModel";
 import type {
   WorkerError,
   WorkerProgress,
@@ -115,27 +115,6 @@ type Action =
  *  shut the deepest-expanded branch first ("one level up"). */
 function depthOf(model: ClientModel, key: string): number {
   return (model.ancestors.get(key)?.length ?? 1) - 1;
-}
-
-/** Returns a NEW expanded set with every ancestor cluster of each node in
- *  `nodeIds` opened, so the highlighted members surface as visible reps. Shared
- *  by the impact and neighborhood-focus overlays. */
-function expandToReveal(
-  model: ClientModel,
-  expanded: Set<string>,
-  nodeIds: Iterable<string>,
-): Set<string> {
-  const next = new Set(expanded);
-  for (const id of nodeIds) {
-    const clusterKey = model.clusterOfNode.get(id) ?? id;
-    const chain = model.ancestors.get(clusterKey);
-    if (!chain) continue;
-    for (const ak of chain) {
-      const c = model.byKey.get(ak);
-      if (c && c.children.length > 0) next.add(ak);
-    }
-  }
-  return next;
 }
 
 /** Edge types to TRAVERSE for the focus BFS: everything not hidden by the

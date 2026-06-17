@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { useStore } from "../state/store";
@@ -9,6 +9,7 @@ import {
   type EdgeBundle,
 } from "../data/clientModel";
 import { edgeColor } from "./encoding";
+import { radialSprite, FLOW_PULSE } from "./sprites";
 import { sampleBundleCurve, FLOW_SAMPLES } from "./bundleGeometry";
 import { allocateParticles } from "./flow";
 
@@ -24,25 +25,6 @@ const PARTICLE_SIZE = 0.8;
 const PARTICLE_GAIN = 0.55;
 /** Points per sampled bundle curve (FLOW_SAMPLES segments). */
 const CURVE_PTS = FLOW_SAMPLES + 1;
-
-/** A soft radial-gradient sprite so particles render as round glowing pulses
- *  (a bare pointsMaterial draws hard squares). Built once, module-level. */
-let SPRITE: THREE.CanvasTexture | null = null;
-function softSprite(): THREE.CanvasTexture {
-  if (SPRITE) return SPRITE;
-  const s = 64;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = s;
-  const ctx = canvas.getContext("2d")!;
-  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.4, "rgba(255,255,255,0.5)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, s, s);
-  SPRITE = new THREE.CanvasTexture(canvas);
-  return SPRITE;
-}
 
 /** Edge-direction flow particles (design §P1 / §6): a SINGLE additive
  *  THREE.Points buffer of small pulses that travel from each visible bundle's
@@ -161,6 +143,11 @@ export function FlowParticles() {
     store.bundleBeta,
   ]);
 
+  // Dispose the previous particle geometry when the selection memo recomputes —
+  // r3f does not free a hand-built BufferGeometry passed via the geometry prop,
+  // so it would otherwise leak on every expand / filter / focus / hover change.
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
   const pointsRef = useRef<THREE.Points>(null);
 
   useFrame(({ clock, invalidate }) => {
@@ -196,7 +183,7 @@ export function FlowParticles() {
       <pointsMaterial
         size={PARTICLE_SIZE}
         sizeAttenuation
-        map={softSprite()}
+        map={radialSprite(FLOW_PULSE)}
         vertexColors
         transparent
         opacity={0.85}

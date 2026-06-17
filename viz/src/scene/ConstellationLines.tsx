@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
 import { visibleClusters } from "../data/clientModel";
@@ -63,6 +63,10 @@ export function ConstellationLines() {
     return geo;
   }, [model, store.expanded]);
 
+  // Dispose the previous MST geometry when the expansion changes / unmounts —
+  // r3f won't free a hand-built BufferGeometry, so it would otherwise leak.
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
   const material = useMemo(() => {
     const [r, g, b] = BRAND_RGB.teal;
     // Pre-multiply by a low alpha for additive blending: a cool faint web that
@@ -76,6 +80,7 @@ export function ConstellationLines() {
       fog: true,
     });
   }, []);
+  useEffect(() => () => material.dispose(), [material]);
 
   return <lineSegments geometry={geometry} material={material} raycast={() => null} />;
 }

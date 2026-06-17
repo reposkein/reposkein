@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
 import { visibleClusters } from "../data/clientModel";
 import { BRAND_RGB, nodeColor, languageColor } from "./encoding";
+import { radialSprite, NEBULA_HALO } from "./sprites";
 import { dominantLanguageByCluster } from "../data/language";
 import type { ClientModel } from "../data/clientModel";
 
@@ -82,7 +83,13 @@ export function NebulaHalos() {
     return geo;
   }, [model, store.expanded, extentByKey, langByKey]);
 
-  const map = useMemo(() => haloTexture(), []);
+  // Dispose the previous halo geometry when expansion/model changes — r3f does
+  // not free a hand-built BufferGeometry, so it would otherwise leak per expand.
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
+  // Shared soft radial-gradient sprite (cached module-level; SAME object across
+  // mounts, so no per-mount texture allocation to dispose).
+  const map = useMemo(() => radialSprite(NEBULA_HALO), []);
 
   // A custom point material that respects the per-point `size` attribute as a
   // WORLD-space radius (so a halo's footprint tracks the cluster's spatial
@@ -90,6 +97,9 @@ export function NebulaHalos() {
   // standard PointsMaterial shader via onBeforeCompile to keep it cheap and to
   // inherit fog support.
   const material = useMemo(() => sizedPointsMaterial(map), [map]);
+  // Dispose the material on unmount / map change (the shared sprite texture is
+  // module-cached and intentionally NOT disposed here).
+  useEffect(() => () => material.dispose(), [material]);
 
   return (
     <points geometry={geometry} material={material} renderOrder={-1} raycast={() => null} />
@@ -127,28 +137,6 @@ function computeExtents(model: ClientModel): Map<string, number> {
     }
   }
   return out;
-}
-
-/** A very soft radial-gradient sprite — broad falloff so halos read as diffuse
- *  nebulae rather than crisp discs. */
-let _halo: THREE.Texture | null = null;
-function haloTexture(): THREE.Texture {
-  if (_halo) return _halo;
-  const size = 128;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, "rgba(255,255,255,0.55)");
-  g.addColorStop(0.25, "rgba(255,255,255,0.22)");
-  g.addColorStop(0.6, "rgba(255,255,255,0.05)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.needsUpdate = true;
-  _halo = tex;
-  return tex;
 }
 
 /** PointsMaterial whose per-point `size` attribute is treated as a world-space

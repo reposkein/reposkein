@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { makeLargeGraph } from "./__fixtures__/largeGraph";
 import { buildModel } from "./model";
 import { fromWorker } from "./clientModel";
-import { bundleEdges, visibleClusters, representativeFor } from "./clientModel";
+import { selectVisibleEdges, visibleClusters, representativeFor } from "./clientModel";
 import { computeNeighborhood } from "./neighborhood";
 import { constellationMst, type ConstellationPoint } from "../scene/constellation";
 import { allocateParticles } from "../scene/flow";
@@ -72,7 +72,15 @@ describe("large-graph pipeline (scale hardening §P4)", () => {
     const visible = visibleClusters(model, expanded);
     const tVisible = performance.now();
 
-    const bundles = bundleEdges(model, visible);
+    // Unified edge selection + LOD roll-up (selectVisibleEdges subsumes the old
+    // bundleEdges). Fully expanded with everything active → symbol-LOD bundles,
+    // the worst case for the roll-up + cap.
+    const noFilter = { edgeTypes: new Set<string>(), minConfidence: 0, audit: "off" };
+    const { bundles } = selectVisibleEdges(model, {
+      expanded,
+      filters: noFilter,
+      activeNodes: [],
+    });
     const tBundle = performance.now();
     // Bundles can never exceed the number of visible-pair combinations and are
     // far fewer than the raw edge count once rolled up.

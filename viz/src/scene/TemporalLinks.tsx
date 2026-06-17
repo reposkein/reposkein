@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { useStore } from "../state/store";
 import { visibleClusters } from "../data/clientModel";
@@ -45,6 +45,13 @@ export function TemporalLinks() {
     return geo;
   }, [model, cochange, store.expanded]);
 
+  // Dispose the previous (manually-`new`'d) geometry when it changes / unmounts;
+  // r3f won't free it for us, so a re-derive would otherwise leak the GPU buffer.
+  useEffect(() => {
+    const g = geometry;
+    return () => g?.dispose();
+  }, [geometry]);
+
   const material = useMemo(
     () =>
       new THREE.LineDashedMaterial({
@@ -57,6 +64,7 @@ export function TemporalLinks() {
       }),
     []
   );
+  useEffect(() => () => material.dispose(), [material]);
 
   if (!store.coupling || !geometry) return null;
   return <lineSegments geometry={geometry} material={material} />;
