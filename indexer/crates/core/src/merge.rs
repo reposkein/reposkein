@@ -299,4 +299,341 @@ mod tests {
         let merged = merge_nodes(&base, &ours, &theirs);
         assert_eq!(merged.len(), 1, "modify-vs-delete keeps the modified side");
     }
+
+    // ----- 3-way merge matrix: {structure change} x {summary change} -----
+    //
+    // Exhaustively exercises `merge_node`'s two independent decisions:
+    //   1. structural pick (base/ours/theirs) — see `chosen_struct`
+    //   2. summary graft — only grafts when `summary_of_hash == merged_chash`
+    //
+    // The matrix is built from a fixed base node and parameterised by how each
+    // side mutates structure (the `content_hash`) and the summary.
+
+    const ID: &str = "rs1:r:func:matrix.py#f@0";
+
+    /// One side of the matrix: which content_hash it carries, and an optional
+    /// summary (text, summary_of_hash).
+    #[derive(Clone)]
+    struct Side {
+        chash: &'static str,
+        summary: Option<(&'static str, &'static str)>,
+    }
+
+    fn side_node(s: &Side) -> Node {
+        let n = func(ID, s.chash);
+        match s.summary {
+            Some((text, of)) => with_summary(n, text, of),
+            None => n,
+        }
+    }
+
+    /// Structural mutation axis. The base hash is always "h_base".
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum StructChange {
+        Neither,    // ours == theirs == base structurally
+        OursOnly,   // ours changed, theirs == base
+        TheirsOnly, // theirs changed, ours == base
+        Both,       // ours and theirs both changed (to different hashes)
+    }
+
+    /// Summary mutation axis (orthogonal to structure).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SummaryChange {
+        Absent,     // no summary on either side
+        OursOnly,   // only ours carries a summary
+        TheirsOnly, // only theirs carries a summary
+        Both,       // both sides carry a (differing) summary
+    }
+
+    /// Computes the (ours_hash, theirs_hash) and the structurally-expected
+    /// merged content_hash for a given `StructChange`, matching `chosen_struct`:
+    /// theirs wins only when ours is structurally identical to base.
+    fn struct_hashes(sc: StructChange) -> (&'static str, &'static str, &'static str) {
+        match sc {
+            // ours == base → theirs wins (theirs == base here too → "h_base")
+            StructChange::Neither => ("h_base", "h_base", "h_base"),
+            // ours changed, theirs == base → ours wins
+            StructChange::OursOnly => ("h_ours", "h_base", "h_ours"),
+            // ours == base → theirs wins
+            StructChange::TheirsOnly => ("h_base", "h_theirs", "h_theirs"),
+            // both changed → ours wins (deterministic ours-on-conflict)
+            StructChange::Both => ("h_ours", "h_theirs", "h_ours"),
+        }
+    }
+
+    /// Drives one matrix cell and returns the merged node, the expected merged
+    /// content_hash, and the (ours_sum, theirs_sum) summaries that were placed
+    /// (already stamped to the merged hash so they *can* graft).
+    fn run_cell(
+        sc: StructChange,
+        mc: SummaryChange,
+    ) -> (
+        Node,
+        &'static str,
+        Option<&'static str>,
+        Option<&'static str>,
+    ) {
+        let (oh, th, expected) = struct_hashes(sc);
+
+        // Summaries are stamped against the *expected merged* hash so the graft
+        // rule (summary_of_hash == merged_chash) is satisfied; this isolates the
+        // summary-pick branch from the staleness-drop branch.
+        let (ours_text, theirs_text) = match mc {
+            SummaryChange::Absent => (None, None),
+            SummaryChange::OursOnly => (Some("ours summary"), None),
+            SummaryChange::TheirsOnly => (None, Some("theirs summary")),
+            SummaryChange::Both => (Some("ours summary"), Some("theirs summary")),
+        };
+
+        let base = vec![func(ID, "h_base")];
+        let ours = vec![side_node(&Side {
+            chash: oh,
+            summary: ours_text.map(|t| (t, expected)),
+        })];
+        let theirs = vec![side_node(&Side {
+            chash: th,
+            summary: theirs_text.map(|t| (t, expected)),
+        })];
+
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged.len(), 1, "single node always survives the merge");
+        (
+            merged.into_iter().next().unwrap(),
+            expected,
+            ours_text,
+            theirs_text,
+        )
+    }
+
+    #[test]
+    fn matrix_structure_pick_is_deterministic() {
+        for sc in [
+            StructChange::Neither,
+            StructChange::OursOnly,
+            StructChange::TheirsOnly,
+            StructChange::Both,
+        ] {
+            for mc in [
+                SummaryChange::Absent,
+                SummaryChange::OursOnly,
+                SummaryChange::TheirsOnly,
+                SummaryChange::Both,
+            ] {
+                let (merged, expected, _, _) = run_cell(sc, mc);
+                assert_eq!(
+                    merged.props["content_hash"],
+                    json!(expected),
+                    "structure pick for {sc:?} x {mc:?}: expected merged hash {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_summary_graft_follows_pick_rule() {
+        for sc in [
+            StructChange::Neither,
+            StructChange::OursOnly,
+            StructChange::TheirsOnly,
+            StructChange::Both,
+        ] {
+            for mc in [
+                SummaryChange::Absent,
+                SummaryChange::OursOnly,
+                SummaryChange::TheirsOnly,
+                SummaryChange::Both,
+            ] {
+                let (merged, _, ours_sum, theirs_sum) = run_cell(sc, mc);
+                let got = merged
+                    .props
+                    .get("semantic_summary")
+                    .and_then(|v| v.as_str());
+
+                // Expected summary pick (all summaries are stamped to the merged
+                // hash here, so each present summary qualifies):
+                //   - both present, differing → deterministic ours
+                //   - only one present → that one
+                //   - none present → none grafted
+                let expected = match (ours_sum, theirs_sum) {
+                    (Some(o), Some(_)) => Some(o), // ours wins on conflict
+                    (Some(o), None) => Some(o),
+                    (None, Some(t)) => Some(t),
+                    (None, None) => None,
+                };
+                assert_eq!(
+                    got, expected,
+                    "summary graft for {sc:?} x {mc:?}: expected {expected:?}"
+                );
+                // When no summary grafted, none of the summary fields leak in.
+                if expected.is_none() {
+                    assert!(
+                        !merged.props.contains_key("semantic_summary")
+                            && !merged.props.contains_key("summary_of_hash"),
+                        "no summary fields should leak for {sc:?} x {mc:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_is_deterministic_across_repeated_merges() {
+        for sc in [
+            StructChange::Neither,
+            StructChange::OursOnly,
+            StructChange::TheirsOnly,
+            StructChange::Both,
+        ] {
+            for mc in [
+                SummaryChange::Absent,
+                SummaryChange::OursOnly,
+                SummaryChange::TheirsOnly,
+                SummaryChange::Both,
+            ] {
+                let (oh, th, expected) = struct_hashes(sc);
+                let (ours_text, theirs_text) = match mc {
+                    SummaryChange::Absent => (None, None),
+                    SummaryChange::OursOnly => (Some("ours summary"), None),
+                    SummaryChange::TheirsOnly => (None, Some("theirs summary")),
+                    SummaryChange::Both => (Some("ours summary"), Some("theirs summary")),
+                };
+                let base = vec![func(ID, "h_base")];
+                let ours = vec![side_node(&Side {
+                    chash: oh,
+                    summary: ours_text.map(|t| (t, expected)),
+                })];
+                let theirs = vec![side_node(&Side {
+                    chash: th,
+                    summary: theirs_text.map(|t| (t, expected)),
+                })];
+                let first = merge_nodes(&base, &ours, &theirs);
+                let second = merge_nodes(&base, &ours, &theirs);
+                assert_eq!(
+                    first, second,
+                    "merge must be deterministic for {sc:?} x {mc:?}"
+                );
+            }
+        }
+    }
+
+    /// The headline case the audit flagged: structure AND summary both diverge
+    /// on both sides simultaneously. Structure must be ours (h_ours) and the
+    /// grafted summary must be ours, and re-merging is identical.
+    #[test]
+    fn structure_and_summary_diverge_on_both_sides_is_deterministic_ours() {
+        let base = vec![func(ID, "h_base")];
+        // both sides change structure to *different* hashes AND both write a
+        // summary stamped to their own new hash.
+        let ours = vec![with_summary(func(ID, "h_ours"), "ours text", "h_ours")];
+        let theirs = vec![with_summary(
+            func(ID, "h_theirs"),
+            "theirs text",
+            "h_theirs",
+        )];
+
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged.len(), 1);
+        // Structural pick: both changed → ours wins.
+        assert_eq!(merged[0].props["content_hash"], json!("h_ours"));
+        // ours' summary is stamped to h_ours == merged hash → qualifies & wins.
+        // theirs' summary is stamped to h_theirs != merged hash → disqualified.
+        assert_eq!(merged[0].props["semantic_summary"], json!("ours text"));
+        assert_eq!(merged[0].props["summary_of_hash"], json!("h_ours"));
+
+        // Determinism: merging again yields an identical record.
+        assert_eq!(merged, merge_nodes(&base, &ours, &theirs));
+    }
+
+    /// Companion to the above: both sides change structure to different hashes,
+    /// and *both* summaries are stamped to a hash that is NOT the merged hash
+    /// (h_ours). Neither qualifies → the summary is dropped (regenerated JIT),
+    /// structure = ours.
+    #[test]
+    fn structure_both_diverge_but_both_summaries_stale_drops_summary() {
+        let base = vec![func(ID, "h_base")];
+        // Merged hash will be h_ours; both summaries stamped to a stale hash so
+        // neither qualifies. (Note: stamping theirs to h_ours would let it graft
+        // even though theirs lost the structural pick — see the test below.)
+        let ours = vec![with_summary(func(ID, "h_ours"), "ours text", "h_stale")];
+        let theirs = vec![with_summary(func(ID, "h_theirs"), "theirs text", "h_stale")];
+
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].props["content_hash"], json!("h_ours"));
+        assert!(!merged[0].props.contains_key("semantic_summary"));
+        assert!(!merged[0].props.contains_key("summary_of_hash"));
+        assert_eq!(merged, merge_nodes(&base, &ours, &theirs));
+    }
+
+    /// Subtle but intended: the summary graft is keyed purely on
+    /// `summary_of_hash == merged_chash`, NOT on which side won the structural
+    /// pick. Here ours wins structure (h_ours), ours' OWN summary is stale, but
+    /// theirs' summary happens to be stamped to h_ours — so theirs' summary
+    /// grafts onto ours' structure. This documents the cross-side graft.
+    #[test]
+    fn summary_grafts_by_hash_even_from_the_structurally_losing_side() {
+        let base = vec![func(ID, "h_base")];
+        let ours = vec![with_summary(func(ID, "h_ours"), "ours text", "h_theirs")];
+        let theirs = vec![with_summary(func(ID, "h_theirs"), "theirs text", "h_ours")];
+
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged.len(), 1);
+        // structure: both changed → ours wins.
+        assert_eq!(merged[0].props["content_hash"], json!("h_ours"));
+        // ours' summary (of h_theirs) is stale; theirs' summary (of h_ours)
+        // matches the merged hash → theirs' summary grafts.
+        assert_eq!(merged[0].props["semantic_summary"], json!("theirs text"));
+        assert_eq!(merged[0].props["summary_of_hash"], json!("h_ours"));
+        assert_eq!(merged, merge_nodes(&base, &ours, &theirs));
+    }
+
+    /// Both sides change structure identically (same new hash) but write
+    /// different summaries against it. Structure = ours (== theirs); summary
+    /// pick is deterministic ours.
+    #[test]
+    fn structure_both_change_identically_summary_pick_is_ours() {
+        let base = vec![func(ID, "h_base")];
+        let ours = vec![with_summary(func(ID, "h_new"), "ours text", "h_new")];
+        let theirs = vec![with_summary(func(ID, "h_new"), "theirs text", "h_new")];
+
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged[0].props["content_hash"], json!("h_new"));
+        assert_eq!(merged[0].props["semantic_summary"], json!("ours text"));
+        assert_eq!(merged, merge_nodes(&base, &ours, &theirs));
+    }
+
+    /// Structure unchanged on both sides, but both sides write differing
+    /// summaries against the (unchanged) base hash. The `ours == base` branch
+    /// does NOT fire here (ours' *summary* differs from base, which has none),
+    /// so the deterministic-ours branch applies.
+    #[test]
+    fn structure_unchanged_both_summaries_diverge_picks_ours() {
+        let base = vec![func(ID, "h_base")]; // base has no summary
+        let ours = vec![with_summary(func(ID, "h_base"), "ours text", "h_base")];
+        let theirs = vec![with_summary(func(ID, "h_base"), "theirs text", "h_base")];
+
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged[0].props["content_hash"], json!("h_base"));
+        assert_eq!(merged[0].props["semantic_summary"], json!("ours text"));
+        assert_eq!(merged, merge_nodes(&base, &ours, &theirs));
+    }
+
+    /// The base-summary tie-break branch: ours' summary equals base's summary
+    /// (ours did not touch it) while theirs wrote a fresh one → theirs wins.
+    /// Structure unchanged on both sides.
+    #[test]
+    fn ours_summary_equals_base_so_theirs_fresh_write_wins() {
+        let base = vec![with_summary(func(ID, "h_base"), "old text", "h_base")];
+        let ours = vec![with_summary(func(ID, "h_base"), "old text", "h_base")]; // == base
+        let theirs = vec![with_summary(func(ID, "h_base"), "fresh text", "h_base")];
+
+        let merged = merge_nodes(&base, &ours, &theirs);
+        assert_eq!(merged[0].props["content_hash"], json!("h_base"));
+        assert_eq!(
+            merged[0].props["semantic_summary"],
+            json!("fresh text"),
+            "ours summary == base → theirs is the fresh write and wins"
+        );
+        assert_eq!(merged, merge_nodes(&base, &ours, &theirs));
+    }
 }
