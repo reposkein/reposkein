@@ -3,13 +3,13 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { useStore } from "../state/store";
 import {
-  bundleEdges,
-  filterDrawEdges,
-  representativeFor,
-  visibleClusters,
+  selectVisibleEdges,
+  repOf,
+  focusRepsOf,
   type EdgeBundle,
 } from "../data/clientModel";
 import { edgeColor } from "./encoding";
+import { sampleBundleCurve, FLOW_SAMPLES } from "./bundleGeometry";
 import { allocateParticles } from "./flow";
 
 /** Hard cap on total flow particles. Chosen so the worst case stays a few
@@ -18,11 +18,12 @@ const PARTICLE_BUDGET = 3000;
 /** Fraction of an edge a particle traverses per second (subtle drift). */
 const FLOW_SPEED = 0.32;
 /** Particle point size in WORLD units (sizeAttenuation). Small + round + additive
- *  so the flow reads as a gentle pulse, clearly smaller than the star nodes
- *  (which use base size 3). */
+ *  so the flow reads as a gentle pulse, clearly smaller than the star nodes. */
 const PARTICLE_SIZE = 0.8;
 /** Color/alpha multiplier — kept low so the motion is subtle by default. */
 const PARTICLE_GAIN = 0.55;
+/** Points per sampled bundle curve (FLOW_SAMPLES segments). */
+const CURVE_PTS = FLOW_SAMPLES + 1;
 
 /** A soft radial-gradient sprite so particles render as round glowing pulses
  *  (a bare pointsMaterial draws hard squares). Built once, module-level. */
@@ -43,47 +44,48 @@ function softSprite(): THREE.CanvasTexture {
   return SPRITE;
 }
 
-/** Edge-direction flow particles (design §P1): a SINGLE additive THREE.Points
- *  buffer of small pulses that travel from each visible bundle's SOURCE (caller)
- *  toward its TARGET (callee), conveying direction + life. The static per-pair
- *  endpoints + colors are precomputed; useFrame advances a shared phase and
- *  lerps every particle's world position. Honors the SAME edge filters/lenses
- *  as EdgeLines (no particles on hidden edges) and the neighborhood-focus dim.
+/** Edge-direction flow particles (design §P1 / §6): a SINGLE additive
+ *  THREE.Points buffer of small pulses that travel from each visible bundle's
+ *  SOURCE (caller) toward its TARGET (callee). Shares the SAME selectVisibleEdges
+ *  pass as EdgeLines (one roll-up, no latent drift) and now rides the SAME
+ *  Holten-bundled curve as the rendered arc (curve-following), so at the default
+ *  bundleBeta=0.85 the pulses hug the arcs instead of floating off the chord.
  *
- *  Budget-capped + sampled (see allocateParticles): high-traffic bundles and
- *  bundles incident to the selected/hovered node are prioritized; when the
- *  graph is large we sample the rest so the buffer never blows the cap. */
+ *  Per used bundle we precompute a sampled curve polyline (CURVE_PTS points);
+ *  useFrame advances a shared phase and walks each particle along its bundle's
+ *  polyline (allocation-light: only reads the precomputed arrays). */
 export function FlowParticles() {
   const store = useStore();
   const model = store.model!;
 
-  const { geometry, fromArr, toArr, phaseArr, count } = useMemo(() => {
-    const visible = visibleClusters(model, store.expanded);
-
-    // Same gate as EdgeLines: hidden edge types / low confidence / audit mode
-    // remove their particles too.
-    const filteredModel = filterDrawEdges(model, {
-      edgeTypes: store.filters.edgeTypes,
-      minConfidence: store.filters.minConfidence,
-      audit: store.audit,
+  const { geometry, curves, curveBase, phaseArr, count } = useMemo(() => {
+    // STAGE A — same selection as EdgeLines (with the same activeNodes).
+    const activeNodes = [store.selected, store.hovered, ...(store.focus?.nodes ?? [])].filter(
+      Boolean,
+    ) as string[];
+    const { bundles, visible } = selectVisibleEdges(model, {
+      expanded: store.expanded,
+      filters: {
+        edgeTypes: store.filters.edgeTypes,
+        minConfidence: store.filters.minConfidence,
+        audit: store.audit,
+      },
+      activeNodes,
     });
-    let bundles = bundleEdges(filteredModel, visible);
 
-    // Neighborhood focus: only animate edges WHOLLY inside the focused set
-    // (rolled up to visible reps) so the motion matches the highlighted region.
+    // Neighborhood focus: only animate edges WHOLLY inside the focused set.
+    let active = bundles;
     if (store.focus) {
-      const focusReps = new Set<string>();
-      for (const id of store.focus.nodes) {
-        const r = representativeFor(model, id, visible);
-        if (r) focusReps.add(r);
+      const focusReps = focusRepsOf(model, store.focus, visible);
+      if (focusReps) {
+        active = bundles.filter((b) => focusReps.has(b.srcKey) && focusReps.has(b.dstKey));
       }
-      bundles = bundles.filter((b) => focusReps.has(b.srcKey) && focusReps.has(b.dstKey));
     }
 
     // Priority bundles: incident to the selected or hovered node's visible rep.
     const accentKeys = new Set<string>();
-    const selRep = store.selected ? representativeFor(model, store.selected, visible) : null;
-    const hovRep = store.hovered ? representativeFor(model, store.hovered, visible) : null;
+    const selRep = store.selected ? repOf(model, store.selected, visible) : null;
+    const hovRep = store.hovered ? repOf(model, store.hovered, visible) : null;
     if (selRep) accentKeys.add(selRep);
     if (hovRep) accentKeys.add(hovRep);
     const isPriority =
@@ -91,36 +93,51 @@ export function FlowParticles() {
         ? (b: EdgeBundle) => accentKeys.has(b.srcKey) || accentKeys.has(b.dstKey)
         : undefined;
 
-    const { particles } = allocateParticles(bundles, PARTICLE_BUDGET, isPriority);
+    const { particles } = allocateParticles(active, PARTICLE_BUDGET, isPriority);
     const n = particles.length;
 
-    const fromArr = new Float32Array(n * 3);
-    const toArr = new Float32Array(n * 3);
+    // Cache a sampled curve per USED bundle (dedup across its particles).
+    const curveOffsetByBundle = new Map<number, number>();
+    const curves = new Float32Array(n * CURVE_PTS * 3); // worst case: every particle unique
+    let curveCursor = 0; // in points
+
     const phaseArr = new Float32Array(n);
+    const curveBase = new Int32Array(n); // per-particle: starting point index into `curves`
     const positions = new Float32Array(n * 3);
     const colors = new Float32Array(n * 3);
 
     let w = 0;
     for (let p = 0; p < n; p++) {
       const part = particles[p]!;
-      const b = bundles[part.bundleIndex]!;
-      const si = model.indexByKey.get(b.srcKey);
-      const di = model.indexByKey.get(b.dstKey);
-      if (si === undefined || di === undefined) continue;
-      fromArr[w * 3] = model.positions[si * 3]!;
-      fromArr[w * 3 + 1] = model.positions[si * 3 + 1]!;
-      fromArr[w * 3 + 2] = model.positions[si * 3 + 2]!;
-      toArr[w * 3] = model.positions[di * 3]!;
-      toArr[w * 3 + 1] = model.positions[di * 3 + 1]!;
-      toArr[w * 3 + 2] = model.positions[di * 3 + 2]!;
-      // Start at the source so the first frame isn't blank.
-      positions[w * 3] = fromArr[w * 3]!;
-      positions[w * 3 + 1] = fromArr[w * 3 + 1]!;
-      positions[w * 3 + 2] = fromArr[w * 3 + 2]!;
+      const b = active[part.bundleIndex]!;
+      if (!model.indexByKey.has(b.srcKey) || !model.indexByKey.has(b.dstKey)) continue;
+
+      // Sample (or reuse) this bundle's curve into the shared buffer.
+      let off = curveOffsetByBundle.get(part.bundleIndex);
+      if (off === undefined) {
+        const written = sampleBundleCurve(
+          model,
+          b.srcKey,
+          b.dstKey,
+          store.bundleBeta,
+          curves,
+          curveCursor * 3,
+        );
+        if (written === 0) continue; // undrawable bundle → skip its particles
+        off = curveCursor;
+        curveOffsetByBundle.set(part.bundleIndex, off);
+        curveCursor += written;
+      }
+
+      curveBase[w] = off; // point index of this bundle's curve start
+      // Start at the source (curve point 0) so the first frame isn't blank.
+      positions[w * 3] = curves[off * 3]!;
+      positions[w * 3 + 1] = curves[off * 3 + 1]!;
+      positions[w * 3 + 2] = curves[off * 3 + 2]!;
       phaseArr[w] = part.phase;
       const [r, g, bl] = edgeColor(b.dominantType);
-      // Accent (selected/hovered) particles glow brighter; the rest stay subtle.
-      const incident = accentKeys.size > 0 && (accentKeys.has(b.srcKey) || accentKeys.has(b.dstKey));
+      const incident =
+        accentKeys.size > 0 && (accentKeys.has(b.srcKey) || accentKeys.has(b.dstKey));
       const gain = PARTICLE_GAIN * (incident ? 2.0 : 1.0);
       colors[w * 3] = r * gain;
       colors[w * 3 + 1] = g * gain;
@@ -132,7 +149,7 @@ export function FlowParticles() {
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.setDrawRange(0, w);
-    return { geometry: geo, fromArr, toArr, phaseArr, count: w };
+    return { geometry: geo, curves, curveBase, phaseArr, count: w };
   }, [
     model,
     store.expanded,
@@ -141,6 +158,7 @@ export function FlowParticles() {
     store.focus,
     store.selected,
     store.hovered,
+    store.bundleBeta,
   ]);
 
   const pointsRef = useRef<THREE.Points>(null);
@@ -153,14 +171,19 @@ export function FlowParticles() {
     const arr = posAttr.array as Float32Array;
     const base = clock.elapsedTime * FLOW_SPEED;
     for (let i = 0; i < count; i++) {
-      // t in [0,1): each particle's phase offset spreads pulses along the edge.
+      // t in [0,1): each particle's phase offset spreads pulses along the curve.
       const t = (base + phaseArr[i]!) % 1;
-      const fx = fromArr[i * 3]!;
-      const fy = fromArr[i * 3 + 1]!;
-      const fz = fromArr[i * 3 + 2]!;
-      arr[i * 3] = fx + (toArr[i * 3]! - fx) * t;
-      arr[i * 3 + 1] = fy + (toArr[i * 3 + 1]! - fy) * t;
-      arr[i * 3 + 2] = fz + (toArr[i * 3 + 2]! - fz) * t;
+      // Walk the precomputed CURVE_PTS-point polyline of this particle's bundle.
+      const cb = curveBase[i]!; // first curve point index
+      const f = t * FLOW_SAMPLES; // [0, FLOW_SAMPLES]
+      let seg = f | 0;
+      if (seg >= FLOW_SAMPLES) seg = FLOW_SAMPLES - 1;
+      const lt = f - seg;
+      const a = (cb + seg) * 3;
+      const bx = (cb + seg + 1) * 3;
+      arr[i * 3] = curves[a]! + (curves[bx]! - curves[a]!) * lt;
+      arr[i * 3 + 1] = curves[a + 1]! + (curves[bx + 1]! - curves[a + 1]!) * lt;
+      arr[i * 3 + 2] = curves[a + 2]! + (curves[bx + 2]! - curves[a + 2]!) * lt;
     }
     posAttr.needsUpdate = true;
     invalidate(); // continuous animation: keep the frame loop alive

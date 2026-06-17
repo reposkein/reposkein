@@ -180,6 +180,89 @@ export function buildBundledGeometry(
   return geo;
 }
 
+/** Number of polyline samples (points = SAMPLES+1) used when sampling a single
+ *  bundle's curve for FlowParticles, so particles ride the SAME arc as the edge
+ *  (not the straight chord). Modest — particles only need a smooth path. */
+export const FLOW_SAMPLES = 10;
+
+/** Sample one bundle's Holten-bundled curve into `out` as (FLOW_SAMPLES+1) world
+ *  points (3 floats each) starting at `outOffset`. Mirrors buildBundledGeometry's
+ *  control-point gather + beta straighten + centripetal Catmull-Rom, so the flow
+ *  follows the rendered arc exactly. Allocation-free (module scratch). Returns
+ *  the number of POINTS written (0 if the bundle is undrawable). The path is
+ *  parameterized uniformly in arc-knot space so equal-fraction sampling reads as
+ *  even motion. */
+export function sampleBundleCurve(
+  model: ClientModel,
+  srcKey: string,
+  dstKey: string,
+  beta: number,
+  out: Float32Array,
+  outOffset: number,
+): number {
+  const P = model.positions;
+  const ix = model.indexByKey;
+  const keys = bundlePath(model, srcKey, dstKey);
+
+  ensureScratch(keys.length);
+  let nc = 0;
+  for (const key of keys) {
+    const idx = ix.get(key);
+    if (idx === undefined) continue;
+    CX[nc] = P[idx * 3]!;
+    CY[nc] = P[idx * 3 + 1]!;
+    CZ[nc] = P[idx * 3 + 2]!;
+    nc++;
+  }
+  if (nc < 2) return 0;
+
+  const pts = FLOW_SAMPLES + 1;
+
+  // Straight chord (degenerate path): evenly interpolate endpoints.
+  if (nc === 2) {
+    const x0 = CX[0]!, y0 = CY[0]!, z0 = CZ[0]!;
+    const x1 = CX[1]!, y1 = CY[1]!, z1 = CZ[1]!;
+    for (let s = 0; s < pts; s++) {
+      const t = s / FLOW_SAMPLES;
+      out[outOffset + s * 3] = x0 + (x1 - x0) * t;
+      out[outOffset + s * 3 + 1] = y0 + (y1 - y0) * t;
+      out[outOffset + s * 3 + 2] = z0 + (z1 - z0) * t;
+    }
+    return pts;
+  }
+
+  // Beta straighten + centripetal knots (identical to buildBundledGeometry).
+  const last = nc - 1;
+  const x0 = CX[0]!, y0 = CY[0]!, z0 = CZ[0]!;
+  const xn = CX[last]!, yn = CY[last]!, zn = CZ[last]!;
+  for (let j = 1; j < last; j++) {
+    const t = j / last;
+    CX[j] = beta * CX[j]! + (1 - beta) * (x0 + (xn - x0) * t);
+    CY[j] = beta * CY[j]! + (1 - beta) * (y0 + (yn - y0) * t);
+    CZ[j] = beta * CZ[j]! + (1 - beta) * (z0 + (zn - z0) * t);
+  }
+  ensureKnots(nc);
+  KNOTS[0] = 0;
+  for (let j = 1; j < nc; j++) {
+    const dx = CX[j]! - CX[j - 1]!;
+    const dy = CY[j]! - CY[j - 1]!;
+    const dz = CZ[j]! - CZ[j - 1]!;
+    const dist = Math.sqrt(Math.sqrt(dx * dx + dy * dy + dz * dz));
+    KNOTS[j] = KNOTS[j - 1]! + (dist > 1e-6 ? dist : 1e-6);
+  }
+  const tStart = KNOTS[0]!;
+  const tEnd = KNOTS[last]!;
+  for (let s = 0; s < pts; s++) {
+    const tt = tStart + ((tEnd - tStart) * s) / FLOW_SAMPLES;
+    let seg = 0;
+    while (seg < last - 1 && KNOTS[seg + 1]! < tt) seg++;
+    out[outOffset + s * 3] = evalCR(CX, KNOTS, seg, last, tt);
+    out[outOffset + s * 3 + 1] = evalCR(CY, KNOTS, seg, last, tt);
+    out[outOffset + s * 3 + 2] = evalCR(CZ, KNOTS, seg, last, tt);
+  }
+  return pts;
+}
+
 /** Non-uniform (centripetal) Catmull-Rom evaluation of one coordinate channel
  *  `C` at parameter `tt`, on segment [seg, seg+1] with knots in `K` (length
  *  last+1). Uses the Barry-Goldman recursive pyramid so it handles the non-
