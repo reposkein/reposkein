@@ -72,6 +72,12 @@ interface State {
   /** Guided cinematic tour is active (drives the TourController + caption HUD).
    *  Pure UI flag; the tour reuses the existing expand/select/fit/focus actions. */
   tour: boolean;
+  /** Holten edge-bundling straighten factor [0,1]: 1 = curves hug the
+   *  hierarchy, 0 = straight chords (reproduces the pre-bundling render). */
+  bundleBeta: number;
+  /** Live "showing N of M connections" readout: drawn = bundles rendered after
+   *  the cap, total = pre-cap bundle count. Dispatched post-commit by EdgeLines. */
+  edgeStats: { drawn: number; total: number };
 }
 
 /** Confidence-audit preset: which low-confidence buckets to keep visible. */
@@ -100,7 +106,10 @@ type Action =
   | { t: "setCochange"; map: CochangeMap }
   | { t: "startTour" }
   | { t: "exitTour" }
-  | { t: "resetView" };
+  | { t: "resetView" }
+  | { t: "resetExpansion" }
+  | { t: "setBundleBeta"; value: number }
+  | { t: "setEdgeStats"; stats: { drawn: number; total: number } };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
  *  shut the deepest-expanded branch first ("one level up"). */
@@ -134,6 +143,35 @@ function expandToReveal(
 function focusEdgeTypes(hidden: Set<string>): Set<string> {
   if (hidden.size === 0) return new Set(ALL_EDGE_TYPES);
   return new Set(ALL_EDGE_TYPES.filter((t) => !hidden.has(t)));
+}
+
+/** The single source of truth for "wipe expansion + overlays back to a clean
+ *  top-level frame". Every reset path (resetView, resetExpansion, startTour,
+ *  exitTour's lens/filter clear) composes THIS so they never diverge. Pass
+ *  `extra` to layer on the path-specific fields. Assumes state.model is set. */
+function cleanSlate(state: State, extra: Partial<State> = {}): State {
+  return {
+    ...state,
+    expanded: new Set<string>([state.model!.rootKey]),
+    selected: null,
+    focusTarget: null,
+    impact: null,
+    focus: null,
+    fitNonce: state.fitNonce + 1,
+    ...extra,
+  };
+}
+
+/** The default lens/filter state shared by resetView + exitTour so the scene
+ *  returns to the neutral "all" lens with no filters (never a lingering
+ *  calls-only / filtered view). */
+function defaultLensFilters(): Partial<State> {
+  return {
+    lens: "all",
+    emphasis: "none",
+    audit: "off",
+    filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
+  };
 }
 
 function reducer(state: State, a: Action): State {
@@ -301,40 +339,37 @@ function reducer(state: State, a: Action): State {
       if (!state.model) return state;
       // Begin from a clean top-level frame so the tour's first overview stop
       // reads consistently regardless of prior navigation.
-      const expanded = new Set<string>([state.model.rootKey]);
-      return {
-        ...state,
-        tour: true,
-        expanded,
-        selected: null,
-        focusTarget: null,
-        impact: null,
-        focus: null,
-        emphasis: "none",
-        fitNonce: state.fitNonce + 1,
-      };
+      return cleanSlate(state, { tour: true, emphasis: "none" });
     }
     case "exitTour":
-      // Leave the camera where it is (no fitNonce bump); just clear the tour
-      // flag + any focus highlight the tour set so normal interaction resumes.
-      return { ...state, tour: false, focus: null, selected: null };
-    case "resetView": {
-      if (!state.model) return state;
-      const expanded = new Set<string>([state.model.rootKey]);
+      // Leave the camera where it is (no fitNonce bump); clear the tour flag +
+      // the tour's focus/selection AND restore the default lens/filters so the
+      // scene never lingers on a calls-only / filtered view.
       return {
         ...state,
-        expanded,
-        selected: null,
-        focusTarget: null,
-        lens: "all",
-        emphasis: "none",
-        audit: "off",
-        impact: null,
+        ...defaultLensFilters(),
+        tour: false,
         focus: null,
-        coupling: false,
-        filters: { kinds: new Set(), edgeTypes: new Set(), minConfidence: 0 },
-        fitNonce: state.fitNonce + 1,
+        selected: null,
       };
+    case "resetView": {
+      if (!state.model) return state;
+      return cleanSlate(state, { ...defaultLensFilters(), coupling: false });
+    }
+    case "resetExpansion": {
+      if (!state.model) return state;
+      // Wipe accumulated expansion + overlays back to the root frame (used by
+      // the tour controller before each stop). Lens/filters left untouched so a
+      // stop can set its own lens immediately after.
+      return cleanSlate(state);
+    }
+    case "setBundleBeta":
+      // Clamp [0,1]; no fitNonce bump — restyling must not yank the camera.
+      return { ...state, bundleBeta: Math.max(0, Math.min(1, a.value)) };
+    case "setEdgeStats": {
+      const { drawn, total } = a.stats;
+      if (state.edgeStats.drawn === drawn && state.edgeStats.total === total) return state;
+      return { ...state, edgeStats: { drawn, total } };
     }
   }
 }
@@ -360,6 +395,9 @@ interface Store extends State {
   startTour(): void;
   exitTour(): void;
   resetView(): void;
+  resetExpansion(): void;
+  setBundleBeta(value: number): void;
+  setEdgeStats(stats: { drawn: number; total: number }): void;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -385,6 +423,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     focus: null,
     focusDepth: DEFAULT_FOCUS_DEPTH,
     tour: false,
+    bundleBeta: 0.85,
+    edgeStats: { drawn: 0, total: 0 },
   });
 
   useEffect(() => {
@@ -451,6 +491,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       startTour: () => dispatch({ t: "startTour" }),
       exitTour: () => dispatch({ t: "exitTour" }),
       resetView: () => dispatch({ t: "resetView" }),
+      resetExpansion: () => dispatch({ t: "resetExpansion" }),
+      setBundleBeta: (value) => dispatch({ t: "setBundleBeta", value }),
+      setEdgeStats: (stats) => dispatch({ t: "setEdgeStats", stats }),
     }),
     [state]
   );
