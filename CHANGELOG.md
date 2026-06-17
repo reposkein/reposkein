@@ -6,6 +6,41 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-17
+
+A hardening pass from a four-area code audit — correctness, robustness, and
+supply-chain depth.
+
+### Fixed
+
+- **Python `INSTANTIATES` is single-sourced.** A Python `x = Foo()` produced two
+  colliding `INSTANTIATES` edges (one via class-lift, one via the construction
+  site); the JSONL dedup silently dropped one. Now exactly one edge per
+  `(caller, class)` with a correct, non-double-counted `sites`. (Cache schema 13 → 14.)
+- **Edge dedup is now an explicit prop-merge** (keyed `BTreeMap`) at the resolver
+  boundary instead of `dedup_by` keep-first — colliding edges merge deterministically
+  rather than silently dropping props.
+- **`reposkein-mcp view` path guard hardened** — `safeJoin` now resolves symlinks
+  (`realpathSync`) and re-checks containment, so a symlink inside the served root
+  can't escape it.
+
+### Added (robustness / CI / supply chain)
+
+- **End-to-end bin smoke test** in CI and pre-publish: launches `reposkein-mcp`
+  **via a symlink** (as an executable, relying on the shebang) and asserts it answers
+  an MCP `initialize` — the exact seam that let the 0.2.0 shebang and 0.2.1 symlink-guard
+  bugs ship undetected. The release also packs the tarball and asserts the bin starts
+  *before* publishing. The Glama `Dockerfile` gained the same build-time start assertion.
+- **Version-lockstep CI check** (`indexer/Cargo.toml` == `mcp/package.json`) so a skew
+  can't make the npm postinstall fetch a nonexistent release asset.
+- **GitHub Actions pinned to commit SHAs** + a `dependabot.yml` to keep them current.
+
+### Internal (viz viewer)
+
+- Fixed a GPU-resource leak (geometries/materials now disposed on recompute), throttled
+  hover + precomputed adjacency (no full edge-pipeline rebuild per pointer-move), fixed a
+  guided-tour stale-state bug, removed dead code, and de-duplicated shared helpers.
+
 ## [0.2.2] - 2026-06-17
 
 ### Fixed
