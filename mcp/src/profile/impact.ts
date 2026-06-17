@@ -72,6 +72,14 @@ export interface ImpactResult {
  * BFS over callers to bounded depth with a maxNodes cap.
  * NeighborRow does not carry file_path, so we fetch it via store.getNode().
  * Deterministic ordering: depth asc, then node_id asc.
+ *
+ * Edge scope (recorded decision): the neighborhood is CALLS-only — store.callers()
+ * walks reverse CALLS edges and nothing else. INSTANTIATES edges exist in the
+ * committed graph (for read_cypher / visualization) but are DELIBERATELY excluded
+ * from impact/profile traversal in both backends. Instantiation is a weaker
+ * "who-might-break" signal than a call edge, and including it would inflate
+ * neighborhoods with constructor sites that aren't true callers. This is
+ * intentional parity, not an oversight; do not add INSTANTIATES here.
  */
 export async function computeImpact(
   store: GraphStore,

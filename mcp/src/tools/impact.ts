@@ -16,7 +16,12 @@ function clamp(val: number, min: number, max: number): number {
   return Math.min(Math.max(val, min), max);
 }
 
-/** Builds the impact tool handler bound to a store and repo. */
+/** Builds the impact tool handler bound to a store and repo.
+ *
+ *  Impact neighborhoods are CALLS-based only (see computeImpact). INSTANTIATES
+ *  edges are captured in the committed graph for read_cypher/visualization but are
+ *  intentionally NOT traversed here (recorded decision, matched across both
+ *  backends) — instantiation sites are not treated as impact-bearing callers. */
 export function makeImpact(store: GraphStore, repoId: string) {
   return async (args: ImpactArgs): Promise<ToolResult> => {
     const sel: Selector = {

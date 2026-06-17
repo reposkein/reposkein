@@ -152,8 +152,17 @@ export function buildFederatedGraph(repos: RepoSource[]): ParsedGraph {
   }
 
   // M3: cross-repo IMPORTS edges (File -> child File) from external_import_targets,
-  // for backend parity with Neo4j's stitch_cross_repo_imports. Added to `edges`
-  // (no dedicated reader yet — the committed property already carries the data).
+  // for backend parity with Neo4j's stitch_cross_repo_imports. Added to `edges`.
+  //
+  // Read-tool scope (intentional parity): these stitched cross-repo IMPORTS — and
+  // the INHERITS/IMPLEMENTS heritage edges injected in step 4 below — are computed
+  // into the merged graph but are NOT walked by any read tool's traversal. impact /
+  // get_context_profile neighborhoods are CALLS-only (see profile/impact.ts), so
+  // the only consumers of these edges today are read_cypher and the visualization
+  // exporter. This deliberately mirrors the Neo4j tool surface: that backend also
+  // stitches these edges (stitch_cross_repo_imports / stitch_cross_repo_heritage)
+  // without exposing a dedicated traversal reader. The edges exist for
+  // read_cypher / visualization + future traversal, and both backends agree.
   for (const n of nodes) {
     const targets = n.props.external_import_targets;
     if (!Array.isArray(targets)) continue;

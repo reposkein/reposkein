@@ -271,7 +271,11 @@ if (invokedAsBin()) {
       .catch((err) => { console.error(err); process.exit(1); });
   } else if (sub === "view") {
     const { repoPath, opts, exportDir } = parseViewArgs(process.argv.slice(3));
-    const vRepoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID) ?? "repo";
+    const resolvedViewRepoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
+    if (!resolvedViewRepoId) {
+      console.error(`reposkein view: could not resolve repo id (no meta.json / REPOSKEIN_REPO_ID); falling back to placeholder "repo"`);
+    }
+    const vRepoId = resolvedViewRepoId ?? "repo";
     const run = exportDir
       ? runExport(repoPath, vRepoId, exportDir)
       : runView(repoPath, vRepoId, opts);
