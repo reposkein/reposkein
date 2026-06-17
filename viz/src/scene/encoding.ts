@@ -133,6 +133,34 @@ export function bundleOpacity(
   return Math.min(1, Math.max(EDGE_OPACITY_FLOOR, boosted));
 }
 
+/** Adaptive global edge-opacity scale (design §1.4). Keeps total additive ink
+ *  ~constant: under the budget every bundle renders at full alpha; above it,
+ *  alpha scales ~1/drawn so a dense hub core dims instead of saturating white.
+ *
+ *  EDGE_K_MIN is the floor. With the MAX_BUNDLES≈2500 cap, drawn·EDGE_K_MIN at
+ *  the cap is bounded (2500·0.04 = 100 units of un-attenuated ink ≈ the budget),
+ *  so the cap and the floor together cannot blow past a sane ink ceiling. */
+export const EDGE_INK_BUDGET = 220;
+export const EDGE_K_MIN = 0.04;
+export function adaptiveEdgeScale(drawn: number): number {
+  if (drawn <= EDGE_INK_BUDGET) return 1;
+  return Math.max(EDGE_K_MIN, EDGE_INK_BUDGET / drawn);
+}
+
+/** Node emissive floor (design §2): a dimmed star never reaches pure black, so
+ *  it stays a faint point of light rather than vanishing under the web. Scales
+ *  the triple up uniformly (preserving hue) when its brightest channel is below
+ *  the floor. */
+export const NODE_EMISSIVE_FLOOR = 0.1;
+export function applyNodeFloor(r: number, g: number, b: number): [number, number, number] {
+  const m = Math.max(r, g, b);
+  if (m > 0 && m < NODE_EMISSIVE_FLOOR) {
+    const s = NODE_EMISSIVE_FLOOR / m;
+    return [r * s, g * s, b * s];
+  }
+  return [r, g, b];
+}
+
 /** Node size: base + k·log(1 + degree). Cluster cores are larger.
  *  Clamped to [NODE_SIZE_MIN, NODE_SIZE_MAX] so hubs stand out but
  *  nothing is enormous. */
