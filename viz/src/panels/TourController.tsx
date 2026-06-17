@@ -32,59 +32,42 @@ export function TourController() {
   // Caption fade: re-trigger the fade-in on every stop change.
   const [shown, setShown] = useState(false);
 
-  // Apply a single stop's action via the store's existing actions. Expanding a
-  // cluster reveals its children; focusing triggers neighborhood-focus; every
-  // stop ends by flying to the target (cluster key OR node id — setFocusTarget
-  // resolves both through clusterOfNode/indexByKey).
+  // Apply a single stop as one fixed, deterministic sequence (replaces the old
+  // per-kind switch). Each stop is self-isolated: step 1 wipes ALL prior
+  // expansion/overlays, so there is no cross-stop accumulation and the sequence
+  // is idempotent. Dispatches are reduced sequentially against the evolving
+  // state (not the render snapshot), so `select` strictly before `toggleFocus`
+  // (which reads store.selected) behaves predictably.
   const applyStop = useCallback(
     (stop: TourStop) => {
       if (!model) return;
-      const a = stop.action;
-      // Dispatches are reduced sequentially against the evolving state (not the
-      // render snapshot), so toggleFocus behaves predictably. `haveFocus` is the
-      // prior stop's end state (stops are applied at least one render apart).
-      const haveFocus = store.focus !== null;
-      switch (a.kind) {
-        case "overview": {
-          // Collapse to the top level and frame the whole constellation.
-          if (haveFocus) store.toggleFocus();
-          store.setFocusTarget(null);
-          store.select(null);
-          store.requestFit();
-          break;
-        }
-        case "expand": {
-          if (haveFocus) store.toggleFocus();
-          // Open the module cluster (if it has children and isn't open yet),
-          // then fly to its core.
-          const c = model.byKey.get(a.clusterKey);
-          if (c && c.children.length > 0 && !store.expanded.has(a.clusterKey)) {
-            store.toggleExpand(a.clusterKey);
+      // 1. CLEAN SLATE — kills cross-stop accumulation (expanded := {root},
+      //    clears focus/selection/impact).
+      if (stop.collapsePrevious) store.resetExpansion();
+      // 2. LENS — per-stop single lens (no fitNonce bump → won't yank the camera).
+      store.setLens(stop.lens);
+      // 3. EXPAND (bounded). Module: open expandKeys one level (to files).
+      //    Node: reveal only the focus node's ancestor chain.
+      if (stop.kind === "module") {
+        for (const key of stop.expandKeys) {
+          const c = model.byKey.get(key);
+          if (c && c.children.length > 0 && !store.expanded.has(key)) {
+            store.toggleExpand(key);
           }
-          store.select(null);
-          store.setFocusTarget(a.clusterKey);
-          break;
         }
-        case "focus": {
-          // Reveal the node (expand its ancestor chain), select it, fly to it,
-          // and light up its neighborhood (reuse toggleFocus). toggleFocus reads
-          // store.selected, so select first. Clear a stale focus on a DIFFERENT
-          // node before re-arming so it recomputes for this stop's node.
-          if (haveFocus && store.selected !== a.nodeId) store.toggleFocus();
-          revealAncestors(model, store, a.nodeId);
-          store.select(a.nodeId);
-          store.setFocusTarget(a.nodeId);
-          if (!haveFocus || store.selected !== a.nodeId) store.toggleFocus();
-          break;
-        }
-        case "select": {
-          if (haveFocus) store.toggleFocus();
-          revealAncestors(model, store, a.nodeId);
-          store.select(a.nodeId);
-          store.setFocusTarget(a.nodeId);
-          break;
-        }
+      } else if (stop.focusNodeId) {
+        revealAncestors(model, store, stop.focusNodeId);
       }
+      // 4. FOCUS / ISOLATE — select strictly before toggleFocus.
+      if (stop.focusNodeId) {
+        store.select(stop.focusNodeId);
+        store.toggleFocus();
+      } else {
+        store.select(null);
+      }
+      // 5. FIT — bumps fitNonce → Controls flies + frames the target (cluster
+      //    key OR node id; setFocusTarget resolves both).
+      store.setFocusTarget(stop.targetKey);
     },
     // store identity changes each render (useMemo over state); we intentionally
     // read the latest via closure and only re-create when model changes.
@@ -223,10 +206,10 @@ export function TourController() {
               wordBreak: "break-word",
             }}
           >
-            {stop.captionTitle}
+            {stop.caption.title}
           </div>
           <div style={{ fontSize: 13, color: "rgba(200,210,235,0.82)", marginTop: 4 }}>
-            {stop.captionBody}
+            {stop.caption.body}
           </div>
         </div>
       </div>
