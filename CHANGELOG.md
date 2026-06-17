@@ -23,6 +23,8 @@ supply-chain depth.
 - **`reposkein-mcp view` path guard hardened** — `safeJoin` now resolves symlinks
   (`realpathSync`) and re-checks containment, so a symlink inside the served root
   can't escape it.
+- **The packaged bin is marked executable in the build** (`chmod 0755 dist/index.js`),
+  so a bare/symlink invocation works without relying on npm's install-time chmod.
 
 ### Added (robustness / CI / supply chain)
 

@@ -43,7 +43,7 @@
     "binary-digests.json"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/chmod-bin.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "start": "node dist/index.js",
