@@ -21,23 +21,38 @@
 
 import type { ClientModel } from "./clientModel";
 import type { ClusterNode } from "./cluster";
+import type { LensId } from "./lens";
 
-/** What the tour does when it arrives at a stop. The controller maps these to
- *  the store's existing actions; this module only DESCRIBES the intent. */
-export type TourAction =
-  | { kind: "overview" }
-  | { kind: "expand"; clusterKey: string }
-  | { kind: "focus"; nodeId: string }
-  | { kind: "select"; nodeId: string };
-
+/** A guided-tour stop is a fully declarative, self-isolated FRAME. The
+ *  controller runs one fixed apply sequence for every stop (clean slate → lens
+ *  → bounded expand → focus/isolate → fit), so a stop never accumulates state
+ *  from the previous one. Each field names exactly one concern:
+ *
+ *    - kind          which apply branch (overview / module-expand / node-focus)
+ *    - targetKey     cluster key OR node id flown to (setFocusTarget resolves both)
+ *    - expandKeys    explicit cluster keys to open (module key, or [])
+ *    - expandDepth   HARD cap: 0 = nothing, 1 = one level (files), NEVER symbols
+ *    - lens          the single lens this stop shows ("all"|"calls"|"types"|"imports")
+ *    - focusNodeId   when set, arm neighborhood-focus on this node
+ *    - collapsePrevious  wipe ALL prior expansion first (true for every stop)
+ */
 export interface TourStop {
   /** Stable id for React keys / progress. */
   id: string;
+  kind: "overview" | "module" | "node";
   /** The thing to fly to: a cluster key OR a node id (resolved by the camera). */
   targetKey: string;
-  captionTitle: string;
-  captionBody: string;
-  action: TourAction;
+  /** Explicit cluster keys to open (module stops: the module key; else []). */
+  expandKeys: string[];
+  /** Hard cap on expansion depth: module stops open AT MOST one level (files). */
+  expandDepth: 0 | 1;
+  /** The single lens this stop shows. */
+  lens: LensId;
+  /** When set, arm neighborhood-focus on this node (node stops). */
+  focusNodeId: string | null;
+  /** Wipe all prior expansion + overlays before applying this stop. */
+  collapsePrevious: boolean;
+  caption: { title: string; body: string };
 }
 
 const TYPE_EDGE_TYPES = new Set(["INHERITS", "IMPLEMENTS"]);
@@ -144,7 +159,18 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-/** Build the deterministic tour-stop list for a graph. Caps at ~6-9 stops. */
+/** Build the deterministic tour-stop list for a graph. Caps at ~6-9 stops.
+ *
+ *  Every stop carries `collapsePrevious: true` so the controller wipes prior
+ *  expansion before applying it — each stop is a clean, single-concern frame:
+ *
+ *    | Stop          | kind     | targetKey | expandKeys | depth | lens    | focusNodeId |
+ *    | Overview      | overview | rootKey   | []         | 0     | all     | null        |
+ *    | Top-N modules | module   | m.key     | [m.key]    | 1     | imports | null        |
+ *    | Busiest hub   | node     | hub.id    | []         | 0     | calls   | hub.id      |
+ *    | Type hierarchy| node     | typeTop.id| []         | 0     | types   | typeTop.id  |
+ *    | Entry point   | node     | entry.id  | []         | 0     | calls   | entry.id    |
+ */
 export function buildTour(model: ClientModel): TourStop[] {
   const stops: TourStop[] = [];
 
@@ -152,16 +178,24 @@ export function buildTour(model: ClientModel): TourStop[] {
   const moduleCount = topLevelModules(model).length;
   stops.push({
     id: "overview",
+    kind: "overview",
     targetKey: model.rootKey,
-    captionTitle: model.repoId,
-    captionBody: `${plural(model.counts.nodes, "node")} · ${plural(
-      model.counts.edges,
-      "edge",
-    )} · ${plural(moduleCount, "module")}`,
-    action: { kind: "overview" },
+    expandKeys: [],
+    expandDepth: 0,
+    lens: "all",
+    focusNodeId: null,
+    collapsePrevious: true,
+    caption: {
+      title: model.repoId,
+      body: `${plural(model.counts.nodes, "node")} · ${plural(
+        model.counts.edges,
+        "edge",
+      )} · ${plural(moduleCount, "module")}`,
+    },
   });
 
-  // 2) Largest modules ---------------------------------------------------------
+  // 2) Largest modules — open AT MOST one level (to files) under the imports
+  //    lens, so only that module's blue IMPORTS arcs show (never 505 symbols).
   const descCounts = descendantCounts(model);
   const modules = rankDesc(
     topLevelModules(model),
@@ -172,14 +206,21 @@ export function buildTour(model: ClientModel): TourStop[] {
     const { files, symbols } = fileSymbolCounts(model, m.key);
     stops.push({
       id: `module:${m.key}`,
+      kind: "module",
       targetKey: m.key,
-      captionTitle: m.name,
-      captionBody: `${plural(files, "file")}, ${plural(symbols, "symbol")}`,
-      action: { kind: "expand", clusterKey: m.key },
+      expandKeys: [m.key],
+      expandDepth: 1,
+      lens: "imports",
+      focusNodeId: null,
+      collapsePrevious: true,
+      caption: {
+        title: m.name,
+        body: `${plural(files, "file")}, ${plural(symbols, "symbol")}`,
+      },
     });
   }
 
-  // 3) Busiest hub -------------------------------------------------------------
+  // 3) Busiest hub — the highest in+out degree node, under the calls lens.
   const deg = degrees(model);
   const hubCandidates = [...deg.entries()].map(([id, d]) => ({ id, total: d.in + d.out, in: d.in }));
   const hubs = rankDesc(
@@ -191,15 +232,22 @@ export function buildTour(model: ClientModel): TourStop[] {
   if (hub && hub.total > 0) {
     stops.push({
       id: `hub:${hub.id}`,
+      kind: "node",
       targetKey: hub.id,
-      captionTitle: displayName(model, hub.id),
-      captionBody: `called from ${plural(hub.in, "place")}`,
-      action: { kind: "focus", nodeId: hub.id },
+      expandKeys: [],
+      expandDepth: 0,
+      lens: "calls",
+      focusNodeId: hub.id,
+      collapsePrevious: true,
+      caption: {
+        title: displayName(model, hub.id),
+        body: `called from ${plural(hub.in, "place")}`,
+      },
     });
   }
 
-  // 4) Type hierarchy ----------------------------------------------------------
-  // The Class/Interface with the most incident INHERITS/IMPLEMENTS edges.
+  // 4) Type hierarchy — the Class/Interface with the most incident
+  //    INHERITS/IMPLEMENTS edges, under the types lens.
   const typeIncidence = new Map<string, number>();
   for (const e of model.drawEdges) {
     if (!TYPE_EDGE_TYPES.has(e.type)) continue;
@@ -221,16 +269,22 @@ export function buildTour(model: ClientModel): TourStop[] {
     const kind = model.records.get(typeTop.id)?.kind ?? "Type";
     stops.push({
       id: `type:${typeTop.id}`,
+      kind: "node",
       targetKey: typeTop.id,
-      captionTitle: displayName(model, typeTop.id),
-      captionBody: `${kind} · ${plural(typeTop.count, "type link")}`,
-      action: { kind: "focus", nodeId: typeTop.id },
+      expandKeys: [],
+      expandDepth: 0,
+      lens: "types",
+      focusNodeId: typeTop.id,
+      collapsePrevious: true,
+      caption: {
+        title: displayName(model, typeTop.id),
+        body: `${kind} · ${plural(typeTop.count, "type link")}`,
+      },
     });
   }
 
-  // 5) Entry point -------------------------------------------------------------
-  // A high out-degree Function — a likely driver/orchestrator. Skip if it's the
-  // same node already featured as the busiest hub (avoid a duplicate stop).
+  // 5) Entry point — a high out-degree Function (a likely driver) under the
+  //    calls lens. Skip if it's the same node already featured as the hub.
   const fnCandidates = [...deg.entries()]
     .filter(([id]) => model.records.get(id)?.kind === "Function" && id !== hub?.id)
     .map(([id, d]) => ({ id, out: d.out }));
@@ -242,10 +296,17 @@ export function buildTour(model: ClientModel): TourStop[] {
   if (entry && entry.out > 0) {
     stops.push({
       id: `entry:${entry.id}`,
+      kind: "node",
       targetKey: entry.id,
-      captionTitle: displayName(model, entry.id),
-      captionBody: `calls out to ${plural(entry.out, "place")}`,
-      action: { kind: "select", nodeId: entry.id },
+      expandKeys: [],
+      expandDepth: 0,
+      lens: "calls",
+      focusNodeId: entry.id,
+      collapsePrevious: true,
+      caption: {
+        title: displayName(model, entry.id),
+        body: `calls out to ${plural(entry.out, "place")}`,
+      },
     });
   }
 

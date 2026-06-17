@@ -72,19 +72,55 @@ describe("buildTour (deterministic stop derivation)", () => {
     expect(tour.length).toBeGreaterThan(0);
     const first = tour[0]!;
     expect(first.id).toBe("overview");
-    expect(first.action).toEqual({ kind: "overview" });
+    expect(first.kind).toBe("overview");
     expect(first.targetKey).toBe("galaxy:r");
-    expect(first.captionTitle).toBe("r");
+    expect(first.expandKeys).toEqual([]);
+    expect(first.expandDepth).toBe(0);
+    expect(first.lens).toBe("all");
+    expect(first.focusNodeId).toBeNull();
+    expect(first.collapsePrevious).toBe(true);
+    expect(first.caption.title).toBe("r");
     // counts come from model.counts (nodes/edges) and module count.
-    expect(first.captionBody).toContain("nodes");
-    expect(first.captionBody).toContain("edges");
-    expect(first.captionBody).toContain("modules");
+    expect(first.caption.body).toContain("nodes");
+    expect(first.caption.body).toContain("edges");
+    expect(first.caption.body).toContain("modules");
   });
 
   it("is stable across repeated runs (same stops, same order)", () => {
     const a = buildTour(clientModel(graph()));
     const b = buildTour(clientModel(graph()));
     expect(a).toEqual(b);
+    // Deterministic ordering of ids too (explicit, not just deep-equal).
+    expect(a.map((s) => s.id)).toEqual(b.map((s) => s.id));
+  });
+
+  it("every stop resets prior expansion and is capped to one expand level", () => {
+    const tour = buildTour(clientModel(graph()));
+    for (const s of tour) {
+      expect(s.collapsePrevious).toBe(true);
+      expect(s.expandDepth).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("shows a single, lens-appropriate view per stop kind", () => {
+    const tour = buildTour(clientModel(graph()));
+    for (const s of tour) {
+      if (s.kind === "overview") expect(s.lens).toBe("all");
+      // Module stops open exactly their module key to depth 1 under imports.
+      if (s.kind === "module") {
+        expect(s.lens).toBe("imports");
+        expect(s.expandDepth).toBe(1);
+        expect(s.expandKeys).toEqual([s.targetKey]);
+        expect(s.focusNodeId).toBeNull();
+      }
+      // Node stops never expand a module; they arm focus on their target.
+      if (s.kind === "node") {
+        expect(s.expandKeys).toEqual([]);
+        expect(s.expandDepth).toBe(0);
+        expect(s.focusNodeId).toBe(s.targetKey);
+        expect(["calls", "types"]).toContain(s.lens);
+      }
+    }
   });
 
   it("includes the busiest hub with an in-degree caption", () => {
@@ -92,9 +128,12 @@ describe("buildTour (deterministic stop derivation)", () => {
     const hub = tour.find((s) => s.id.startsWith("hub:"));
     expect(hub).toBeDefined();
     // hub is called from 4 places (main, helper, leaf, extra).
-    expect(hub!.captionTitle).toBe("hub");
-    expect(hub!.captionBody).toBe("called from 4 places");
-    expect(hub!.action).toEqual({ kind: "focus", nodeId: "rs1:r:sym:core/b.ts#hub" });
+    expect(hub!.kind).toBe("node");
+    expect(hub!.lens).toBe("calls");
+    expect(hub!.caption.title).toBe("hub");
+    expect(hub!.caption.body).toBe("called from 4 places");
+    expect(hub!.targetKey).toBe("rs1:r:sym:core/b.ts#hub");
+    expect(hub!.focusNodeId).toBe("rs1:r:sym:core/b.ts#hub");
   });
 
   it("includes a type-hierarchy stop for the most-connected Class/Interface", () => {
@@ -102,9 +141,11 @@ describe("buildTour (deterministic stop derivation)", () => {
     const type = tour.find((s) => s.id.startsWith("type:"));
     expect(type).toBeDefined();
     // Derived has 2 incident type edges (INHERITS Base + IMPLEMENTS Shape).
-    expect(type!.captionTitle).toBe("Derived");
-    expect(type!.captionBody).toContain("Class");
-    expect(type!.captionBody).toContain("type link");
+    expect(type!.kind).toBe("node");
+    expect(type!.lens).toBe("types");
+    expect(type!.caption.title).toBe("Derived");
+    expect(type!.caption.body).toContain("Class");
+    expect(type!.caption.body).toContain("type link");
   });
 
   it("includes module stops ordered by descendant count, tie-broken by key", () => {
@@ -112,10 +153,14 @@ describe("buildTour (deterministic stop derivation)", () => {
     const modules = tour.filter((s) => s.id.startsWith("module:"));
     expect(modules.length).toBeGreaterThanOrEqual(1);
     // 'core' has more descendants than 'util' → core appears first.
-    expect(modules[0]!.captionTitle).toBe("core");
-    expect(modules[0]!.action).toEqual({ kind: "expand", clusterKey: "dir:r:core" });
-    expect(modules[0]!.captionBody).toContain("file");
-    expect(modules[0]!.captionBody).toContain("symbol");
+    expect(modules[0]!.caption.title).toBe("core");
+    expect(modules[0]!.kind).toBe("module");
+    expect(modules[0]!.targetKey).toBe("dir:r:core");
+    expect(modules[0]!.expandKeys).toEqual(["dir:r:core"]);
+    expect(modules[0]!.expandDepth).toBe(1);
+    expect(modules[0]!.lens).toBe("imports");
+    expect(modules[0]!.caption.body).toContain("file");
+    expect(modules[0]!.caption.body).toContain("symbol");
   });
 
   it("caps the number of stops to a small cinematic count", () => {
