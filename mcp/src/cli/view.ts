@@ -369,7 +369,14 @@ export async function runExport(
     // 3) Inject the graph-data.js script into index.html before the app bundle.
     const indexPath = join(absOut, "index.html");
     const html = readFileSync(indexPath, "utf8");
-    writeFileSync(indexPath, injectGraphDataScript(html), "utf8");
+    const injected = injectGraphDataScript(html);
+    writeFileSync(indexPath, injected, "utf8");
+
+    // 4) SPA fallback for static hosts (esp. GitHub Pages): serve the app for
+    // ANY unknown path. Pages returns 404.html for paths with no matching file,
+    // so a copy of index.html makes deep links / client routes / refreshes load
+    // the viewer instead of the host's "Not Found" page.
+    writeFileSync(join(absOut, "404.html"), injected, "utf8");
   } catch (err) {
     console.error(
       `reposkein: export failed: ${err instanceof Error ? err.message : String(err)}`,
