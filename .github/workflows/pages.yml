@@ -75,7 +75,7 @@ jobs:
       - name: Export static constellation
         run: node mcp/dist/index.js view --export ./_site .
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: ./_site
 
