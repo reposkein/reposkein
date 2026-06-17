@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
 import { runDoctor } from "./cli/doctor.js";

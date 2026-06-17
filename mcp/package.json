@@ -1,6 +1,6 @@
 {
   "name": "@reposkein/mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Deterministic code-graph (GraphRAG) MCP server — give your AI agent callers/callees, change-impact, and semantic search over your repo instead of grep. 7 languages, zero-infra, git-native.",
   "keywords": [
     "mcp",

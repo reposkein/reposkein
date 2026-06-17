@@ -6,6 +6,16 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-17
+
+### Fixed
+
+- **`reposkein-mcp` bin now carries a `#!/usr/bin/env node` shebang.** Executing
+  the globally-installed binary *directly* (in a container / MCP registry such as
+  Glama, or our own Docker image) ran it through `/bin/sh`, which tried to
+  interpret the JavaScript as shell ("import: not found"). It now launches under
+  Node. (npx- and agent-launched usage was unaffected.)
+
 ## [0.2.0] - 2026-06-16
 
 ### Added
