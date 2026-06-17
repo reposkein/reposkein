@@ -61,11 +61,11 @@ jobs:
             ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: indexer
       - name: Build release binary
@@ -77,7 +77,7 @@ jobs:
           mkdir -p bin-dist
           cp "indexer/target/${{ matrix.target }}/release/reposkein-indexer${{ matrix.ext }}" \
              "bin-dist/reposkein-indexer-${{ matrix.platform_key }}${{ matrix.ext }}"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: indexer-${{ matrix.platform_key }}
           path: bin-dist/reposkein-indexer-${{ matrix.platform_key }}${{ matrix.ext }}
@@ -92,7 +92,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: bin-dist
           pattern: indexer-*
@@ -106,7 +106,7 @@ jobs:
           echo "--- SHA256SUMS ---"
           cat SHA256SUMS
       - name: Create / update the release with the binaries
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             bin-dist/reposkein-indexer-*
@@ -128,15 +128,15 @@ jobs:
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
       # Build the viz/ SPA (pnpm) BEFORE the mcp build/publish so `bundle-viz.mjs`
       # (run by mcp's `prepare`) can copy viz/dist into dist/viz — otherwise the
       # published tarball would ship without the `reposkein-mcp view` bundle.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: "10.15.0" # keep in sync with viz/package.json packageManager
       - name: Build viz SPA bundle
@@ -184,6 +184,46 @@ jobs:
           EOF
       - name: Set package version to the tag
         run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+      # Gate the release on the EXACT artifact that will ship: pack the tarball,
+      # unpack it, assert the packaged assets exist + the bin has a shebang, then
+      # run the same black-box smoke (launch VIA A SYMLINK as an executable, pipe
+      # an MCP `initialize`, assert a JSON-RPC `"result"`). 0.2.0 shipped without
+      # a shebang and 0.2.1 with a symlink-broken guard precisely because no step
+      # ever ran the packed bin as a process — this is that step.
+      - name: Pack + smoke the npm tarball before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARBALL="$(npm pack --silent)"
+          echo "packed: ${TARBALL}"
+          WORK="$(mktemp -d)"
+          tar -xzf "${TARBALL}" -C "${WORK}"
+          PKG="${WORK}/package" # npm tarballs unpack under ./package
+          echo "--- packaged tree (top) ---"; ls -la "${PKG}/dist" | head -20
+          for f in dist/index.js dist/viz/index.html dist/SKILL.md; do
+            test -f "${PKG}/${f}" || { echo "FAIL: packaged tarball missing ${f}" >&2; exit 1; }
+            echo "OK present: ${f}"
+          done
+          SHEBANG="$(head -1 "${PKG}/dist/index.js")"
+          echo "--- dist/index.js shebang: ${SHEBANG}"
+          case "${SHEBANG}" in
+            '#!'*) echo "OK: shebang present" ;;
+            *) echo "FAIL: dist/index.js has no shebang (would break a bare bin invocation)" >&2; exit 1 ;;
+          esac
+          # Install the runtime deps into the unpacked package, exactly as a real
+          # `npm install` would, so the bin can resolve its imports. --ignore-scripts
+          # skips the postinstall (which would try to fetch a not-yet-published
+          # release asset for this tag); we are smoking the bin's startup, not the
+          # binary fetch.
+          ( cd "${PKG}" && npm install --omit=dev --ignore-scripts --no-audit --no-fund )
+          # Symlink + initialize smoke against the UNPACKED tarball bin.
+          SMOKE_DIR="$(mktemp -d)"
+          ln -s "${PKG}/dist/index.js" "${SMOKE_DIR}/reposkein-mcp"
+          OUT="$(printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}\n' | timeout 15 "${SMOKE_DIR}/reposkein-mcp" 2>/dev/null)"
+          echo "--- response ---"; echo "${OUT}"
+          echo "${OUT}" | grep -q '"result"' || { echo "FAIL: packed bin did not answer initialize — refusing to publish" >&2; exit 1; }
+          echo "${OUT}" | grep -qE '"serverInfo"|"capabilities"' || { echo "FAIL: result missing serverInfo/capabilities" >&2; exit 1; }
+          echo "OK: packed tarball bin answered initialize via symlink — safe to publish"
       - name: Publish to npm
         if: ${{ env.NPM_TOKEN != '' }}
         run: npm publish --provenance --access public

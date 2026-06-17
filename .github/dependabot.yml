@@ -1,0 +1,17 @@
+# Keeps the SHA-pinned GitHub Actions current. The workflows pin third-party
+# actions to full commit SHAs (with a `# vX.Y.Z` comment) so a compromised tag
+# can't silently change what runs in the privileged release/publish jobs.
+# Dependabot bumps those SHAs (and the comments) as new versions ship, so the
+# pins don't quietly rot.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"

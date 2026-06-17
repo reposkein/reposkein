@@ -29,11 +29,11 @@ jobs:
       run:
         working-directory: indexer
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: indexer
       - name: Format check
@@ -69,9 +69,9 @@ jobs:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: reposkeintest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: indexer
       - name: load -> export byte-identical round-trip (PRD §6.2.7)
@@ -81,6 +81,31 @@ jobs:
         # create) → EquivalentSchemaRuleAlreadyExists. Serialize them.
         run: cargo test -p reposkein-neo4j-io -- --ignored --test-threads=1
 
+  version-lockstep:
+    name: version lockstep (indexer Cargo.toml == mcp package.json)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      # A skew here means the npm postinstall would fetch a release asset that
+      # doesn't exist (the indexer binary is published per-version). Catch it in
+      # CI rather than at a user's `npm install`.
+      - name: Assert indexer + mcp versions match
+        shell: bash
+        run: |
+          CARGO_VERSION="$(grep -m1 -E '^version[[:space:]]*=' indexer/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          PKG_VERSION="$(node -p "require('./mcp/package.json').version")"
+          echo "indexer Cargo.toml [workspace.package] version = ${CARGO_VERSION}"
+          echo "mcp package.json version                       = ${PKG_VERSION}"
+          if [ -z "${CARGO_VERSION}" ]; then
+            echo "ERROR: could not parse version from indexer/Cargo.toml" >&2
+            exit 1
+          fi
+          if [ "${CARGO_VERSION}" != "${PKG_VERSION}" ]; then
+            echo "ERROR: version skew — indexer (${CARGO_VERSION}) != mcp (${PKG_VERSION}). The npm postinstall fetches the per-version indexer binary; a skew points at a nonexistent release asset." >&2
+            exit 1
+          fi
+          echo "OK: versions match (${PKG_VERSION})"
+
   mcp:
     name: mcp (typecheck + build + test)
     runs-on: ubuntu-latest
@@ -88,16 +113,44 @@ jobs:
       run:
         working-directory: mcp
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "24"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: "10.15.0" # keep in sync with viz/package.json packageManager
       - name: Install
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
       - name: Build
         run: npm run build
+      # Build the viz SPA + bundle it into dist/viz so the packaged bin is the
+      # same artifact that ships to npm (the `view` command needs dist/viz).
+      - name: Build + bundle viz
+        working-directory: viz
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - name: Bundle viz into mcp/dist
+        run: node scripts/bundle-viz.mjs
+      # Black-box bin smoke: launch reposkein-mcp VIA A SYMLINK (the entry path
+      # that broke in 0.2.0 (missing shebang) and 0.2.1 (symlink-broken guard)),
+      # invoked as an executable — NO `node` prefix, so a missing shebang fails
+      # the build instead of being masked. Pipe an MCP `initialize` and assert a
+      # JSON-RPC `"result"` (with serverInfo/capabilities) comes back.
+      - name: Bin smoke (symlink + MCP initialize)
+        shell: bash
+        run: |
+          SMOKE_DIR="$(mktemp -d)"
+          ln -s "$PWD/dist/index.js" "$SMOKE_DIR/reposkein-mcp"
+          echo "--- shebang ---"; head -1 dist/index.js
+          OUT="$(printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}\n' | timeout 15 "$SMOKE_DIR/reposkein-mcp" 2>/dev/null)"
+          echo "--- response ---"; echo "$OUT"
+          echo "$OUT" | grep -q '"result"' || { echo "FAIL: no JSON-RPC result from the bin" >&2; exit 1; }
+          echo "$OUT" | grep -qE '"serverInfo"|"capabilities"' || { echo "FAIL: result missing serverInfo/capabilities" >&2; exit 1; }
+          echo "OK: bin answered initialize via symlink"
       - name: Tests (DB-gated suites skip without NEO4J_PASSWORD)
         run: npm test
 
@@ -108,15 +161,15 @@ jobs:
       run:
         working-directory: viz
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           # Explicit version: action-setup runs at the repo root (working-directory
           # applies only to `run:` steps), where there is no package.json with a
           # `packageManager` field — so it can't auto-detect. Keep in sync with
           # viz/package.json's `packageManager`.
           version: "10.15.0"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "24"
           cache: pnpm

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -56,6 +56,13 @@ describe("view server /api/source (read-only, path-guarded)", () => {
     writeFileSync(join(repoDir, "src", "foo.ts"), lines + "\n");
     // A secret OUTSIDE the served root (one level up) to prove traversal is blocked.
     writeFileSync(join(repoDir, "..", "rs-view-secret.txt"), "TOPSECRET");
+    // A symlink INSIDE the served root that points OUTSIDE it (to the secret).
+    // The lexical `../` guard can't catch this — only the realpath check can.
+    try {
+      symlinkSync(join(repoDir, "..", "rs-view-secret.txt"), join(repoDir, "src", "leak.ts"));
+    } catch {
+      /* symlink creation may be unavailable on some CI; the test below tolerates it */
+    }
     handler = makeViewHandler(repoDir, "testrepo");
   });
 
@@ -111,6 +118,14 @@ describe("view server /api/source (read-only, path-guarded)", () => {
       // safeJoin re-roots it under repoDir where the file does not exist → 404.
       expect(r.status).toBe(404);
     }
+  });
+
+  it("rejects a symlink inside the root that points outside (no leak via realpath)", async () => {
+    // src/leak.ts is a symlink to ../rs-view-secret.txt — it passes the lexical
+    // `../` guard (no `..` in the request) but realpath resolves it outside root.
+    const r = await invoke(handler, "/api/source?path=src/leak.ts&start=1&end=1");
+    expect(r.body).not.toContain("TOPSECRET");
+    expect(r.status).toBe(404);
   });
 
   it("404s when the path resolves to a directory", async () => {

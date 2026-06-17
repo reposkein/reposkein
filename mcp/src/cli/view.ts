@@ -7,6 +7,7 @@ import {
   mkdirSync,
   cpSync,
   writeFileSync,
+  realpathSync,
 } from "node:fs";
 import { join, resolve, normalize, extname } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -40,13 +41,43 @@ export interface ViewOptions {
 }
 
 /** Resolves a request path safely under `root`, rejecting traversal. Returns
- *  the absolute path or null if it escapes `root`. */
+ *  the absolute path or null if it escapes `root`.
+ *
+ *  Two layers of defense:
+ *   1. Lexical: normalize + strip leading `../` and re-root the request under
+ *      `root`, then prefix-check — blocks `../` style traversal.
+ *   2. realpath: resolve symlinks on BOTH the target and the root, then
+ *      re-check containment under the REAL root. A symlink *inside* the served
+ *      root that points outside passes the lexical check but is caught here.
+ *      ENOENT (a not-yet-existing path, e.g. a missing file the caller will
+ *      404 on anyway) is fine — return the lexical path so the caller's own
+ *      existsSync handles it; never crash on a missing path. */
 function safeJoin(root: string, urlPath: string): string | null {
   const decoded = decodeURIComponent(urlPath);
   const rel = normalize(decoded).replace(/^(\.\.[/\\])+/, "");
   const abs = resolve(root, "." + (rel.startsWith("/") ? rel : "/" + rel));
   const rootAbs = resolve(root);
-  if (abs === rootAbs || abs.startsWith(rootAbs + "/")) return abs;
+  if (abs !== rootAbs && !abs.startsWith(rootAbs + "/")) return null;
+
+  // realpath defense: a symlink inside `root` could point outside it. Resolve
+  // the real root once; if the target doesn't resolve (ENOENT), the lexical
+  // check already passed — hand it back and let the caller 404 on absence.
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(rootAbs);
+  } catch {
+    // The served root itself is missing — nothing can be safely served.
+    return null;
+  }
+  let realAbs: string;
+  try {
+    realAbs = realpathSync(abs);
+  } catch {
+    // Target (or a parent) doesn't exist yet: no symlink to escape through.
+    // Keep the lexical path; existence is enforced by the caller.
+    return abs;
+  }
+  if (realAbs === realRoot || realAbs.startsWith(realRoot + "/")) return abs;
   return null;
 }
 
