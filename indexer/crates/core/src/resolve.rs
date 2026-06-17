@@ -373,44 +373,10 @@ pub fn resolve_full(
         );
     }
 
-    // Class-only name index for Python class-lift (resolve_one precedence step 2).
-    let class_nodes: Vec<TypeView> = nodes
-        .iter()
-        .filter(|n| n.labels == ["Class"])
-        .map(|n| TypeView {
-            id: n.id.clone(),
-            name: prop_str(n, "name"),
-            qualified: prop_str(n, "qualified_name"),
-            file_path: prop_str(n, "file_path"),
-            label: "Class".to_string(),
-        })
-        .collect();
-    let mut class_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut class_by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    let mut class_by_id_qual: BTreeMap<String, String> = BTreeMap::new();
-    let mut class_by_id_dir: BTreeMap<String, String> = BTreeMap::new();
-    let mut class_by_id_file: BTreeMap<String, String> = BTreeMap::new();
-    let mut class_by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
-    for t in &class_nodes {
-        class_by_name
-            .entry(t.name.clone())
-            .or_default()
-            .push(t.id.clone());
-        class_by_file_name
-            .entry((t.file_path.clone(), t.name.clone()))
-            .or_default()
-            .push(t.id.clone());
-        class_by_id_qual.insert(t.id.clone(), t.qualified.clone());
-        class_by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
-        class_by_id_file.insert(t.id.clone(), t.file_path.clone());
-        class_by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
-    }
-    for v in class_by_name.values_mut() {
-        v.sort();
-    }
-    for v in class_by_file_name.values_mut() {
-        v.sort();
-    }
+    // Class-only name index for Python class-lift (resolve_one precedence step 2),
+    // construction resolution, and receiver-binding. Built once via the shared
+    // TypeIndex builder (sorted vectors → deterministic).
+    let class_idx = TypeIndex::build_classes(nodes);
 
     // Build receiver-binding index: (caller_id, local_name) -> (class_id, class_file_path).
     // Uses BTreeMap/BTreeSet for determinism. Conflict-drop: only keep unambiguous bindings.
@@ -429,12 +395,12 @@ pub fn resolve_full(
         };
         if let Some((class_id, _res, _conf)) = resolve_base(
             &h,
-            &class_by_name,
-            &class_by_file_qual,
-            &class_by_file_name,
+            &class_idx.by_name,
+            &class_idx.by_file_qual,
+            &class_idx.by_file_name,
             &import_targets,
-            &class_by_id_qual,
-            &class_by_id_dir,
+            &class_idx.by_id_qual,
+            &class_idx.by_id_dir,
         ) {
             binding_classes
                 .entry((rc.caller_id.clone(), local.clone()))
@@ -447,7 +413,7 @@ pub fn resolve_full(
     for ((caller, local), classes) in binding_classes {
         if classes.len() == 1 {
             let class_id = classes.into_iter().next().unwrap();
-            if let Some(file) = class_by_id_file.get(&class_id) {
+            if let Some(file) = class_idx.by_id_file.get(&class_id) {
                 bindings.insert((caller, local), (class_id, file.clone()));
             }
         }
@@ -482,7 +448,7 @@ pub fn resolve_full(
             &by_id_dir,
             &caller_file_id,
             &bindings,
-            &class_by_id_qual,
+            &class_idx.by_id_qual,
         );
 
         // Python class-lift: for bare calls only, check if callee is a class name.
@@ -504,12 +470,12 @@ pub fn resolve_full(
                 };
                 if let Some((to_id, res, conf)) = resolve_base(
                     &h_fake,
-                    &class_by_name,
-                    &class_by_file_qual,
-                    &class_by_file_name,
+                    &class_idx.by_name,
+                    &class_idx.by_file_qual,
+                    &class_idx.by_file_name,
                     &import_targets,
-                    &class_by_id_qual,
-                    &class_by_id_dir,
+                    &class_idx.by_id_qual,
+                    &class_idx.by_id_dir,
                 ) {
                     // Class found → INSTANTIATES; suppress CALLS for this site.
                     let entry = inst_agg
@@ -560,17 +526,41 @@ pub fn resolve_full(
         edges.push(e);
     }
 
-    for ((from, to), (res, conf, sites)) in inst_agg {
+    // INSTANTIATES single-source (A-fix): a `(caller, class)` pair can be
+    // produced by TWO paths that observe the SAME source statements:
+    //   1. the Python class-lift above (`inst_agg`), for bare `Foo()` calls, and
+    //   2. explicit constructions (`new Foo()`, `Foo{}`, `Foo::new()`, and the
+    //      Python bound-local `x = Foo()` captured by `collect_receiver_bindings`).
+    // A Python `x = Foo()` is ONE occurrence yet feeds both paths (a bare
+    // RawCall AND a bound RawConstruction), so emitting both would yield two
+    // `Edge(caller, INSTANTIATES, Foo)` records with the same key — the JSONL
+    // dedup would silently drop one (losing its `sites`). Merge both sources
+    // into one keyed map before emitting: take the max confidence and the MAX
+    // site count (NOT the sum). `max` is correct because, for any Python
+    // `x = Foo()` statement, both paths count it exactly once, so the two
+    // per-pair counts track the same statements; languages whose constructions
+    // never class-lift (Rust/Go/TS) have a zero class-lift count, so `max`
+    // reduces to the construction count. This avoids double-counting a single
+    // source statement.
+    let construction_agg = resolve_constructions(nodes, constructions, &import_targets, &class_idx);
+    let mut inst_merged = inst_agg;
+    for ((from, to), (res, conf, sites)) in construction_agg {
+        let entry = inst_merged.entry((from, to)).or_insert((res, conf, 0));
+        // Same-source de-dup: a Python `x = Foo()` appears in both maps with the
+        // same per-statement count, so take the max (not the sum) to count it once.
+        entry.2 = entry.2.max(sites);
+        if conf > entry.1 {
+            entry.0 = res;
+            entry.1 = conf;
+        }
+    }
+    for ((from, to), (res, conf, sites)) in inst_merged {
         let mut e = Edge::new(from, "INSTANTIATES", to);
         e.props.insert("resolution".to_string(), json!(res));
         e.props.insert("confidence".to_string(), json!(conf));
         e.props.insert("sites".to_string(), json!(sites));
         edges.push(e);
     }
-
-    // Resolve explicit constructions (new Foo(), struct literals, etc.)
-    let mut construction_edges = resolve_constructions(nodes, constructions, &import_targets);
-    edges.append(&mut construction_edges);
 
     let external_out: Vec<(String, Vec<String>)> = external
         .into_iter()
@@ -606,6 +596,91 @@ fn dir_of(path: &str) -> &str {
     path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
 }
 
+/// One shared, deterministic index over type nodes (Class/Interface/Enum),
+/// built once and reused by heritage, construction, class-lift, and
+/// receiver-binding resolution. Every value vector is sorted so iteration into
+/// output stays byte-stable. Centralizing the builder removes the duplicated
+/// index construction in `resolve_full`, `resolve_heritage_full`, and
+/// `resolve_constructions` — the previous duplication was the surface where a
+/// future map could forget to `.sort()` and break determinism.
+struct TypeIndex {
+    /// base_name -> sorted type ids.
+    by_name: BTreeMap<String, Vec<String>>,
+    /// (file_path, qualified_name) -> type id.
+    by_file_qual: BTreeMap<(String, String), String>,
+    /// (file_path, name) -> sorted type ids.
+    by_file_name: BTreeMap<(String, String), Vec<String>>,
+    /// type id -> first label (Class/Interface/Enum). Used by C# label-refine.
+    by_id_label: BTreeMap<String, String>,
+    /// type id -> qualified_name.
+    by_id_qual: BTreeMap<String, String>,
+    /// type id -> directory of its file.
+    by_id_dir: BTreeMap<String, String>,
+    /// type id -> file_path.
+    by_id_file: BTreeMap<String, String>,
+}
+
+impl TypeIndex {
+    /// Builds the index from the given type views. The caller decides which
+    /// nodes to include (e.g. Class-only vs Class/Interface/Enum) by passing
+    /// the matching `TypeView` slice.
+    fn build(types: &[TypeView]) -> Self {
+        let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
+        let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+        let mut by_id_label: BTreeMap<String, String> = BTreeMap::new();
+        let mut by_id_qual: BTreeMap<String, String> = BTreeMap::new();
+        let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
+        let mut by_id_file: BTreeMap<String, String> = BTreeMap::new();
+        for t in types {
+            by_name
+                .entry(t.name.clone())
+                .or_default()
+                .push(t.id.clone());
+            by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
+            by_file_name
+                .entry((t.file_path.clone(), t.name.clone()))
+                .or_default()
+                .push(t.id.clone());
+            by_id_label.insert(t.id.clone(), t.label.clone());
+            by_id_qual.insert(t.id.clone(), t.qualified.clone());
+            by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
+            by_id_file.insert(t.id.clone(), t.file_path.clone());
+        }
+        for v in by_name.values_mut() {
+            v.sort();
+        }
+        for v in by_file_name.values_mut() {
+            v.sort();
+        }
+        TypeIndex {
+            by_name,
+            by_file_qual,
+            by_file_name,
+            by_id_label,
+            by_id_qual,
+            by_id_dir,
+            by_id_file,
+        }
+    }
+
+    /// Builds a Class-only index (used by construction / class-lift resolution).
+    fn build_classes(nodes: &[Node]) -> Self {
+        let types: Vec<TypeView> = nodes
+            .iter()
+            .filter(|n| n.labels == ["Class"])
+            .map(|n| TypeView {
+                id: n.id.clone(),
+                name: prop_str(n, "name"),
+                qualified: prop_str(n, "qualified_name"),
+                file_path: prop_str(n, "file_path"),
+                label: "Class".to_string(),
+            })
+            .collect();
+        Self::build(&types)
+    }
+}
+
 /// Resolves RawHeritage facts → INHERITS/IMPLEMENTS edges, resolving the base
 /// type repo-wide via a CALLS-style ladder. Ambiguous repo-wide bases are
 /// SKIPPED (D-AMBIG): a false hierarchy edge is worse than a missing one.
@@ -632,34 +707,7 @@ pub fn resolve_heritage_full(
     _repo: &str,
 ) -> (Vec<Edge>, Vec<(String, Vec<(String, String)>)>) {
     let types = type_views(nodes);
-
-    // Indexes (all BTreeMap; value vectors sorted → deterministic).
-    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
-    let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    let mut by_id_label: BTreeMap<String, String> = BTreeMap::new();
-    let mut by_id_qual: BTreeMap<String, String> = BTreeMap::new();
-    let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
-    for t in &types {
-        by_name
-            .entry(t.name.clone())
-            .or_default()
-            .push(t.id.clone());
-        by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
-        by_file_name
-            .entry((t.file_path.clone(), t.name.clone()))
-            .or_default()
-            .push(t.id.clone());
-        by_id_label.insert(t.id.clone(), t.label.clone());
-        by_id_qual.insert(t.id.clone(), t.qualified.clone());
-        by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
-    }
-    for v in by_name.values_mut() {
-        v.sort();
-    }
-    for v in by_file_name.values_mut() {
-        v.sort();
-    }
+    let idx = TypeIndex::build(&types);
 
     // (from_id, to_id) -> (resolution, confidence, edge_type); best-confidence wins.
     let mut agg: BTreeMap<(String, String), (&'static str, f64, String)> = BTreeMap::new();
@@ -668,12 +716,12 @@ pub fn resolve_heritage_full(
     for h in heritage {
         let Some((to_id, res, conf)) = resolve_base(
             h,
-            &by_name,
-            &by_file_qual,
-            &by_file_name,
+            &idx.by_name,
+            &idx.by_file_qual,
+            &idx.by_file_name,
             import_targets,
-            &by_id_qual,
-            &by_id_dir,
+            &idx.by_id_qual,
+            &idx.by_id_dir,
         ) else {
             // Unresolved in-repo (out-of-repo base OR in-repo-ambiguous). Surface
             // it; lib.rs's child-scope gate decides if it's a cross-repo candidate.
@@ -685,7 +733,7 @@ pub fn resolve_heritage_full(
         };
         // D-CS: C# refines edge_type from the resolved target's label.
         let edge_type = if h.label_refine {
-            match by_id_label.get(&to_id).map(|s| s.as_str()) {
+            match idx.by_id_label.get(&to_id).map(|s| s.as_str()) {
                 Some("Interface") => "IMPLEMENTS".to_string(),
                 Some("Class") => "INHERITS".to_string(),
                 _ => h.edge_type.clone(),
@@ -715,51 +763,19 @@ pub fn resolve_heritage_full(
     (edges, unresolved_out)
 }
 
-/// Resolves RawConstruction facts → INSTANTIATES edges.
-/// Reuses the `resolve_base` ladder restricted to Class-only nodes.
+/// Resolves RawConstruction facts → per-(caller, class) INSTANTIATES aggregate
+/// `(resolution, confidence, sites)`, keyed by `(caller_id, class_id)`.
+///
+/// Returns the aggregate map (NOT edges) so the caller can merge it with the
+/// Python class-lift `inst_agg` and single-source the INSTANTIATES output (see
+/// the merge in `resolve_full`). Reuses the shared Class-only [`TypeIndex`] and
+/// the `resolve_base` ladder.
 fn resolve_constructions(
-    nodes: &[Node],
+    _nodes: &[Node],
     constructions: &[RawConstruction],
     import_targets: &ImportTargets,
-) -> Vec<Edge> {
-    // Build a Class-only type index.
-    let types: Vec<TypeView> = nodes
-        .iter()
-        .filter(|n| n.labels == ["Class"])
-        .map(|n| TypeView {
-            id: n.id.clone(),
-            name: prop_str(n, "name"),
-            qualified: prop_str(n, "qualified_name"),
-            file_path: prop_str(n, "file_path"),
-            label: "Class".to_string(),
-        })
-        .collect();
-
-    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
-    let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    let mut by_id_qual: BTreeMap<String, String> = BTreeMap::new();
-    let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
-    for t in &types {
-        by_name
-            .entry(t.name.clone())
-            .or_default()
-            .push(t.id.clone());
-        by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
-        by_file_name
-            .entry((t.file_path.clone(), t.name.clone()))
-            .or_default()
-            .push(t.id.clone());
-        by_id_qual.insert(t.id.clone(), t.qualified.clone());
-        by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
-    }
-    for v in by_name.values_mut() {
-        v.sort();
-    }
-    for v in by_file_name.values_mut() {
-        v.sort();
-    }
-
+    idx: &TypeIndex,
+) -> BTreeMap<(String, String), (&'static str, f64, u64)> {
     // (caller_id, class_id) → (resolution, confidence, sites); best-confidence wins.
     let mut agg: BTreeMap<(String, String), (&'static str, f64, u64)> = BTreeMap::new();
     for rc in constructions {
@@ -774,12 +790,12 @@ fn resolve_constructions(
         };
         let Some((to_id, res, conf)) = resolve_base(
             &h,
-            &by_name,
-            &by_file_qual,
-            &by_file_name,
+            &idx.by_name,
+            &idx.by_file_qual,
+            &idx.by_file_name,
             import_targets,
-            &by_id_qual,
-            &by_id_dir,
+            &idx.by_id_qual,
+            &idx.by_id_dir,
         ) else {
             continue;
         };
@@ -792,16 +808,7 @@ fn resolve_constructions(
             entry.1 = conf;
         }
     }
-
-    let mut edges = Vec::new();
-    for ((from, to), (res, conf, sites)) in agg {
-        let mut e = Edge::new(from, "INSTANTIATES", to);
-        e.props.insert("resolution".to_string(), json!(res));
-        e.props.insert("confidence".to_string(), json!(conf));
-        e.props.insert("sites".to_string(), json!(sites));
-        edges.push(e);
-    }
-    edges
+    agg
 }
 
 /// Resolves a heritage base name → (target_id, resolution, confidence), trying
@@ -2010,6 +2017,54 @@ mod tests {
         assert!(
             external.is_empty(),
             "class-lift suppresses external recording"
+        );
+    }
+
+    #[test]
+    fn python_bound_construction_yields_exactly_one_instantiates_edge() {
+        // Regression (A-fix): a Python `x = Foo()` produces BOTH a bare
+        // RawCall(Foo) (class-lift) and a RawConstruction(Foo, bound_local="x").
+        // Before the single-source merge, both emitted Edge(caller, INSTANTIATES,
+        // Foo) with the same key and the JSONL dedup silently dropped one. Assert
+        // exactly ONE INSTANTIATES edge with sites == 1 (the single statement is
+        // not double-counted).
+        let caller = func_node("r", "svc.py", "run", 0);
+        let cls = class_node("r", "svc.py", "Foo");
+        let nodes = vec![caller.clone(), cls.clone()];
+        // Both facts that a real Python `x = Foo()` emits:
+        let raw_call = RawCall {
+            caller_id: caller.id.clone(),
+            caller_path: "svc.py".to_string(),
+            caller_qualified: "run".to_string(),
+            callee_name: "Foo".to_string(),
+            receiver: None,
+        };
+        let construction = raw_construction_bound(
+            &caller.id,
+            "svc.py",
+            &id::file_id("r", "svc.py"),
+            "Foo",
+            Some("x"),
+        );
+        let (edges, _, _) = resolve_full(&nodes, &[], &[raw_call], &[], &[], &[construction], "r");
+        let inst: Vec<&Edge> = edges
+            .iter()
+            .filter(|e| e.typ == "INSTANTIATES" && e.from == caller.id && e.to == cls.id)
+            .collect();
+        assert_eq!(
+            inst.len(),
+            1,
+            "exactly one INSTANTIATES edge caller->Foo (single-sourced)"
+        );
+        // One source statement → sites must be 1, not 2 (no double-count).
+        assert_eq!(
+            inst[0].props.get("sites").and_then(|v| v.as_u64()),
+            Some(1),
+            "a single `x = Foo()` statement counts as one site, not two"
+        );
+        assert!(
+            edges.iter().all(|e| e.typ != "CALLS"),
+            "bare Foo() class-lift must not also be CALLS"
         );
     }
 

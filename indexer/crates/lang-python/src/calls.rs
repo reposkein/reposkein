@@ -59,8 +59,15 @@ pub fn collect_calls(
 /// - `right` is a `call` whose `function` is an `identifier` or `attribute`
 ///
 /// Emits `RawConstruction { class_name, bound_local: Some(lhs), .. }` for the
-/// receiver-type tracker. These are NOT fed to INSTANTIATES resolution (Python
-/// INSTANTIATES continues via the existing class-lift path in resolve_full).
+/// receiver-type tracker.
+///
+/// These bound-local constructions ARE fed to INSTANTIATES resolution
+/// (`resolve_constructions`), alongside the Python class-lift path. Because a
+/// Python `x = Foo()` produces BOTH a bare `RawCall(Foo)` (class-lift) and a
+/// `RawConstruction(Foo, bound_local="x")`, `resolve_full` MERGES the two
+/// INSTANTIATES sources into a single edge per `(caller, class)` (max
+/// confidence, max — not summed — site count) so the same source statement is
+/// counted exactly once and the two paths never emit colliding edges.
 ///
 /// Boundaries: function_definition, class_definition, lambda (do not descend).
 pub fn collect_receiver_bindings(

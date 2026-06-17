@@ -28,7 +28,14 @@ use std::path::{Path, PathBuf};
 /// Bumped 12→13: `RawConstruction.bound_local` captures the LHS local of
 /// `<ident> = <construction>` bindings (all 7 langs); Python now emits bound-local
 /// constructions for the receiver tracker. Changes extractor output.
-pub const EXTRACT_CACHE_SCHEMA: u32 = 13;
+/// Bumped 13→14: INSTANTIATES is now single-sourced — the Python class-lift
+/// `inst_agg` and the construction aggregate are MERGED before emission (max
+/// confidence, max — not summed — site count). A Python `x = Foo()` previously
+/// produced two colliding INSTANTIATES edges (one from each path), one of which
+/// the JSONL dedup silently dropped; now it yields exactly one edge with a
+/// de-duplicated `sites` count. This changes committed edge output (the `sites`
+/// prop / dedup result) for Python construction sites.
+pub const EXTRACT_CACHE_SCHEMA: u32 = 14;
 
 /// A cache of per-file extraction results.
 pub trait ExtractCache {
@@ -174,12 +181,13 @@ mod tests {
     }
 
     #[test]
-    fn cache_schema_is_13() {
-        // Bumped 12→13: RawConstruction.bound_local captures LHS locals of
-        // `<ident> = <construction>` bindings; Python emits bound-local
-        // constructions for the receiver tracker.
+    fn cache_schema_is_14() {
+        // Bumped 13→14: INSTANTIATES single-sourced — class-lift and construction
+        // aggregates merged before emission (max confidence, max site count), so
+        // a Python `x = Foo()` no longer produces two colliding edges. Changes
+        // committed edge output (`sites` / dedup result) for Python constructions.
         assert_eq!(
-            EXTRACT_CACHE_SCHEMA, 13,
+            EXTRACT_CACHE_SCHEMA, 14,
             "bump cache schema when extractor output changes"
         );
     }

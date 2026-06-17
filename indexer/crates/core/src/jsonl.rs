@@ -70,22 +70,65 @@ pub fn nodes_to_jsonl(nodes: &[Node]) -> String {
     out
 }
 
+/// Merges two edges that share a `(from, type, to)` key into one, deterministically.
+///
+/// Edge dedup used to be a silent `dedup_by` keep-first, which dropped the
+/// props of a colliding edge whenever two edges shared a key but carried
+/// DIFFERENT props (e.g. a missing `sites`/`call_sites` count). That hid bugs.
+/// We now MERGE colliding edges explicitly: for each prop key present in either
+/// edge, keep the larger value when both are numbers (so site/call counts and
+/// confidences accumulate to the maximum rather than being lost), otherwise
+/// prefer the first edge's value and only adopt the second's when the first is
+/// absent. The result is independent of which colliding edge came first, so the
+/// merge stays deterministic regardless of upstream push order.
+fn merge_edge_props(base: &Edge, other: &Edge) -> Edge {
+    let mut merged = base.clone();
+    for (k, v_other) in other.props.iter() {
+        match merged.props.get(k) {
+            None => {
+                merged.props.insert(k.clone(), v_other.clone());
+            }
+            Some(v_base) => {
+                // When both are numeric, keep the max (counts/confidences); this
+                // is symmetric so push order cannot change the result.
+                if let (Some(a), Some(b)) = (v_base.as_f64(), v_other.as_f64()) {
+                    if b > a {
+                        merged.props.insert(k.clone(), v_other.clone());
+                    }
+                }
+                // Non-numeric collisions: keep base (first key wins). Symmetric
+                // sources should not produce conflicting non-numeric props.
+            }
+        }
+    }
+    merged
+}
+
 /// Serializes edges sorted by (from, type, to), one per line, LF-terminated.
+///
+/// Edges sharing a `(from, type, to)` key are MERGED (see [`merge_edge_props`])
+/// rather than silently collapsed keep-first, so colliding edges with different
+/// props never silently drop data. The merge is order-independent and therefore
+/// deterministic.
 pub fn edges_to_jsonl(edges: &[Edge]) -> String {
-    let mut sorted: Vec<&Edge> = edges.iter().collect();
-    sorted.sort_by(|a, b| {
-        (a.from.as_str(), a.typ.as_str(), a.to.as_str()).cmp(&(
-            b.from.as_str(),
-            b.typ.as_str(),
-            b.to.as_str(),
-        ))
-    });
-    sorted.dedup_by(|a, b| {
-        (a.from.as_str(), a.typ.as_str(), a.to.as_str())
-            == (b.from.as_str(), b.typ.as_str(), b.to.as_str())
-    });
+    // Keyed merge into a BTreeMap keeps output sorted by (from, type, to) and
+    // makes the dedup an explicit, deterministic prop-merge.
+    let mut by_key: std::collections::BTreeMap<(String, String, String), Edge> =
+        std::collections::BTreeMap::new();
+    for e in edges {
+        let key = (e.from.clone(), e.typ.clone(), e.to.clone());
+        match by_key.get(&key) {
+            None => {
+                by_key.insert(key, e.clone());
+            }
+            Some(existing) => {
+                let merged = merge_edge_props(existing, e);
+                by_key.insert(key, merged);
+            }
+        }
+    }
     let mut out = String::new();
-    for e in sorted {
+    for e in by_key.values() {
         out.push_str(&edge_line(e));
         out.push('\n');
     }
