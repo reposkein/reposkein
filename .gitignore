@@ -12,3 +12,8 @@ mcp/bin/
 
 # Local agent/session artifacts — never commit.
 .claude/
+.omo/
+
+# Python bytecode (embed-server runs locally during dev).
+**/__pycache__/
+*.pyc
