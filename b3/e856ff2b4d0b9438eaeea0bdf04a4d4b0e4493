@@ -1,0 +1,21 @@
+docs/INSTALL.md
+  s_ca2f58896f7849::t_42c2f5cdf9d64f 1-387
+README.md
+  s_ca2f58896f7849::t_96235d69c014c7 114-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "b3e856ff2b4d0b9438eaeea0bdf04a4d4b0e4493",
+  "prompts": {},
+  "sessions": {
+    "s_ca2f58896f7849": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_126fc259fffe5HoYMvczJordmo",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
