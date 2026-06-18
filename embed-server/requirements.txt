@@ -1,8 +1,15 @@
 # Pinned loosely for reproducibility; voyage-4-nano is Qwen3-based so it needs a
 # recent transformers. CPU works (slow on first use); a CUDA GPU is much faster.
+#
+# Upper bound on transformers: voyage-4-nano's bundled custom code
+# (modeling_qwen3_bidirectional.py, downloaded via trust_remote_code) calls
+# `create_causal_mask(input_embeds=...)`. transformers 5.x renamed that kwarg
+# and the model card hasn't been republished, so 5.x raises:
+#   TypeError: create_causal_mask() got an unexpected keyword argument 'input_embeds'
+# Keep <5 until either the model is republished or upstream restores the kwarg alias.
 fastapi>=0.115
 uvicorn[standard]>=0.30
 sentence-transformers>=3.1
-transformers>=4.51
+transformers>=4.51,<5
 torch>=2.2
 einops>=0.8
