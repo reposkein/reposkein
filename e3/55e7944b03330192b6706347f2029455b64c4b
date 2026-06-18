@@ -1,0 +1,39 @@
+.gitignore
+  s_ca2f58896f7849::t_3a28b87c07151d 15-19
+viz/src/scene/AGENTS.md
+  s_ca2f58896f7849::t_3a12997bed238c 1-48
+mcp/src/store/AGENTS.md
+  s_ca2f58896f7849::t_b568f4efa2fcb6 1-39
+indexer/crates/core/AGENTS.md
+  s_ca2f58896f7849::t_92125a3e16796a 1-40
+indexer/AGENTS.md
+  s_ca2f58896f7849::t_d1dd9731af8b21 1-63
+mcp/AGENTS.md
+  s_ca2f58896f7849::t_2bf1e5b2fc7688 1-55
+mcp/bench/AGENTS.md
+  s_ca2f58896f7849::t_20c816c43ccc9b 1-44
+viz/src/data/AGENTS.md
+  s_ca2f58896f7849::t_bd983e1dced485 1-37
+viz/AGENTS.md
+  s_ca2f58896f7849::t_4fa3e45a244d64 1-55
+AGENTS.md
+  s_ca2f58896f7849::t_da8cd76f493865 1-90
+embed-server/AGENTS.md
+  s_ca2f58896f7849::t_9d6974c3ab0991 1-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "e355e7944b03330192b6706347f2029455b64c4b",
+  "prompts": {},
+  "sessions": {
+    "s_ca2f58896f7849": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_126fc259fffe5HoYMvczJordmo",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
