@@ -111,6 +111,14 @@ This downloads the indexer for your platform, installs git hooks + the navigatio
 
 **Platforms:** prebuilt binaries for macOS (Apple Silicon), Linux (x64/arm64), and Windows (x64). Elsewhere, point `REPOSKEIN_INDEXER_BIN` at a [from-source](#build-from-source) build.
 
+### Let your agent install it for you
+
+For complex setups — multi-repo workspaces, Neo4j backend, the local embedding server, or wiring up agents besides Claude Code (OpenCode, Cursor, Codex, Continue, Cline, …) — paste this into any MCP-capable agent and it'll walk you through:
+
+> Install RepoSkein in this workspace. Read [`docs/INSTALL.md`](docs/INSTALL.md) (or `https://github.com/reposkein/reposkein/blob/main/docs/INSTALL.md`), walk me through the question tree in §1, then execute §2 onward. If anything fails, troubleshoot via §9 — don't silently skip steps. Confirm with `reposkein-mcp doctor .` per repo and a `semantic_find` smoke test before claiming done.
+
+[`docs/INSTALL.md`](docs/INSTALL.md) is written for agents: it covers the decision tree (one repo vs workspace, JSONL vs Neo4j, lexical vs cloud vs local embeddings, which agent CLIs to wire), per-agent config schemas (`.mcp.json`, `opencode.json`, `.cursor/mcp.json`, Continue, Codex, Cline, …), the Apple-Silicon `mps` native embed-server recipe, and a troubleshooting table.
+
 ## Usage — working with your agent
 
 You ask in plain language; the bundled **`reposkein-graph-rag`** skill drives the tools. The natural loop:
