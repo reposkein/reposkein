@@ -1,0 +1,19 @@
+embed-server/requirements.txt
+  s_ca2f58896f7849::t_8de59ee9b014e6 3-9,13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "c867aebdd53abb742315db98cbfda4bafb400cb2",
+  "prompts": {},
+  "sessions": {
+    "s_ca2f58896f7849": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_126fc259fffe5HoYMvczJordmo",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
