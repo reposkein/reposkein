@@ -6,6 +6,20 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-24
+
+### Fixed
+
+- **`get_context_profile`'s `hops` schema is now Gemini-compatible.** `hops` was declared
+  as `z.union([z.literal(1), z.literal(2)])`, which serialises to JSON-Schema
+  `anyOf: [{const: 1}, {const: 2}]`. Gemini's tool-schema validator rejects the numeric
+  `const`/enum (a `TYPE_STRING` mismatch) and **400s the entire request** — so a single
+  reposkein tool in the payload broke *every* Gemini model (`gemini-3-flash` and
+  `gemini-3.1-pro`), while Anthropic and OpenAI silently tolerated it. Replaced with a
+  bounded integer (`z.number().int().min(1).max(2)`, mirroring the `impact` tool's
+  `depth`); the schema is now an exported const with a regression test asserting no tool
+  schema emits `anyOf`/`oneOf`.
+
 ## [0.2.4] - 2026-06-17
 
 Cleanup / polish pass (the low-value backlog from the code audit). No behavior change.
