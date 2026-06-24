@@ -1,0 +1,21 @@
+indexer/Cargo.toml
+  s_af7fae0796461b::t_2964cef94ebfd0 6
+CHANGELOG.md
+  s_af7fae0796461b::t_47eb13d5c90fff 9-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "c5e0384bc1b0818e85211c10feacc839a8b53f0b",
+  "prompts": {},
+  "sessions": {
+    "s_af7fae0796461b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_106fededdffeMmo3XIgpPTAnp2",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
