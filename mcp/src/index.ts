@@ -55,6 +55,18 @@ const REPO_REQUIRED_MSG =
   "REPOSKEIN_REPO_PATH (or REPOSKEIN_REPO_ID) must be set to use this tool. " +
   "Set REPOSKEIN_REPO_PATH to the root of the repository you want to work with.";
 
+// Exported for the regression test. `hops` MUST stay a bounded integer: a literal union
+// (z.union([z.literal(1), z.literal(2)])) serialises to JSON-Schema `anyOf:[{const:1},{const:2}]`,
+// which Gemini's tool-schema validator 400-rejects — and one bad tool declaration fails the
+// whole request, breaking every Gemini model whenever a reposkein tool is in the payload.
+export const getContextProfileInputSchema = {
+  node_id: z.string().optional(),
+  file_path: z.string().optional(),
+  name: z.string().optional(),
+  hops: z.number().int().min(1).max(2).optional(),
+  federated: z.boolean().optional(),
+};
+
 export async function main(): Promise<void> {
   const repoPath = process.env.REPOSKEIN_REPO_PATH;
   const repoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
@@ -87,13 +99,7 @@ export async function main(): Promise<void> {
       title: "Get context profile",
       description:
         "Resolve a function/class (by node_id, file_path+name, or name) and return its caller/callee neighborhood (hops 1-2) with inlined prose and an enrichment_needed list. Never guesses — returns candidates if a name is ambiguous. Pass federated:true to resolve and traverse across nested repos.",
-      inputSchema: {
-        node_id: z.string().optional(),
-        file_path: z.string().optional(),
-        name: z.string().optional(),
-        hops: z.union([z.literal(1), z.literal(2)]).optional(),
-        federated: z.boolean().optional(),
-      },
+      inputSchema: getContextProfileInputSchema,
     },
     async (args) => {
       if (!getContextProfile) {
