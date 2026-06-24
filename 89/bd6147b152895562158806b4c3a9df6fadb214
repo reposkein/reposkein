@@ -1,0 +1,23 @@
+mcp/src/index.ts
+  s_af7fae0796461b::t_761599f6df85e8 58-61
+  s_af7fae0796461b::t_5a986b51e7e82a 62-69
+  s_af7fae0796461b::t_2c0c445522ad1e 102
+mcp/test/getContextProfileSchema.test.ts
+  s_af7fae0796461b::t_bb9e159bb7b356 1-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "89bd6147b152895562158806b4c3a9df6fadb214",
+  "prompts": {},
+  "sessions": {
+    "s_af7fae0796461b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_106fededdffeMmo3XIgpPTAnp2",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
