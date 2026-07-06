@@ -6,6 +6,18 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-06
+
+### Added
+
+- **`reposkein-mcp init` now gitignores the per-machine MCP config.** `init` appends
+  `.mcp.json` and `opencode.json` to the repo's `.gitignore` (idempotent, and it
+  creates the file if absent), so the per-machine config (which carries absolute
+  machine paths and a local backend password) is never committed; only the
+  `.reposkein/` graph is shared. The setup docs (`docs/INSTALL.md`, the
+  `reposkein-setup` skill) now say the same, and this repo's own `.gitignore` lists
+  them too. (#18)
+
 ## [0.2.5] - 2026-06-24
 
 ### Fixed
