@@ -1,0 +1,28 @@
+.gitignore
+  s_745d0b8d38984b::t_e9570687c106fa 20-24
+docs/INSTALL.md
+  s_745d0b8d38984b::t_efaa34af408ed5 248-249
+mcp/src/cli/init.ts
+  s_745d0b8d38984b::t_adc1c722c239d5 1
+  s_745d0b8d38984b::t_51d554ec4cb832 34-35,38-52
+  s_745d0b8d38984b::t_b99235b1bdcce2 81-83
+  s_745d0b8d38984b::t_9087971ebacda1 32-33,36-37
+skills/reposkein-setup/SKILL.md
+  s_745d0b8d38984b::t_6d2d22517b02b6 51-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e3cb4890e078feb3d1e8629145cd047be15cb2dd",
+  "prompts": {},
+  "sessions": {
+    "s_745d0b8d38984b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_0dba4bc7effesf1GoTBmFdbOyh",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
