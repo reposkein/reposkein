@@ -1,0 +1,19 @@
+CHANGELOG.md
+  s_745d0b8d38984b::t_d57a585ede703a 9-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9e6af6206f926bf4f1a34b4b6e9fb8811d032c7d",
+  "prompts": {},
+  "sessions": {
+    "s_745d0b8d38984b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_0dba4bc7effesf1GoTBmFdbOyh",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
