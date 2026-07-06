@@ -245,6 +245,8 @@ Write `<repo>/.mcp.json`:
 
 Drop any block whose feature the user didn't enable. `REPOSKEIN_REPO_PATH` is the only required key.
 
+> **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. Only the `.reposkein/` graph is shared.
+
 ### 6.2 OpenCode (+ omo)
 
 OpenCode uses `mcp` (not `mcpServers`) and a `type` field. Edit `~/.config/opencode/opencode.json` for global servers, or write `<repo>/opencode.json` for per-project. Multiple repos → multiple named entries:

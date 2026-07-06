@@ -48,6 +48,11 @@ differently. Add the RepoSkein server with `REPOSKEIN_REPO_PATH` set to this rep
 - **Codex / other MCP hosts** — add an stdio server: command `reposkein-mcp`,
   env `REPOSKEIN_REPO_PATH=/abs/path/to/repo`.
 
+> **Gitignore these files.** `.mcp.json` / `opencode.json` hold absolute machine
+> paths and a local backend password, so they are per-machine and must not be
+> committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you wrote
+> them by hand, add them yourself. Only the `.reposkein/` graph gets committed.
+
 Then **restart / reload the agent** so it picks up the new server.
 
 ## 4. Confirm the server is actually running
