@@ -1,4 +1,4 @@
-import { mkdirSync, copyFileSync, existsSync } from "node:fs";
+import { mkdirSync, copyFileSync, existsSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureIndexerBinary, packageRoot } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
@@ -29,6 +29,27 @@ export function mcpConfigSnippet(repoPath: string): string {
   );
 }
 
+/** Per-machine MCP config files setup writes to a repo root: they hold absolute
+ *  paths and a local backend password, so they must never be committed. */
+const LOCAL_MCP_CONFIG_FILES = [".mcp.json", "opencode.json"] as const;
+
+/** Idempotently add the per-machine MCP config files to the repo's .gitignore
+ *  (creating it if absent), so `reposkein-mcp init` never leaves them tracked. */
+export function ensureLocalConfigGitignored(repoPath: string): void {
+  const gitignorePath = join(repoPath, ".gitignore");
+  const current = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
+  const present = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  const missing = LOCAL_MCP_CONFIG_FILES.filter((file) => !present.has(file));
+  if (missing.length === 0) return;
+  const leadingNewline = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
+  const block =
+    `${leadingNewline}\n# RepoSkein per-machine MCP config (absolute paths + a local backend\n` +
+    "# password); regenerated per machine by `reposkein-mcp init`. Only the\n" +
+    `# .reposkein/ graph is meant to be committed.\n${missing.join("\n")}\n`;
+  appendFileSync(gitignorePath, block);
+  console.error(`reposkein: gitignored ${missing.join(", ")} (per-machine config, never commit)`);
+}
+
 /** `reposkein-mcp index [path]`: (re)build the code graph at `repoPath` using the
  *  native indexer. The package-friendly way to index — the `reposkein-indexer`
  *  binary is fetched into the package (not on PATH), so end users run this. */
@@ -56,6 +77,9 @@ export async function runInit(repoPath = ".", opts: { index?: boolean } = {}): P
     console.error("  (is this a git repository? run `git init` first.)");
     return 1;
   }
+
+  // 2b) Keep the per-machine MCP config out of git; only .reposkein/ is shared.
+  ensureLocalConfigGitignored(repoPath);
 
   // 3) Build the initial code graph (the whole point of setup) unless opted out.
   if (opts.index !== false) {
