@@ -1,0 +1,22 @@
+indexer/crates/cli/src/main.rs
+  s_f4b286a8b99795::t_21b75caf4985be 283
+  s_f4b286a8b99795::t_ee9a7ab32a4ec1 874,878,881-920
+  s_f4b286a8b99795::t_597cff4967c131 179-215
+  s_f4b286a8b99795::t_7d17704630701b 921
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "fea991269592bfd168a539e3ca5b3e5042b1f039",
+  "prompts": {},
+  "sessions": {
+    "s_f4b286a8b99795": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_04e987b59ffebDein9i5oc8X2v",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
