@@ -1,0 +1,19 @@
+.github/workflows/ci.yml
+  s_f4b286a8b99795::t_70b95577210667 165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "1be2dc9cde18771b542ceecad31b63bd6f6b34b1",
+  "prompts": {},
+  "sessions": {
+    "s_f4b286a8b99795": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_04e987b59ffebDein9i5oc8X2v",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
