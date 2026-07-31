@@ -176,6 +176,43 @@ fn run_git(root: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Default repository display name.
+///
+/// The basename of `path` is wrong inside a git worktree: it yields the worktree
+/// slug, so a commit made from a worktree rewrites the Repository node to that
+/// slug and corrupts the graph identity when the branch merges. `--git-common-dir`
+/// resolves to the MAIN checkout's `.git` from any worktree, so its parent is the
+/// canonical repository directory. Deriving from the remote instead would be wrong
+/// for repos whose directory name differs from their remote name.
+fn default_repo_name(path: &Path) -> String {
+    let from_path = || {
+        path.canonicalize()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "repo".to_string())
+    };
+    // `--git-common-dir` may come back relative (plain `.git`), so resolve it
+    // against `path` before taking the parent.
+    let Some(common) = run_git(path, &["rev-parse", "--git-common-dir"]) else {
+        return from_path();
+    };
+    let common_path = Path::new(&common);
+    let absolute = if common_path.is_absolute() {
+        common_path.to_path_buf()
+    } else {
+        path.join(common_path)
+    };
+    absolute
+        .canonicalize()
+        .ok()
+        .and_then(|p| {
+            p.parent()
+                .and_then(|r| r.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(from_path)
+}
+
 /// Canonicalizes a git remote URL to `host/org/repo` so all schemes
 /// (https, scp-style git@, ssh://) produce the same repo_id.
 pub(crate) fn normalize_remote(raw: &str) -> String {
@@ -243,12 +280,7 @@ fn run_index(
     invalidate_file: Option<&str>,
 ) -> Result<IndexRun> {
     let repo = resolve_repo_id(path, repo_id);
-    let repo_name = name.unwrap_or_else(|| {
-        path.canonicalize()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .unwrap_or_else(|| "repo".to_string())
-    });
+    let repo_name = name.unwrap_or_else(|| default_repo_name(path));
 
     let python = PythonExtractor;
     let typescript = TypeScriptExtractor;
@@ -839,10 +871,53 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::default_repo_name;
     use super::normalize_remote;
     use super::safe_child_path;
     use std::fs;
+    use std::process::Command;
     use tempfile::tempdir;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git available");
+        assert!(out.status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn repo_name_from_worktree_is_the_main_checkout_not_the_worktree_slug() {
+        let tmp = tempdir().unwrap();
+        let main = tmp.path().join("canonical-repo");
+        fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q"]);
+        git(&main, &["config", "user.email", "t@example.com"]);
+        git(&main, &["config", "user.name", "t"]);
+        fs::write(main.join("f.txt"), "x").unwrap();
+        git(&main, &["add", "f.txt"]);
+        git(&main, &["commit", "-qm", "init"]);
+
+        // A worktree whose directory name deliberately differs from the repo's.
+        let worktree = tmp.path().join("some-ticket-slug");
+        git(
+            &main,
+            &["worktree", "add", worktree.to_str().unwrap(), "-b", "wt"],
+        );
+
+        assert_eq!(default_repo_name(&main), "canonical-repo");
+        assert_eq!(default_repo_name(&worktree), "canonical-repo");
+    }
+
+    #[test]
+    fn repo_name_outside_a_git_repo_falls_back_to_the_directory() {
+        let tmp = tempdir().unwrap();
+        let plain = tmp.path().join("plain-dir");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(default_repo_name(&plain), "plain-dir");
+    }
 
     #[test]
     fn remote_schemes_normalize_equal() {
