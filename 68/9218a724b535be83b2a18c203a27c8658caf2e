@@ -1,0 +1,14 @@
+indexer/crates/cli/tests/init_hooks_cli.rs
+  h_af7161f060dc1e 97-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "689218a724b535be83b2a18c203a27c8658caf2e",
+  "prompts": {},
+  "humans": {
+    "h_af7161f060dc1e": {
+      "author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
