@@ -778,11 +778,45 @@ fn main() -> Result<()> {
             write_hook("post-checkout", POST_MERGE)?; // same action as post-merge
 
             // .gitattributes (append idempotently).
+            //
+            // `merge=union` — a BUILT-IN git strategy — not the custom
+            // `reposkein-jsonl` driver registered below. A custom driver only
+            // resolves where its binary and `git config` exist, i.e. on a
+            // developer's machine. Forges (GitHub, GitLab) merge server-side
+            // with neither, so naming a custom driver there does not degrade
+            // gracefully: git cannot resolve the name, falls back to the plain
+            // text merge, and every pull request that touches these files
+            // conflicts on them. Because the indexer rewrites both files on
+            // every commit, that is effectively every long-lived PR — for
+            // conflicts that are pure noise, since the graph is regenerated
+            // from source anyway.
+            //
+            // Union takes both sides' lines and never conflicts. The result is
+            // briefly non-canonical (unsorted, and duplicated for records both
+            // sides touched), which is safe here: readers parse line-wise, and
+            // `nodes_to_jsonl` / `edges_to_jsonl` sort and de-duplicate by id
+            // on the next write. The pre-commit hook runs `index`, so the very
+            // next commit restores canonical form. Structural fields are
+            // regenerated from source; summaries survive via the content-hash
+            // rule in `core::merge`.
+            //
+            // The custom driver is still registered, so anyone who prefers a
+            // high-fidelity local merge can point .gitattributes back at it.
             let attrs_path = path.join(".gitattributes");
             let existing = std::fs::read_to_string(&attrs_path).unwrap_or_default();
-            let lines = [
+            // Migrate repos initialised before this change; leaving the old
+            // line in place would keep forge-side merges conflicting.
+            let existing = existing.replace(
                 ".reposkein/nodes.jsonl merge=reposkein-jsonl",
+                ".reposkein/nodes.jsonl merge=union",
+            );
+            let existing = existing.replace(
                 ".reposkein/edges.jsonl merge=reposkein-jsonl",
+                ".reposkein/edges.jsonl merge=union",
+            );
+            let lines = [
+                ".reposkein/nodes.jsonl merge=union",
+                ".reposkein/edges.jsonl merge=union",
             ];
             let mut attrs = existing.clone();
             if !attrs.is_empty() && !attrs.ends_with('\n') {

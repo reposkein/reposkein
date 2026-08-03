@@ -119,7 +119,7 @@ The bundled binary lives at:
 ```
 $(npm root -g)/@reposkein/mcp/bin/reposkein-indexer
 ```
-Export `REPOSKEIN_INDEXER_BIN` to that path when you need the indexer directly (Neo4j `load`, see §4.2).
+Export `REPOSKEIN_INDEXER_BIN` to that path when you need the indexer directly (Neo4j `load`, see §4.3).
 
 ### 3.2 Per-repo (no global install, npx-only)
 
@@ -156,7 +156,22 @@ Run §4 once **per git sub-repo**. Don't try to run it in the workspace root if 
 
 Federation is derived at query time: when an MCP server points at one repo and a sibling/nested repo also has `.reposkein/`, passing `federated: true` to `semantic_find` / `get_context_profile` / `impact` stitches them via `FEDERATES_TO` edges (load-time only — never committed).
 
-### 4.2 Neo4j load (only if §1-Q2 = Neo4j)
+### 4.2 Merge behaviour for `.reposkein/*.jsonl`
+
+`init --hooks` writes these `.gitattributes` rules:
+
+```
+.reposkein/nodes.jsonl merge=union
+.reposkein/edges.jsonl merge=union
+```
+
+`union` is a **built-in** git strategy, so forges honour it. A custom merge driver only resolves where its binary and `git config` exist — a developer's machine. GitHub and GitLab merge server-side with neither, cannot resolve the driver name, and fall back to a plain text merge. Since the pre-commit hook rewrites both files on every commit, that made *every* long-lived pull request conflict on them.
+
+Union never conflicts. The merged file is briefly unsorted and may repeat a record both branches touched; that is safe because readers parse line-wise and the next `index` (which the pre-commit hook runs) re-sorts and de-duplicates by id. Structural fields are regenerated from source; summaries survive via the content-hash rule.
+
+**Upgrading an existing repo:** re-run `reposkein-indexer init --hooks .` once. It rewrites any legacy `merge=reposkein-jsonl` lines in place, leaving your other `.gitattributes` rules untouched. Until you do, that repo keeps conflicting on forge-side merges.
+
+### 4.3 Neo4j load (only if §1-Q2 = Neo4j)
 
 After §4 succeeds for a repo:
 

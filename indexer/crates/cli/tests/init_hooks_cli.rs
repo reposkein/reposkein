@@ -39,10 +39,13 @@ fn init_hooks_installs_all_artifacts() {
         }
     }
 
-    // .gitattributes has the merge lines.
+    // .gitattributes points at the BUILT-IN union strategy, not the custom
+    // driver: forges merge server-side without our binary or git config, so a
+    // custom driver name there degrades to a plain text merge and conflicts.
     let attrs = fs::read_to_string(root.join(".gitattributes")).unwrap();
-    assert!(attrs.contains(".reposkein/nodes.jsonl merge=reposkein-jsonl"));
-    assert!(attrs.contains(".reposkein/edges.jsonl merge=reposkein-jsonl"));
+    assert!(attrs.contains(".reposkein/nodes.jsonl merge=union"));
+    assert!(attrs.contains(".reposkein/edges.jsonl merge=union"));
+    assert!(!attrs.contains("merge=reposkein-jsonl"));
 
     // git config has the merge driver.
     let out = Proc::new("git")
@@ -60,8 +63,40 @@ fn init_hooks_installs_all_artifacts() {
         .assert()
         .success();
     let attrs2 = fs::read_to_string(root.join(".gitattributes")).unwrap();
-    assert_eq!(
-        attrs2.matches("nodes.jsonl merge=reposkein-jsonl").count(),
-        1
-    );
+    assert_eq!(attrs2.matches("nodes.jsonl merge=union").count(), 1);
+}
+
+/// A repo initialised before the union change still carries the custom-driver
+/// line. Leaving it would keep every forge-side merge conflicting, so `init`
+/// rewrites it in place rather than appending a second, contradictory rule.
+#[test]
+fn init_hooks_migrates_legacy_custom_driver_lines() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    Proc::new("git")
+        .arg("init")
+        .arg("-q")
+        .current_dir(root)
+        .status()
+        .unwrap();
+
+    fs::write(
+        root.join(".gitattributes"),
+        "*.png binary\n.reposkein/nodes.jsonl merge=reposkein-jsonl\n.reposkein/edges.jsonl merge=reposkein-jsonl\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("reposkein-indexer")
+        .unwrap()
+        .args(["init", "--hooks"])
+        .arg(root)
+        .assert()
+        .success();
+
+    let attrs = fs::read_to_string(root.join(".gitattributes")).unwrap();
+    assert!(!attrs.contains("merge=reposkein-jsonl"), "legacy line must be rewritten");
+    assert_eq!(attrs.matches("nodes.jsonl merge=union").count(), 1);
+    assert_eq!(attrs.matches("edges.jsonl merge=union").count(), 1);
+    // Unrelated rules are preserved.
+    assert!(attrs.contains("*.png binary"));
 }
