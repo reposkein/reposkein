@@ -94,7 +94,10 @@ fn init_hooks_migrates_legacy_custom_driver_lines() {
         .success();
 
     let attrs = fs::read_to_string(root.join(".gitattributes")).unwrap();
-    assert!(!attrs.contains("merge=reposkein-jsonl"), "legacy line must be rewritten");
+    assert!(
+        !attrs.contains("merge=reposkein-jsonl"),
+        "legacy line must be rewritten"
+    );
     assert_eq!(attrs.matches("nodes.jsonl merge=union").count(), 1);
     assert_eq!(attrs.matches("edges.jsonl merge=union").count(), 1);
     // Unrelated rules are preserved.
