@@ -1,0 +1,22 @@
+docs/INSTALL.md
+  s_b51d53d24480e4::t_1dad5b56281b7e 159-173
+  s_b51d53d24480e4::t_2df9af4b50c152 174
+indexer/crates/cli/src/main.rs
+  s_b51d53d24480e4::t_199b598a6d2bef 781-804,807-809,811-813,815-819
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "911d78dc231211f58b29b320ac470edd15c4c923",
+  "prompts": {},
+  "sessions": {
+    "s_b51d53d24480e4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ses_04b83dca9ffeXGCo5mA7o2C3u0",
+        "model": "unknown"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
