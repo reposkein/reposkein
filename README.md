@@ -35,10 +35,10 @@ It uses [Tree-sitter](https://tree-sitter.github.io/) to build a **deterministic
 
 **Who it's for:** developers using AI coding agents on real, large, or **nested/polyglot** codebases, who are tired of the agent burning its context window on grep; and teams who want that hard-won understanding to persist and be shared rather than re-derived every session.
 
-- ⚡ **Zero-infra** — no database, no Docker. The graph lives in committed `.reposkein/*.jsonl` files.
+- ⚡ **Zero-infra** — no database, no Docker. The graph lives in plain `.reposkein/*.jsonl` files, rebuilt from your working tree in seconds.
 - 🔒 **Deterministic** — same code → byte-identical graph. No LLM in the construction path.
 - 🌐 **7 languages** — Python, TypeScript, JavaScript, Rust, Go, Java, C#.
-- 🧩 **Local-first & git-native** — the graph and its summaries travel with your code.
+- 🧩 **Local-first & git-native** — the summaries your agents write are committed and travel with your code.
 
 | Your agent asks | RepoSkein answers — directly from the graph |
 | --- | --- |
@@ -72,7 +72,7 @@ It uses [Tree-sitter](https://tree-sitter.github.io/) to build a **deterministic
 
 - **Node.js 18+** — to run `npx @reposkein/mcp` (the indexer binary is fetched automatically).
 - **An MCP-capable agent** — [Claude Code](https://claude.com/claude-code), Cursor, Codex, Zed, etc.
-- A **git repository** to index (RepoSkein installs git hooks and commits the graph).
+- A **git repository** to index (RepoSkein installs git hooks and reads git history for `get_temporal_context`).
 - *Optional:* **Docker** (only for the [embeddings server](#optional-semantic-embeddings) or the [Neo4j backend](#optional-neo4j-backend)); **Rust** (only to [build from source](#build-from-source)).
 
 ## Installation
@@ -96,12 +96,12 @@ This downloads the indexer for your platform, installs git hooks + the navigatio
      }
    }
    ```
-2. **Verify and commit the graph** (`init` already built it):
+2. **Verify the graph** (`init` already built it):
    ```sh
    reposkein-mcp doctor .         # ✓ binary  ✓ indexed (N nodes)  ✓ ready
-   git add .reposkein && git commit -m "add RepoSkein code graph"
+   git add .reposkein/meta.json .reposkein/config.toml && git commit -m "add RepoSkein config"
    ```
-   Re-index after big changes with `reposkein-mcp index .` (or the agent's `reindex_file` tool).
+   `nodes.jsonl` and `edges.jsonl` are derived from your working tree and git-ignored — a clone rebuilds them on first use. Re-index after big changes with `reposkein-mcp index .` (or the agent's `reindex_file` tool).
 3. **Ask your agent** *"what calls this function?"* or *"what breaks if I change X?"* — it answers from the graph.
 
 > **Prefer to let your agent set it up?** Install the [skills](#agent-skills) and tell it to **run the `reposkein-setup` skill** — it installs, indexes, and verifies everything:
@@ -127,7 +127,7 @@ You ask in plain language; the bundled **`reposkein-graph-rag`** skill drives th
 2. **Understand it** — `get_context_profile` returns the node's callers + callees as ready-to-read prose (`hops: 2` widens, `federated: true` spans nested repos).
 3. **Before you change it** — `impact` lists transitive callers (what could break) split from the tests that cover it (what to run). → *"what breaks if I change `charge()`?"*
 4. **What moves with it** — `get_temporal_context` surfaces files that historically change together, plus churn and ownership. → *"what usually changes with the auth config?"*
-5. **Record what you learned** — `write_semantic_summary` attaches a 1–3 sentence note to the node, committed to git for the next agent/teammate.
+5. **Record what you learned** — `write_semantic_summary` attaches a 1–3 sentence note to the node, landing in `.reposkein/summaries.jsonl` for you to commit for the next agent/teammate.
 6. **After editing** — `reindex_file` refreshes the graph for the changed file.
 
 <details>
@@ -182,16 +182,18 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
                        CLI: init · doctor · index · view
         │ reads
         ▼
- .reposkein/*.jsonl   ← the code graph, committed to git (zero-infra, in-memory store)
+ .reposkein/           ← nodes.jsonl + edges.jsonl: derived, git-ignored, rebuilt on demand
+                       summaries.jsonl: what your agents authored — commit this
         ▲ writes
         │
  reposkein-indexer    Tree-sitter parse → stable IDs → canonical JSONL
-   (Rust)             + git hooks & a 3-way merge driver for conflict-free summaries
+   (Rust)             + git hooks that keep the local graph in step with your tree
 ```
 
 - **Structure is static.** The skeleton comes only from parsing — identical code produces a byte-identical graph (a CI-tested invariant), independent of who runs it.
 - **Meaning is just-in-time.** Summaries are written as the agent visits nodes; they're content-hash-stamped (so they flag stale when code changes) and committed to git.
-- **Local-first.** The committed JSONL is the source of truth; the optional [Neo4j backend](#optional-neo4j-backend) is a reconstructable projection most users never need.
+- **Derived stays out of git.** `nodes.jsonl` and `edges.jsonl` are a pure function of your working tree, so committing them buys nothing a re-index cannot rebuild while making every branch that touches code conflict with every other. Only `summaries.jsonl`, `meta.json` and `config.toml` are committed.
+- **Local-first.** The JSONL on disk is the source of truth; the optional [Neo4j backend](#optional-neo4j-backend) is a reconstructable projection most users never need.
 
 ### Cross-repo federation
 
@@ -203,9 +205,9 @@ Got nested repositories (a monorepo of indexed repos)? RepoSkein discovers them,
 reposkein-mcp view .          # opens http://127.0.0.1:<port> in your browser
 ```
 
-`view` starts a **local, read-only, zero-infra** web app (React + three.js, bound to `127.0.0.1`) that renders the committed `.reposkein` graph as an interactive 3D astronomy-style **constellation**. There's no Neo4j and no external service — it reads the committed JSONL directly and never mutates it. **[Try the live demo →](https://reposkein.github.io/reposkein/)** (RepoSkein viewing its own multi-language graph).
+`view` starts a **local, read-only, zero-infra** web app (React + three.js, bound to `127.0.0.1`) that renders your `.reposkein` graph as an interactive 3D astronomy-style **constellation**. There's no Neo4j and no external service — it reads the JSONL on disk directly and never mutates it. **[Try the live demo →](https://reposkein.github.io/reposkein/)** (RepoSkein viewing its own multi-language graph).
 
-The map is **deterministic**: a seeded force layout means the same graph always lays out the same way (cached in IndexedDB for instant reloads), and the layout is render-time only — it never touches the committed JSONL. Levels of detail map onto an astronomy metaphor — **Repository → Directory → File → Symbol** become **galaxy → constellation → solar-system → star** — so you zoom or click to expand a cluster (a brief supernova animation) and click a star to inspect it. Federation galaxies and agent-written summaries render when present.
+The map is **deterministic**: a seeded force layout means the same graph always lays out the same way (cached in IndexedDB for instant reloads), and the layout is render-time only — it never touches the JSONL. Levels of detail map onto an astronomy metaphor — **Repository → Directory → File → Symbol** become **galaxy → constellation → solar-system → star** — so you zoom or click to expand a cluster (a brief supernova animation) and click a star to inspect it. Federation galaxies and agent-written summaries render when present.
 
 - **Legible** — per-edge-type colors + legend, importance-sized stars, adaptive labels, breadcrumb, per-language galaxy coloring, depth fog / bloom / nebula halos.
 - **Edges encode resolution** — color = edge type (`CALLS`/`IMPORTS`/`INHERITS`/`IMPLEMENTS`/`INSTANTIATES`), opacity = confidence (`exact`/`name_match`/`ambiguous`), and flow particles show call direction.

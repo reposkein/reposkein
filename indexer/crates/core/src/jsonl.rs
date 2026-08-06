@@ -197,11 +197,42 @@ pub fn read_edges(text: &str) -> Result<Vec<Edge>> {
     Ok(out)
 }
 
-/// Parses a summaries sidecar (`.reposkein/local/summaries.jsonl`) into Nodes
-/// carrying only `id` + summary props (labels empty). Feeds `graft_summaries`
-/// so JSONL-mode agent summaries reach committed `nodes.jsonl`. Best-effort:
-/// malformed lines are skipped (the sidecar is regenerable and must never abort
-/// an index).
+/// Serializes the *authored* half of the graph: one line per node carrying a
+/// semantic summary, holding its `id` plus summary props and nothing else.
+///
+/// This is the only part of `.reposkein/` worth committing. `nodes.jsonl` and
+/// `edges.jsonl` are a pure function of the working tree, so committing them
+/// buys nothing a re-index cannot rebuild, while costing a merge conflict on
+/// every branch that touches code. Summaries are the opposite: an agent wrote
+/// them, and no re-index can recover them once lost.
+///
+/// Deterministic: sorted by id, deduped, each object canonicalised with `id`
+/// first, LF-terminated. Nodes with no summary are skipped, so the file stays
+/// empty until someone actually writes one.
+pub fn summaries_to_jsonl(nodes: &[Node]) -> String {
+    let mut sorted: Vec<&Node> = nodes.iter().collect();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    sorted.dedup_by(|a, b| a.id == b.id);
+    let mut out = String::new();
+    for n in sorted {
+        let mut obj = crate::merge::summary_part(&n.props);
+        if !crate::merge::has_summary(&obj) {
+            continue;
+        }
+        obj.insert("id".to_string(), Value::String(n.id.clone()));
+        out.push_str(&canonical_object(&obj, &["id"]));
+        out.push('\n');
+    }
+    out
+}
+
+/// Parses a summaries file into Nodes carrying only `id` + summary props
+/// (labels empty), ready to feed `graft_summaries`.
+///
+/// Reads both the committed `.reposkein/summaries.jsonl` and the local
+/// `.reposkein/local/summaries.jsonl` sidecar that `write_semantic_summary`
+/// appends to between indexes; the two share this line format. Best-effort:
+/// malformed lines are skipped (a summaries file must never abort an index).
 pub fn read_sidecar_summaries(text: &str) -> Vec<Node> {
     let mut out = Vec::new();
     for line in text.lines() {

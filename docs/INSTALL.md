@@ -33,7 +33,7 @@ Walk the user through these decisions in order. Use the user's answers to pick b
 
 | Backend | Best for | Setup |
 |---|---|---|
-| **JSONL** (default, "zero-infra") | Any size up to ~100k symbols. Committed to git. Works offline. | Nothing — `init` writes it. |
+| **JSONL** (default, "zero-infra") | Any size up to ~100k symbols. Rebuilt from the working tree. Works offline. | Nothing — `init` writes it. |
 | **Neo4j** | Very large graphs (>100k symbols), raw Cypher queries, multi-tenant, query-perf-sensitive workloads. | Docker (`docker compose --profile neo4j up -d` from a checkout of this repo, or any Neo4j 5.x reachable over Bolt). |
 
 If the user is unsure → recommend **JSONL**. Suggest Neo4j only when they explicitly mention scale, multi-repo dashboards, or Cypher.
@@ -73,9 +73,9 @@ Pick all that apply — RepoSkein is MCP-stdio, so it works with any MCP-capable
 
 Templates in §6.
 
-### Q5 — Commit the `.reposkein/` graph to git?
+### Q5 — What in `.reposkein/` goes into git?
 
-**Yes** in 99% of cases. The committed graph is the SOURCE OF TRUTH; it's a deterministic function of source so commits are stable and merges resolve via the 3-way driver. The only reason to skip is in a sandbox / throwaway clone.
+Not a question to ask; `init` sets it up. **Commit** `meta.json`, `config.toml` and `summaries.jsonl` (the summaries your agents author, which nothing can regenerate). **Do not commit** `nodes.jsonl` / `edges.jsonl` — `.reposkein/.gitignore` already excludes them. They are a pure function of the working tree, so every clone rebuilds them in seconds, and committing them would make every branch that touches code conflict with every other one. `local/` is ignored too.
 
 ### Q6 — Install the cross-agent navigation skills?
 
@@ -138,21 +138,24 @@ reposkein-mcp init                    # or: npx @reposkein/mcp init
 
 This:
 1. Verifies/fetches the platform indexer binary.
-2. Installs git hooks (`pre-commit` re-indexes; `post-merge` reloads Neo4j if configured).
+2. Installs git hooks (`pre-commit` re-indexes the local graph, staging nothing; `post-merge` reloads Neo4j if configured).
 3. Installs the `reposkein-graph-rag` skill into `.claude/skills/` (no-op on agents that ignore `.claude/`).
-4. Walks the tree with Tree-sitter → writes deterministic `.reposkein/nodes.jsonl` + `.reposkein/edges.jsonl` + `.reposkein/meta.json`.
+4. Walks the tree with Tree-sitter → writes deterministic `.reposkein/nodes.jsonl` + `.reposkein/edges.jsonl` + `.reposkein/meta.json`, plus a `.reposkein/.gitignore` that keeps the two derived files out of git.
 5. **Prints an MCP config block** for the user to paste into their agent — you (the agent) should pick the right schema (§6) and write it directly.
 
 Verify:
 
 ```sh
 reposkein-mcp doctor .       # ✓ binary  ✓ indexed (N nodes)  ✓ ready
-git add .reposkein && git commit -m "add RepoSkein code graph"
+git add .reposkein/meta.json .reposkein/config.toml .reposkein/.gitignore
+git commit -m "add RepoSkein config"
 ```
+
+`nodes.jsonl` and `edges.jsonl` are deliberately absent from that `git add`: they are derived, git-ignored, and rebuilt on demand. `summaries.jsonl` appears once an agent writes its first summary; commit it then.
 
 ### 4.1 Multi-repo workspaces
 
-Run §4 once **per git sub-repo**. Don't try to run it in the workspace root if the root isn't itself a git repo — RepoSkein needs git for hooks and the merge driver.
+Run §4 once **per git sub-repo**. Don't try to run it in the workspace root if the root isn't itself a git repo — RepoSkein needs git for hooks and for `get_temporal_context`.
 
 Federation is derived at query time: when an MCP server points at one repo and a sibling/nested repo also has `.reposkein/`, passing `federated: true` to `semantic_find` / `get_context_profile` / `impact` stitches them via `FEDERATES_TO` edges (load-time only — never committed).
 
@@ -260,7 +263,7 @@ Write `<repo>/.mcp.json`:
 
 Drop any block whose feature the user didn't enable. `REPOSKEIN_REPO_PATH` is the only required key.
 
-> **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. Only the `.reposkein/` graph is shared.
+> **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. What is shared from `.reposkein/` is `meta.json`, `config.toml` and `summaries.jsonl`.
 
 ### 6.2 OpenCode (+ omo)
 
@@ -364,7 +367,7 @@ npm install -g @reposkein/mcp
 cd /path/to/repo
 reposkein-mcp init
 reposkein-mcp doctor .
-git add .reposkein && git commit -m "add RepoSkein code graph"
+git add .reposkein/meta.json .reposkein/config.toml .reposkein/.gitignore && git commit -m "add RepoSkein config"
 
 # 3. (Optional) Neo4j
 docker compose --profile neo4j up -d           # from a reposkein checkout

@@ -55,7 +55,8 @@ cliff.toml    # git-cliff config (Conventional Commits → CHANGELOG.md)
 - **`serde_json` feature `preserve_order`** — explicitly banned in `indexer/Cargo.toml` (would couple JSONL byte-order to insertion order; breaks determinism).
 - **Making Neo4j or embed-server required.** Zero-infra invariant.
 - **Adding LLMs / time / randomness / unsorted iteration to `indexer/`.** Determinism invariant.
-- **Mutating committed `.reposkein/*.jsonl` from `mcp/` or `viz/`.** Viewer is read-only; mcp only writes `write_semantic_summary` via the indexer's 3-way merge driver.
+- **Mutating `.reposkein/*.jsonl` from `mcp/` or `viz/`.** Viewer is read-only; mcp only writes `write_semantic_summary`, which appends to the `.reposkein/local/` sidecar for the indexer to fold in.
+- **Committing `.reposkein/nodes.jsonl` or `edges.jsonl`.** Derived from the working tree, git-ignored, rebuilt on demand. Only `summaries.jsonl`, `meta.json` and `config.toml` are committed.
 - **Changing the `@arity` qualified-name rule in `core/src/id.rs`** without a `*_frozen` test diff — orphans every existing summary.
 - **`docker compose` as a build dependency** — only optional services (`embed`, `neo4j` profile).
 

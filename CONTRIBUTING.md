@@ -4,10 +4,11 @@ Thanks for your interest! Bug fixes, new languages, and docs improvements are al
 
 ## Ground rules (read first)
 
-RepoSkein has **two hard invariants** — please don't break them:
+RepoSkein has **three hard invariants** — please don't break them:
 
-1. **Determinism.** The committed `.reposkein/*.jsonl` must be a **byte-identical** function of the working-tree source — same code → same graph, on any machine. CI enforces this (`determinism_two_runs_byte_identical`, `cache_warm_run_is_byte_identical_to_cold`, the Neo4j `load → export` round-trip). No LLMs, clocks, randomness, or HashMap-iteration-order may influence committed output. Anything derived/non-deterministic (embeddings, git history, cross-repo edges) lives **outside** the committed graph, under `.reposkein/local/` (gitignored).
+1. **Determinism.** `.reposkein/*.jsonl` must be a **byte-identical** function of the working-tree source — same code → same graph, on any machine. CI enforces this (`determinism_two_runs_byte_identical`, `cache_warm_run_is_byte_identical_to_cold`, the Neo4j `load → export` round-trip). No LLMs, clocks, randomness, or HashMap-iteration-order may influence the output. Anything derived/non-deterministic (embeddings, git history, cross-repo edges) lives under `.reposkein/local/` (gitignored).
 2. **Zero-infra by default.** It must work with **no database and no Docker** (the in-memory JSONL store). Don't make Neo4j or any service *required*.
+3. **Derived output stays out of git.** `nodes.jsonl` and `edges.jsonl` are rebuilt from the tree, so they are git-ignored and the MCP server builds them on demand. Only what an agent *authored* is committed: `.reposkein/summaries.jsonl`, alongside `meta.json` and `config.toml`. Determinism still matters for both — a re-index that reorders lines would churn the committed summaries file.
 
 Also: **Conventional Commits** (`feat:`, `fix:`, `docs:`, …), and **keep CI green** (`cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings`; `npm test`).
 

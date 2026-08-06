@@ -20,6 +20,7 @@ import { makeSemanticFind } from "./tools/semanticFind.js";
 import { makeTemporalContext } from "./tools/temporalContext.js";
 import { makeImpact } from "./tools/impact.js";
 import { resolveRepoId } from "./store/repoId.js";
+import { ensureGraph } from "./indexer/ensureGraph.js";
 
 /** Selects the store backend.
  *  REPOSKEIN_STORE = "jsonl" | "neo4j" | "auto" (default "auto").
@@ -70,6 +71,13 @@ export const getContextProfileInputSchema = {
 export async function main(): Promise<void> {
   const repoPath = process.env.REPOSKEIN_REPO_PATH;
   const repoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
+  // Build the graph if the repo has none yet. Derived JSONL is git-ignored, so a
+  // fresh clone arrives without it; without this the first query would fail on a
+  // repo that indexes fine in a couple of seconds.
+  await ensureGraph(repoPath, repoId, {
+    mode: (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase(),
+    neo4jConfigured: !!process.env.NEO4J_PASSWORD,
+  });
   const store = buildStore(repoPath, repoId);
 
   const server = new McpServer({ name: "@reposkein/mcp", version: "0.0.0" });

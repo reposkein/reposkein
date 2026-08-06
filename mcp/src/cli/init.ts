@@ -44,8 +44,9 @@ export function ensureLocalConfigGitignored(repoPath: string): void {
   const leadingNewline = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
   const block =
     `${leadingNewline}\n# RepoSkein per-machine MCP config (absolute paths + a local backend\n` +
-    "# password); regenerated per machine by `reposkein-mcp init`. Only the\n" +
-    `# .reposkein/ graph is meant to be committed.\n${missing.join("\n")}\n`;
+    "# password); regenerated per machine by `reposkein-mcp init`. The derived\n" +
+    "# graph is ignored separately by .reposkein/.gitignore.\n" +
+    `${missing.join("\n")}\n`;
   appendFileSync(gitignorePath, block);
   console.error(`reposkein: gitignored ${missing.join(", ")} (per-machine config, never commit)`);
 }
@@ -63,14 +64,15 @@ export async function runIndex(repoPath = "."): Promise<number> {
   return r.code;
 }
 
-/** `reposkein-mcp init [path] [--no-index]`: ensure the indexer, install hooks +
- *  merge driver, build the initial graph, install the navigation skill, and print
- *  the MCP config + next steps. Pass `index: false` to skip the initial index. */
+/** `reposkein-mcp init [path] [--no-index]`: ensure the indexer, install git hooks,
+ *  build the initial graph, install the navigation skill, and print the MCP config +
+ *  next steps. Pass `index: false` to skip the initial index. */
 export async function runInit(repoPath = ".", opts: { index?: boolean } = {}): Promise<number> {
   // 1) Indexer binary (fetches it if needed).
   const bin = await ensureIndexerBinary();
 
-  // 2) Git hooks + JSONL merge driver (needs a git repo).
+  // 2) Git hooks (needs a git repo). Also strips any merge declaration an older
+  //    RepoSkein left behind for the derived JSONL, which is no longer committed.
   const r = await spawnIndexer(bin, ["init", "--hooks", repoPath]);
   if (r.code !== 0) {
     console.error(`reposkein: indexer init failed: ${r.stderr || r.stdout}`);
@@ -107,7 +109,9 @@ export async function runInit(repoPath = ".", opts: { index?: boolean } = {}): P
   console.error("\nreposkein: ready. Add this MCP server to your client config:\n");
   console.error(mcpConfigSnippet(repoPath));
   console.error(
-    "\nCommit the generated .reposkein/ directory so the graph + summaries are shared with your team." +
+    "\nCommit .reposkein/meta.json, config.toml and summaries.jsonl. nodes.jsonl and edges.jsonl are " +
+      "derived from your working tree and git-ignored: every clone rebuilds them in seconds, and committing " +
+      "them would conflict on every branch that touches code." +
       "\nVerify anytime with `reposkein-mcp doctor`; re-index after big changes with `reposkein-mcp index` " +
       "(or the agent's reindex_file / init_cpg_skeleton tools)."
   );

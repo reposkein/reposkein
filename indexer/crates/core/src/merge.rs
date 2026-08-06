@@ -6,7 +6,10 @@ use crate::model::{Edge, Node};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-const SUMMARY_FIELDS: &[&str] = &[
+/// Node props that are *authored* rather than derived from source. Every other
+/// field is a pure function of the working tree and can be regenerated, so these
+/// are the only ones worth committing (see `jsonl::summaries_to_jsonl`).
+pub const SUMMARY_FIELDS: &[&str] = &[
     "semantic_summary",
     "purpose_summary",
     "summary_of_hash",
@@ -15,7 +18,7 @@ const SUMMARY_FIELDS: &[&str] = &[
     "summary_by",
 ];
 
-fn is_summary_field(k: &str) -> bool {
+pub fn is_summary_field(k: &str) -> bool {
     SUMMARY_FIELDS.contains(&k)
 }
 
@@ -27,7 +30,7 @@ fn structural(props: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-fn summary_part(props: &Map<String, Value>) -> Map<String, Value> {
+pub fn summary_part(props: &Map<String, Value>) -> Map<String, Value> {
     props
         .iter()
         .filter(|(k, _)| is_summary_field(k))
@@ -35,7 +38,7 @@ fn summary_part(props: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-fn has_summary(s: &Map<String, Value>) -> bool {
+pub fn has_summary(s: &Map<String, Value>) -> bool {
     s.contains_key("semantic_summary") || s.contains_key("purpose_summary")
 }
 
