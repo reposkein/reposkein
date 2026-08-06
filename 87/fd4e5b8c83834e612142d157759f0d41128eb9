@@ -1,0 +1,80 @@
+mcp/src/indexer/ensureGraph.ts
+  s_6d422c08163bdd::t_1e28174c6c6467 1-86
+docs/migrations/2026-08-06-stop-committing-derived-graph.md
+  s_6d422c08163bdd::t_6a3d065d1c2b8f 1-217
+mcp/test/ensureGraph.test.ts
+  s_6d422c08163bdd::t_672c1bb9cf29be 1-101
+mcp/test/indexerTools.int.test.ts
+  s_6d422c08163bdd::t_f6e93c0aeeff88 2,5,9-13,15-16
+docs/INSTALL.md
+  s_6d422c08163bdd::t_3f3d77de4649d0 370
+  s_6d422c08163bdd::t_ec5c504156a248 36
+  s_6d422c08163bdd::t_0e5675b9149e1b 76,78
+  s_6d422c08163bdd::t_b10b2126f66c5c 141,143,150-151,154-155,158
+  s_6d422c08163bdd::t_d388eec8d72fbb 266
+AGENTS.md
+  s_6d422c08163bdd::t_61a8fedd735929 58-59
+indexer/crates/cli/tests/init_hooks_cli.rs
+  s_6d422c08163bdd::t_c63d8cc28a83e1 6,11,14-15,17,24-39,57-125,127-137,139-168
+  s_6d422c08163bdd::t_c9d619ee43ec69 171-173
+mcp/src/cli/init.ts
+  s_6d422c08163bdd::t_7763ca160d5e4b 47-49
+  s_6d422c08163bdd::t_66c4fc252c1616 67-69,74-75
+  s_6d422c08163bdd::t_47119157b2e18b 112-114
+indexer/crates/cli/tests/summaries_cli.rs
+  s_6d422c08163bdd::t_0a50b323470426 1-247
+  s_6d422c08163bdd::t_0825c9a23fb580 248-250
+mcp/src/store/AGENTS.md
+  s_6d422c08163bdd::t_82d159b7522945 10
+  s_6d422c08163bdd::t_b9c7867a2dea94 27-31,35
+mcp/src/store/UnconfiguredStore.ts
+  s_6d422c08163bdd::t_76aecf60712703 10-14,16-19
+indexer/crates/core/src/merge.rs
+  s_6d422c08163bdd::t_cff84e1964de71 9-12,21,33,41
+README.md
+  s_6d422c08163bdd::t_033da34082619c 75
+  s_6d422c08163bdd::t_5ce6764d7289ff 99,102,104
+  s_6d422c08163bdd::t_6b759f7843a42a 185-186,190,195-196
+  s_6d422c08163bdd::t_585549b6ad6847 38,41
+  s_6d422c08163bdd::t_a60d0aa2ae48b6 130
+  s_6d422c08163bdd::t_68d79186549346 208,210
+skills/reposkein-setup/SKILL.md
+  s_6d422c08163bdd::t_e509ef5c4d4a94 61-62
+  s_6d422c08163bdd::t_7b1bc258c5ed07 13
+  s_6d422c08163bdd::t_027a2b0c172406 33-34,37-41
+  s_6d422c08163bdd::t_e59277b007ab16 42
+indexer/crates/core/src/jsonl.rs
+  s_6d422c08163bdd::t_423e9f8617636c 200-235
+indexer/crates/cli/src/main.rs
+  s_6d422c08163bdd::t_3b28a8d4c61f2d 478-491,499-512
+  s_6d422c08163bdd::t_629775b2724925 870-878,880-895,899-902,905-906
+  s_6d422c08163bdd::t_4afd55bbcc84c6 13-14
+  s_6d422c08163bdd::t_79697a7530b936 357-382,384,386-389,395-398,401-412,421-442
+  s_6d422c08163bdd::t_eab9ab0788da1f 469-477
+  s_6d422c08163bdd::t_914aaa2ad6fcc2 20-23,26,29
+  s_6d422c08163bdd::t_9d5cdbac3c231a 443,907,909
+CONTRIBUTING.md
+  s_6d422c08163bdd::t_3d56b039a2c85d 7
+  s_6d422c08163bdd::t_1c7720f724f97e 9,11
+mcp/src/index.ts
+  s_6d422c08163bdd::t_08297bdc144bab 74-80
+  s_6d422c08163bdd::t_c3b25f077ac56f 23
+mcp/test/gracefulStartup.test.ts
+  s_6d422c08163bdd::t_463f7699a1c81a 14-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "87fd4e5b8c83834e612142d157759f0d41128eb9",
+  "prompts": {},
+  "sessions": {
+    "s_6d422c08163bdd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "044c0a60-0802-4762-824a-67d6c13edd33",
+        "model": "claude-opus-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
