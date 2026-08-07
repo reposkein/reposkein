@@ -1,0 +1,21 @@
+indexer/Cargo.lock
+  s_cccd95eae1b8aa::t_ee38f8da7d9d22 1086,1098,1118,1126,1137,1148,1159,1170,1181,1192
+indexer/Cargo.toml
+  s_cccd95eae1b8aa::t_2e325761245130 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fa568bbfebf24ddea1c718bc1a41687df8acc9b7",
+  "prompts": {},
+  "sessions": {
+    "s_cccd95eae1b8aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4b17644-6b79-4e6d-b800-b832034a0745",
+        "model": "claude-opus-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
