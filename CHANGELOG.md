@@ -6,6 +6,33 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-07
+
+### Changed
+
+- **The derived graph is no longer committed; summaries are.** `.reposkein/nodes.jsonl`
+  and `edges.jsonl` are regenerated artefacts, and committing them cost more than it
+  bought. `reposkein-mcp init` now gitignores them, `ensureGraph` builds them on demand
+  when they are absent, and the merge-driver declaration they required is removed from
+  `.gitattributes` (the cleanup matches any `merge=` on those two paths, so both the
+  `reposkein-jsonl` and `union` variants go). Semantic summaries, which are authored
+  rather than derived, are what a repo shares. (#35)
+
+  Two problems this removes, both measured in the CellarNode workspace:
+
+  - **Context exhaustion in coding agents.** The pre-commit hook rewrote both files on
+    every commit, so they landed in `git diff` output. In one consumer repo the tracked
+    pair reached **7.2 MB, roughly 1.9x a 1M-token context window**, which repeatedly
+    killed agents mid-task with autocompact thrashing.
+  - **Silent duplicate node ids after a rebase.** Replaying a commit that touched the
+    graph could leave duplicate ids that `git diff --name-only` does not surface, since
+    the file is listed as changed either way. Observed at 26, 19, 4 and 40 duplicates
+    on separate rebases, each requiring a re-index to clear.
+
+  **Migrating an existing repo:** run `reposkein-mcp init` to pick up the new
+  `.gitignore` and `.gitattributes`, then `git rm --cached .reposkein/nodes.jsonl
+  .reposkein/edges.jsonl` and commit. The graph rebuilds locally on next use.
+
 ## [0.2.6] - 2026-07-06
 
 ### Added
