@@ -7,8 +7,16 @@ import type {
 } from "./GraphStore.js";
 import type { TargetRow } from "../profile/types.js";
 
+// Reached when no backend resolved. The common cause is a missing
+// REPOSKEIN_REPO_PATH, not a missing database: `.reposkein/nodes.jsonl` is
+// derived and git-ignored, and the server builds it on startup when it can, so
+// pointing the user straight at Neo4j would send them to set up infrastructure
+// they do not need.
 const MSG =
-  "Neo4j not configured: set NEO4J_PASSWORD and run `docker compose up` in indexer/";
+  "RepoSkein has no graph for this repository. Set REPOSKEIN_REPO_PATH to the repository root: " +
+  "nodes.jsonl and edges.jsonl are derived and git-ignored, so they are built on first use. " +
+  "To build one by hand, run `reposkein-mcp index <repo>`. " +
+  "To query a Neo4j-backed graph instead, set NEO4J_PASSWORD.";
 
 /** A no-op store used when NEO4J_PASSWORD is absent.
  *  All operations reject with an instructive error. */

@@ -7,7 +7,7 @@ The `GraphStore` abstraction. Every MCP tool reads through this interface; backe
 | File | Role |
 |---|---|
 | `GraphStore.ts` | The interface contract. **Source of truth for row shapes.** |
-| `JsonlGraphStore.ts` | Reads committed `.reposkein/*.jsonl` into memory. **Default** when `nodes.jsonl` exists. |
+| `JsonlGraphStore.ts` | Reads `.reposkein/*.jsonl` into memory. **Default** when `nodes.jsonl` exists (built on startup by `indexer/ensureGraph.ts` when it does not). |
 | `Neo4jGraphStore.ts` | Optional Cypher backend (via `neo4j-driver`). Used for very large graphs. |
 | `UnconfiguredStore.ts` | Every method returns an instructive error. Selected when no backend is reachable. |
 | `federation.ts` | Discovers nested `.reposkein/` dirs → derives `FEDERATES_TO` + cross-repo edges at load. |
@@ -24,10 +24,15 @@ REPOSKEIN_STORE = auto (default) | jsonl | neo4j
   neo4j : Neo4j if NEO4J_* env set, else Unconfigured
 ```
 
+`main()` calls `ensureGraph` before `buildStore`: nodes.jsonl / edges.jsonl are derived and
+git-ignored, so a fresh clone has none and the server builds them once (seconds) rather than
+failing every tool. It skips when Neo4j is the store, so building JSONL can never switch the
+backend out from under a configured user.
+
 ## CONVENTIONS
 
 - **Every backend MUST pass `test/storeConformance.ts`** — the canonical parity fixture. Add a method → add a conformance case.
-- **No backend may mutate `.reposkein/*.jsonl` directly.** Only `writeSemanticSummary` writes, and only via the indexer's 3-way merge.
+- **No backend may mutate `.reposkein/*.jsonl` directly.** Only `writeSemanticSummary` writes, and only by appending to the `.reposkein/local/` sidecar the indexer folds in on its next run.
 - Federation is **load-time only** — `FEDERATES_TO` + cross-repo edges are NEVER committed (they live in `.reposkein/local/`).
 - `repoId.ts` resolution is `path → blake3(canonical_path)` — keep stable for sidecar invariance.
 

@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import neo4j, { type Driver } from "neo4j-driver";
 import { makeInitCpgSkeleton } from "../src/tools/indexerTools.js";
 
-const INDEXER = "/Users/mjnong/repos/reposkein/indexer/target/debug/reposkein-indexer";
+/** The locally built indexer, resolved from this file rather than an absolute
+ *  path: a hardcoded home directory only ever worked on one machine. */
+const INDEXER =
+  process.env.REPOSKEIN_INDEXER_BIN ??
+  fileURLToPath(new URL("../../indexer/target/debug/reposkein-indexer", import.meta.url));
 const REPO = "inittest";
-const gated = process.env.NEO4J_PASSWORD ? describe : describe.skip;
+// Needs both a database and a built indexer; either one absent means skip.
+const gated = process.env.NEO4J_PASSWORD && existsSync(INDEXER) ? describe : describe.skip;
 
 gated("init_cpg_skeleton (integration)", () => {
   let dir: string;

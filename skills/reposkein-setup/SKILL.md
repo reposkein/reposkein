@@ -10,7 +10,7 @@ description: >
 # RepoSkein Setup & Health Check
 
 Goal: get RepoSkein actually serving in THIS repo, then confirm it before relying
-on it. RepoSkein has three moving parts — the **indexer binary**, the committed
+on it. RepoSkein has three moving parts — the **indexer binary**, the
 **`.reposkein/` graph**, and the **MCP server** registered in your agent. This
 skill walks all three and verifies each.
 
@@ -30,8 +30,15 @@ If both pass, skip to step 4 (verify the server). Otherwise continue.
 ```bash
 npx -y @reposkein/mcp init .       # fetches the indexer, installs git hooks + the navigation skill
 reposkein-indexer index .          # builds .reposkein/ (or ask the agent to call init_cpg_skeleton)
-git add .reposkein && git commit -m "chore: add RepoSkein graph"
+git add .reposkein/meta.json .reposkein/config.toml .reposkein/.gitignore
+git commit -m "chore: add RepoSkein config"
 ```
+
+`nodes.jsonl` and `edges.jsonl` stay out of git: they are derived from the working
+tree, so every clone rebuilds them in seconds (the MCP server does it on startup
+when they are missing), and committing them would conflict on every branch that
+touches code. `summaries.jsonl` appears once an agent writes its first summary —
+commit that one, since nothing can regenerate it.
 
 Re-run `npx -y @reposkein/mcp doctor .` until the binary + index checks are `✓`.
 
@@ -51,7 +58,8 @@ differently. Add the RepoSkein server with `REPOSKEIN_REPO_PATH` set to this rep
 > **Gitignore these files.** `.mcp.json` / `opencode.json` hold absolute machine
 > paths and a local backend password, so they are per-machine and must not be
 > committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you wrote
-> them by hand, add them yourself. Only the `.reposkein/` graph gets committed.
+> them by hand, add them yourself. From `.reposkein/`, what gets committed is
+> `meta.json`, `config.toml` and `summaries.jsonl`.
 
 Then **restart / reload the agent** so it picks up the new server.
 

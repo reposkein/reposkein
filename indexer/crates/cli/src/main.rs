@@ -10,19 +10,23 @@ use reposkein_lang_java::JavaExtractor;
 use reposkein_lang_python::PythonExtractor;
 use reposkein_lang_rust::RustExtractor;
 use reposkein_lang_ts::{JavaScriptExtractor, TypeScriptExtractor};
+use serde_json::{Map, Value};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PRE_COMMIT: &str = r#"#!/bin/sh
 # reposkein-managed
-# RepoSkein: keep .reposkein JSONL in sync with the working tree on commit.
+# RepoSkein: keep the local .reposkein graph in sync with the working tree.
+# Nothing is staged. nodes.jsonl / edges.jsonl are derived output and are
+# git-ignored; authored summaries land in .reposkein/summaries.jsonl, which you
+# stage yourself like any other edit.
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
-  echo "reposkein: indexer not found; skipping graph export (commit continues)" >&2
+  echo "reposkein: indexer not found; skipping graph refresh (commit continues)" >&2
   exit 0
 fi
-"$BIN" index . >/dev/null 2>&1 || { echo "reposkein: index failed; skipping export" >&2; exit 0; }
-git add .reposkein/nodes.jsonl .reposkein/edges.jsonl >/dev/null 2>&1 || true
+"$BIN" index . >/dev/null 2>&1 || { echo "reposkein: index failed; skipping refresh" >&2; exit 0; }
 exit 0
 "#;
 
@@ -350,42 +354,92 @@ fn run_index(
     let out_dir = path.join(".reposkein");
     std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
     let nodes_path = out_dir.join("nodes.jsonl");
-    // 1) Preserve summaries already committed in JSONL (hash-validated).
-    let mut nodes = if nodes_path.exists() {
-        let prev = std::fs::read_to_string(&nodes_path).context("read existing nodes.jsonl")?;
-        let existing = reposkein_core::jsonl::read_nodes(&prev)?;
-        reposkein_core::merge::graft_summaries(&graph.nodes, &existing)
-    } else {
-        graph.nodes.clone()
-    };
-    // 2) Overlay the live DB's summaries (PRD §9 Phase 3).
-    if let Some(db_nodes) = db_summary_nodes(&repo) {
-        nodes = reposkein_core::merge::graft_summaries(&nodes, &db_nodes);
+    let summaries_path = out_dir.join("summaries.jsonl");
+
+    // Collect authored summaries from every source, newest last.
+    //
+    // Structure is rebuilt from source on every index, so nodes.jsonl and
+    // edges.jsonl are recoverable at any time. Summaries are not: an agent
+    // wrote them and nothing can regenerate them. They are therefore gathered
+    // separately and persisted to `.reposkein/summaries.jsonl`, the one file in
+    // .reposkein/ worth committing.
+    let mut authored: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    // 1) Legacy: summaries inside a previously committed nodes.jsonl, so the
+    //    first index after upgrading harvests them instead of dropping them.
+    //    Best-effort — a corrupt derived file must never abort an index.
+    if let Ok(prev) = std::fs::read_to_string(&nodes_path) {
+        if let Ok(existing) = reposkein_core::jsonl::read_nodes(&prev) {
+            absorb_summaries(&mut authored, &existing);
+        }
     }
-    // 3) Overlay JSONL-mode sidecar summaries. Atomically *claim* the sidecar
-    //    (rename aside) BEFORE reading it: a write_semantic_summary landing
-    //    during this window then writes a FRESH sidecar that survives to the
-    //    next index, instead of being erased by a blind truncate (data loss).
+    // 2) The committed summaries file: what teammates share.
+    if let Ok(text) = std::fs::read_to_string(&summaries_path) {
+        absorb_summaries(
+            &mut authored,
+            &reposkein_core::jsonl::read_sidecar_summaries(&text),
+        );
+    }
+    // 3) The live DB's summaries (PRD §9 Phase 3).
+    if let Some(db_nodes) = db_summary_nodes(&repo) {
+        absorb_summaries(&mut authored, &db_nodes);
+    }
+    // 4) The JSONL-mode sidecar. Atomically *claim* it (rename aside) BEFORE
+    //    reading: a write_semantic_summary landing during this window then
+    //    writes a FRESH sidecar that survives to the next index, instead of
+    //    being erased by a blind truncate (data loss).
     let sidecar_path = out_dir.join("local").join("summaries.jsonl");
     let claimed_path = out_dir.join("local").join("summaries.consuming.jsonl");
     let claimed = std::fs::rename(&sidecar_path, &claimed_path).is_ok();
     if claimed {
         if let Ok(text) = std::fs::read_to_string(&claimed_path) {
-            let sidecar_nodes = reposkein_core::jsonl::read_sidecar_summaries(&text);
-            nodes = reposkein_core::merge::graft_summaries(&nodes, &sidecar_nodes);
+            absorb_summaries(
+                &mut authored,
+                &reposkein_core::jsonl::read_sidecar_summaries(&text),
+            );
         }
     }
+    let authored_nodes: Vec<reposkein_core::model::Node> = authored
+        .into_iter()
+        .map(|(id, props)| reposkein_core::model::Node {
+            id,
+            labels: Vec::new(),
+            props,
+        })
+        .collect();
+
+    // Derived output. Summaries are grafted in only where `summary_of_hash`
+    // still matches the node, so a stale summary never reads as current.
+    let nodes = reposkein_core::merge::graft_summaries(&graph.nodes, &authored_nodes);
     std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
         .context("failed to write nodes.jsonl")?;
-    if claimed {
-        // Grafted summaries are now in committed nodes.jsonl; drop the claim.
-        let _ = std::fs::remove_file(&claimed_path);
-    }
     std::fs::write(
         out_dir.join("edges.jsonl"),
         jsonl::edges_to_jsonl(&graph.edges),
     )
     .context("failed to write edges.jsonl")?;
+
+    // Authored output. Kept verbatim rather than hash-filtered: a summary whose
+    // node changed is *stale*, not wrong, and a reader detects that by comparing
+    // `summary_of_hash` against the node's `content_hash`. Filtering here would
+    // silently delete authored prose on the next unrelated refactor, and churn
+    // a committed file on every edit. Summaries whose node no longer exists are
+    // dropped — that code is gone.
+    let live: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    let surviving: Vec<reposkein_core::model::Node> = authored_nodes
+        .into_iter()
+        .filter(|n| live.contains(n.id.as_str()))
+        .collect();
+    let summaries = jsonl::summaries_to_jsonl(&surviving);
+    if summaries.is_empty() {
+        // Leave no empty file behind in repos that have no summaries at all.
+        let _ = std::fs::remove_file(&summaries_path);
+    } else {
+        std::fs::write(&summaries_path, summaries).context("failed to write summaries.jsonl")?;
+    }
+    if claimed {
+        // Now persisted in summaries.jsonl; drop the claim.
+        let _ = std::fs::remove_file(&claimed_path);
+    }
 
     write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
 
@@ -412,6 +466,29 @@ fn index_stats_json(r: &IndexRun) -> String {
     serde_json::to_string(&stats).unwrap()
 }
 
+/// True for a `.gitattributes` line an earlier RepoSkein wrote to point the
+/// derived JSONL at a merge driver (the custom `reposkein-jsonl` one or the
+/// built-in `union`).
+fn is_reposkein_merge_attr(line: &str) -> bool {
+    let l = line.trim();
+    (l.starts_with(".reposkein/nodes.jsonl") || l.starts_with(".reposkein/edges.jsonl"))
+        && l.contains("merge=")
+}
+
+/// Folds any nodes carrying summary props into `authored`, keyed by node id.
+/// Later calls win, so callers should feed sources oldest-first.
+fn absorb_summaries(
+    authored: &mut BTreeMap<String, Map<String, Value>>,
+    records: &[reposkein_core::model::Node],
+) {
+    for n in records {
+        let part = reposkein_core::merge::summary_part(&n.props);
+        if reposkein_core::merge::has_summary(&part) {
+            authored.insert(n.id.clone(), part);
+        }
+    }
+}
+
 /// Writes meta.json, .reposkein/.gitignore, default config.toml (if absent),
 /// and the git-ignored local/ dir.
 fn write_reposkein_layout(out_dir: &Path, repo_id: &str) -> Result<()> {
@@ -419,7 +496,20 @@ fn write_reposkein_layout(out_dir: &Path, repo_id: &str) -> Result<()> {
         out_dir.join("meta.json"),
         reposkein_core::meta::meta_json(repo_id),
     )?;
-    std::fs::write(out_dir.join(".gitignore"), "local/\n")?;
+    // nodes.jsonl / edges.jsonl are derived: a pure function of the working
+    // tree that `index` rebuilds in seconds. Committing them means every branch
+    // that touches code also rewrites two machine-generated files, so every open
+    // pull request conflicts on them the moment any other one merges. A
+    // `.gitattributes merge=union` declaration does not rescue this: forges
+    // compute mergeability in a bare repo, where tree-level .gitattributes is
+    // never consulted, and where union *does* apply it resolves by keeping both
+    // sides' lines, producing duplicate ids for any node both branches touched.
+    // So they stay out of git. Authored summaries live in summaries.jsonl, which
+    // is committed.
+    std::fs::write(
+        out_dir.join(".gitignore"),
+        "local/\nnodes.jsonl\nedges.jsonl\n",
+    )?;
     std::fs::create_dir_all(out_dir.join("local"))?;
     let cfg = out_dir.join("config.toml");
     if !cfg.exists() {
@@ -777,83 +867,46 @@ fn main() -> Result<()> {
             write_hook("post-merge", POST_MERGE)?;
             write_hook("post-checkout", POST_MERGE)?; // same action as post-merge
 
-            // .gitattributes (append idempotently).
+            // .gitattributes: remove any merge declaration an earlier RepoSkein
+            // installed for the derived JSONL.
             //
-            // `merge=union` — a BUILT-IN git strategy — not the custom
-            // `reposkein-jsonl` driver registered below. A custom driver only
-            // resolves where its binary and `git config` exist, i.e. on a
-            // developer's machine. Forges (GitHub, GitLab) merge server-side
-            // with neither, so naming a custom driver there does not degrade
-            // gracefully: git cannot resolve the name, falls back to the plain
-            // text merge, and every pull request that touches these files
-            // conflicts on them. Because the indexer rewrites both files on
-            // every commit, that is effectively every long-lived PR — for
-            // conflicts that are pure noise, since the graph is regenerated
-            // from source anyway.
-            //
-            // Union takes both sides' lines and never conflicts. The result is
-            // briefly non-canonical (unsorted, and duplicated for records both
-            // sides touched), which is safe here: readers parse line-wise, and
-            // `nodes_to_jsonl` / `edges_to_jsonl` sort and de-duplicate by id
-            // on the next write. The pre-commit hook runs `index`, so the very
-            // next commit restores canonical form. Structural fields are
-            // regenerated from source; summaries survive via the content-hash
-            // rule in `core::merge`.
-            //
-            // The custom driver is still registered, so anyone who prefers a
-            // high-fidelity local merge can point .gitattributes back at it.
+            // Those files are no longer committed, so a merge driver has nothing
+            // left to resolve. Leaving the line is worse than useless: the custom
+            // driver only exists on a developer's machine, and a forge computing
+            // mergeability does it in a bare repo, where tree-level .gitattributes
+            // is not consulted at all — so neither the custom driver nor a
+            // built-in `merge=union` ever runs there.
             let attrs_path = path.join(".gitattributes");
-            let existing = std::fs::read_to_string(&attrs_path).unwrap_or_default();
-            // Migrate repos initialised before this change; leaving the old
-            // line in place would keep forge-side merges conflicting.
-            let existing = existing.replace(
-                ".reposkein/nodes.jsonl merge=reposkein-jsonl",
-                ".reposkein/nodes.jsonl merge=union",
-            );
-            let existing = existing.replace(
-                ".reposkein/edges.jsonl merge=reposkein-jsonl",
-                ".reposkein/edges.jsonl merge=union",
-            );
-            let lines = [
-                ".reposkein/nodes.jsonl merge=union",
-                ".reposkein/edges.jsonl merge=union",
-            ];
-            let mut attrs = existing.clone();
-            if !attrs.is_empty() && !attrs.ends_with('\n') {
-                attrs.push('\n');
-            }
-            for l in lines {
-                if !existing.contains(l) {
-                    attrs.push_str(l);
-                    attrs.push('\n');
+            if let Ok(existing) = std::fs::read_to_string(&attrs_path) {
+                let kept: Vec<&str> = existing
+                    .lines()
+                    .filter(|l| !is_reposkein_merge_attr(l))
+                    .collect();
+                if kept.len() != existing.lines().count() {
+                    if kept.iter().all(|l| l.trim().is_empty()) {
+                        // The file only ever held our lines; leave no empty
+                        // artefact behind.
+                        std::fs::remove_file(&attrs_path).context("remove .gitattributes")?;
+                    } else {
+                        let mut out = kept.join("\n");
+                        out.push('\n');
+                        std::fs::write(&attrs_path, out).context("write .gitattributes")?;
+                    }
+                    println!("removed the .reposkein merge declaration from .gitattributes");
                 }
             }
-            std::fs::write(&attrs_path, attrs).context("write .gitattributes")?;
 
-            // Register the merge driver (kind inferred from filename at merge time).
-            let run_cfg = |k: &str, v: &str| {
-                std::process::Command::new("git")
+            // Drop the merge-driver registration an earlier RepoSkein wrote into
+            // .git/config. Best-effort: an absent key is not an error.
+            for key in ["merge.reposkein-jsonl.name", "merge.reposkein-jsonl.driver"] {
+                let _ = std::process::Command::new("git")
                     .arg("-C")
                     .arg(&path)
-                    .args(["config", k, v])
-                    .status()
-            };
-            run_cfg(
-                "merge.reposkein-jsonl.name",
-                "RepoSkein canonical JSONL merge",
-            )?;
-            let exe_path = std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "reposkein-indexer".to_string());
-            run_cfg(
-                "merge.reposkein-jsonl.driver",
-                &format!("{exe_path} merge-jsonl --path %P %O %A %B"),
-            )?;
+                    .args(["config", "--unset-all", key])
+                    .status();
+            }
 
-            println!(
-                "installed reposkein git hooks + merge driver in {}",
-                path.display()
-            );
+            println!("installed reposkein git hooks in {}", path.display());
             Ok(())
         }
         Commands::MergeJsonl {

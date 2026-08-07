@@ -11,6 +11,16 @@ describe("graceful startup without NEO4J_PASSWORD", () => {
     await expect(store.runRead("MATCH (n) RETURN n")).rejects.toThrow(/Neo4j/i);
   });
 
+  it("points at the repo path first, not at standing up a database", async () => {
+    // The usual cause of an unconfigured store is a missing REPOSKEIN_REPO_PATH.
+    // Leading with Neo4j sends a zero-infra user off to install infrastructure
+    // they do not need to answer a single query.
+    const store = new UnconfiguredStore();
+    await expect(store.runRead("MATCH (n) RETURN n")).rejects.toThrow(/REPOSKEIN_REPO_PATH/);
+    await expect(store.runRead("MATCH (n) RETURN n")).rejects.toThrow(/reposkein-mcp index/);
+    await expect(store.runRead("MATCH (n) RETURN n")).rejects.toThrow(/git-ignored/);
+  });
+
   it("UnconfiguredStore.writeSummary rejects with a Neo4j configuration message", async () => {
     const store = new UnconfiguredStore();
     await expect(
