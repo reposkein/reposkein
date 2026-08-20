@@ -320,9 +320,10 @@ export async function main(): Promise<void> {
     async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
-      // Default to the active repo's path (not the indexer's own cwd-based
-      // fallback) so a selected/discovered repo is what actually gets indexed.
-      return makeInitCpgSkeleton(active.repoId)({ ...args, path: args?.path ?? active.repoPath });
+      // repoPath is threaded through explicitly (see indexerTools.ts) so this
+      // always targets the resolved active repo, not a cwd/env-based guess —
+      // an explicit args.path still wins inside makeInitCpgSkeleton itself.
+      return makeInitCpgSkeleton(active.repoId, active.repoPath)(args);
     }
   );
 
@@ -337,7 +338,10 @@ export async function main(): Promise<void> {
     async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
-      return makeReindexFile(active.repoId)(args);
+      // repoPath threaded explicitly — reindex_file has no path override of
+      // its own, so without this it would silently reindex whatever
+      // REPOSKEIN_REPO_PATH/cwd points at instead of the selected repo.
+      return makeReindexFile(active.repoId, active.repoPath)(args);
     }
   );
 

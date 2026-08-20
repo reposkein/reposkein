@@ -41,7 +41,7 @@ gated("init_cpg_skeleton (integration)", () => {
   });
 
   it("indexes a repo and loads it into Neo4j", async () => {
-    const init = makeInitCpgSkeleton(REPO);
+    const init = makeInitCpgSkeleton(REPO, dir);
     const res = await init({});
     const payload = JSON.parse(res.content[0].text);
     expect(res.isError).toBeFalsy();
