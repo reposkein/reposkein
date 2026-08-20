@@ -223,11 +223,11 @@ export async function main(): Promise<void> {
     {
       title: "Find code by meaning",
       description:
-        "Rank functions/classes by a lexical match over their qualified names, signatures, and agent-written summaries — the entry point to seed get_context_profile when you don't know where to start. Returns ranked node_ids. federated:true spans nested repos.",
+        "Rank functions/classes by a lexical match over their qualified names, signatures, and agent-written summaries — the entry point to seed get_context_profile when you don't know where to start. Returns ranked node_ids. Architecture decisions are part of the corpus: \"why\" questions (why don't we X, what did we decide about Y) surface Decision rows — follow up with get_decision. federated:true spans nested repos.",
       inputSchema: {
         query: z.string(),
         limit: z.number().int().min(1).max(25).optional(),
-        kind: z.enum(["Function", "Class", "Interface", "Enum"]).optional(),
+        kind: z.enum(["Function", "Class", "Interface", "Enum", "Decision"]).optional(),
         federated: z.boolean().optional(),
       },
     },

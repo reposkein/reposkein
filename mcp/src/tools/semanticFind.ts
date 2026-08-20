@@ -17,8 +17,9 @@
  * and Neo4j backends. No Neo4j vector index used.
  */
 
-import type { GraphStore } from "../store/GraphStore.js";
+import type { CorpusNode, GraphStore } from "../store/GraphStore.js";
 import { federationIds } from "../store/federation.js";
+import { loadDecisions, type DecisionStatus } from "../store/decisions.js";
 import { rankCorpus } from "../search/bm25f.js";
 import type { ToolResult } from "./readCypher.js";
 import type { EmbeddingProvider } from "../embed/provider.js";
@@ -30,12 +31,35 @@ import { neutralizeSummary } from "../guard/summaryValidation.js";
 export interface SemanticFindArgs {
   query: string;
   limit?: number;
-  kind?: "Function" | "Class" | "Interface" | "Enum";
+  kind?: "Function" | "Class" | "Interface" | "Enum" | "Decision";
   federated?: boolean;
 }
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 25;
+
+/** Cap for the displayed rationale on Decision rows (the full record is one
+ *  get_decision away; the search text itself is unbounded). */
+const DECISION_SUMMARY_DISPLAY = 240;
+
+/** Decision records as corpus pseudo-nodes: title is the name, and the
+ *  searchable/embeddable text is title + context + decision — the schema was
+ *  shaped for exactly this. All statuses are included (history is the point);
+ *  rows carry `status` so superseded rationale is recognizable. Bodies are
+ *  immutable, so the embedding cache never re-embeds a decision. */
+function decisionCorpus(repoPath: string, repoId: string): CorpusNode[] {
+  const { decisions } = loadDecisions(repoPath);
+  return decisions.map((d) => ({
+    id: d.id,
+    kind: "Decision",
+    name: d.title,
+    qualified_name: d.title,
+    signature: "",
+    summary: `${d.context} ${d.decision}`,
+    file_path: d.paths[0] ?? d.anchors[0]?.path ?? "",
+    repo_id: repoId,
+  }));
+}
 
 /**
  * Factory for the semantic_find handler.
@@ -68,6 +92,16 @@ export function makeSemanticFind(
 
       // Fetch the corpus from the store (both backends return nodes sorted by id)
       let corpus = await store.searchCorpus(repoIds);
+
+      // Decision records join the corpus as pseudo-nodes (repoPath-gated,
+      // like every decision surface).
+      const decisionStatusById = new Map<string, DecisionStatus>();
+      if (repoPath) {
+        corpus = [...corpus, ...decisionCorpus(repoPath, repoId)];
+        for (const d of loadDecisions(repoPath).decisions) {
+          decisionStatusById.set(d.id, d.status);
+        }
+      }
 
       // Apply optional kind filter before ranking (design §4)
       if (kind) {
@@ -164,10 +198,16 @@ export function makeSemanticFind(
         if (via !== undefined) {
           result["via"] = via;
         }
+        if (node.kind === "Decision") {
+          result["status"] = decisionStatusById.get(node.id);
+        }
         // Include summary only when present (keeps payload lean; absence is informative).
         // Neutralize on the READ path to close the injection bypass: summaries from
         // git-pulled nodes.jsonl or hand-edited files never passed the write guard.
-        const neutralized = neutralizeSummary(node.summary || null);
+        let neutralized = neutralizeSummary(node.summary || null);
+        if (neutralized && node.kind === "Decision" && neutralized.length > DECISION_SUMMARY_DISPLAY) {
+          neutralized = neutralized.slice(0, DECISION_SUMMARY_DISPLAY) + "…";
+        }
         if (neutralized) {
           result["summary"] = neutralized;
         }
