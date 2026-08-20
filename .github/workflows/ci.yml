@@ -42,6 +42,15 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests (incl. determinism + JSONL round-trip invariants)
         run: cargo test
+      # The one check no unit test can make. The Rust and TS suites simulate
+      # merged shard content directly; they cannot observe whether GIT honours
+      # .reposkein/.gitattributes and union-merges a shard, or whether a
+      # git-ignored nodes.jsonl leaks one branch's summaries into another's
+      # commit. This drives real branches through a real merge with the real
+      # binary. Needs only git and the debug binary `cargo test` already built.
+      - name: Live two-branch merge repro (real git, real binary)
+        working-directory: ${{ github.workspace }}
+        run: sh scripts/summary-merge-repro.sh "$PWD/indexer/target/debug/reposkein-indexer"
 
   indexer-neo4j-roundtrip:
     name: indexer Neo4j round-trip (gated DB tests)
