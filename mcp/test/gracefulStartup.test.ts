@@ -43,8 +43,8 @@ describe("graceful startup without NEO4J_PASSWORD", () => {
     expect(() => makeReadCypher(store, repoId)).not.toThrow();
     expect(() => makeGetContextProfile(store, repoId)).not.toThrow();
     expect(() => makeWriteSemanticSummary(store, repoId)).not.toThrow();
-    expect(() => makeInitCpgSkeleton(repoId)).not.toThrow();
-    expect(() => makeReindexFile(repoId)).not.toThrow();
+    expect(() => makeInitCpgSkeleton(repoId, "/tmp/testrepo")).not.toThrow();
+    expect(() => makeReindexFile(repoId, "/tmp/testrepo")).not.toThrow();
   });
 
   it("get_context_profile with UnconfiguredStore returns isError mentioning Neo4j", async () => {

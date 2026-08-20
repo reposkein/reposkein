@@ -2,7 +2,6 @@ import type { ToolResult } from "./readCypher.js";
 import {
   spawnIndexer,
   parseJsonStats,
-  repoPath,
   shouldLoadNeo4j,
 } from "../indexer/runIndexer.js";
 import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
@@ -103,10 +102,16 @@ export interface InitArgs {
   full?: boolean;
 }
 
-export function makeInitCpgSkeleton(repoId: string, deps?: Partial<IndexerDeps>) {
+/** `path` (the repo to index) MUST come from the caller's already-resolved
+ *  active repo (mcp/src/store/repoSession.ts), not re-derived here — this
+ *  tool used to default to REPOSKEIN_REPO_PATH/cwd internally via
+ *  runIndexer.js's `repoPath()`, which bypassed session.select_repo entirely
+ *  and could index the wrong repo in workspace mode. Args-supplied `path`
+ *  still wins, matching the original "explicit arg beats everything" rule. */
+export function makeInitCpgSkeleton(repoId: string, repoPath: string, deps?: Partial<IndexerDeps>) {
   const run = makeRunner(repoId, deps);
   return async (args: InitArgs): Promise<ToolResult> => {
-    const indexPath = args?.path ?? repoPath();
+    const indexPath = args?.path ?? repoPath;
     const start = Date.now();
     const r = await run(repoId, indexPath);
     if (!r.ok) {
@@ -133,13 +138,19 @@ export interface ReindexArgs {
   path: string;
 }
 
-export function makeReindexFile(repoId: string, deps?: Partial<IndexerDeps>) {
+/** `path` has no override — `reindex_file`'s args only carry the file being
+ *  reindexed, not a repo root — so this ALWAYS targets the caller's resolved
+ *  active repo. Same reasoning as `makeInitCpgSkeleton` above: previously
+ *  this read REPOSKEIN_REPO_PATH/cwd internally, independent of
+ *  session.select_repo — the exact "reindex the wrong repo" bug class this
+ *  parameter exists to close. */
+export function makeReindexFile(repoId: string, repoPath: string, deps?: Partial<IndexerDeps>) {
   const run = makeRunner(repoId, deps);
   return async (args: ReindexArgs): Promise<ToolResult> => {
     if (!args || !args.path) {
       return { content: [{ type: "text", text: "reindex_file requires a 'path'" }], isError: true };
     }
-    const indexPath = repoPath();
+    const indexPath = repoPath;
     const start = Date.now();
     const r = await run(repoId, indexPath, { verb: "reindex", file: args.path });
     if (!r.ok) {

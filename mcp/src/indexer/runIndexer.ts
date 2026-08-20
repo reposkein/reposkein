@@ -23,10 +23,14 @@ export interface SpawnResult {
   stderr: string;
 }
 
-/** Repo root the indexer operates on: REPOSKEIN_REPO_PATH or cwd. */
-export function repoPath(): string {
-  return process.env.REPOSKEIN_REPO_PATH ?? process.cwd();
-}
+// NOTE: there used to be a `repoPath()` here (REPOSKEIN_REPO_PATH ?? cwd),
+// an independent repo-path resolver `tools/indexerTools.ts` called instead
+// of using its caller's already-resolved active repo. That let init/reindex
+// bypass session.select_repo entirely and index the wrong repo in workspace
+// mode — removed; every caller now takes an explicit `repoPath` param
+// sourced from mcp/src/store/repoSession.ts. Don't reintroduce an
+// env/cwd-based resolver here — see mcp/src/store/resolveRepoPath.ts for the
+// one central resolution algorithm.
 
 export function spawnIndexer(bin: string, args: string[]): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {

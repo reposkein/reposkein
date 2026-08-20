@@ -160,7 +160,7 @@ describe("reindex_file surfaces decisions_affected", () => {
       pendingDeltaPath(root),
       JSON.stringify(delta({ modified: [`rs1:${REPO_ID}:func:src/y.ts#g@0`], counts: { added: 0, removed: 0, modified: 1 } }))
     );
-    const reindex = makeReindexFile(REPO_ID, {
+    const reindex = makeReindexFile(REPO_ID, root, {
       run: async () => ({
         ok: true,
         nodes: 1,
@@ -185,7 +185,7 @@ describe("reindex_file surfaces decisions_affected", () => {
 
   it("marks the cross-reference incomplete when the delta was truncated", async () => {
     seed(root, "adr:2026-08-01-a", { anchors: [anchor(`rs1:${REPO_ID}:func:src/x.ts#f@0`)] });
-    const reindex = makeReindexFile(REPO_ID, {
+    const reindex = makeReindexFile(REPO_ID, root, {
       run: async () => ({
         ok: true,
         nodes: 1,
@@ -212,7 +212,7 @@ describe("reindex_file surfaces decisions_affected", () => {
     );
     const other = mkdtempSync(join(tmpdir(), "rs-other-"));
     try {
-      const init = makeInitCpgSkeleton(REPO_ID, {
+      const init = makeInitCpgSkeleton(REPO_ID, root, {
         run: async () => ({ ok: true, nodes: 1, edges: 0, files: 1, warnings: [] }),
       });
       const out = JSON.parse((await init({ path: other })).content[0]!.text) as Record<string, any>;
@@ -224,7 +224,7 @@ describe("reindex_file surfaces decisions_affected", () => {
   });
 
   it("omits the fields when there is no drift", async () => {
-    const reindex = makeReindexFile(REPO_ID, {
+    const reindex = makeReindexFile(REPO_ID, root, {
       run: async () => ({ ok: true, nodes: 1, edges: 0, files: 1, warnings: [] }),
     });
     const out = JSON.parse((await reindex({ path: "src/x.ts" })).content[0]!.text) as Record<string, any>;

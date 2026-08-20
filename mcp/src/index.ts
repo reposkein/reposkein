@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
-import { runDoctor } from "./cli/doctor.js";
+import { runDoctor, resolveDoctorRepoPath } from "./cli/doctor.js";
 import { runAdr } from "./cli/adr.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
 import { existsSync, realpathSync } from "node:fs";
@@ -14,6 +14,7 @@ import { UnconfiguredStore } from "./store/UnconfiguredStore.js";
 import type { GraphStore } from "./store/GraphStore.js";
 import { JsonlGraphStore } from "./store/JsonlGraphStore.js";
 import { makeReadCypher } from "./tools/readCypher.js";
+import type { ToolResult } from "./tools/readCypher.js";
 import { makeGetContextProfile } from "./tools/getContextProfile.js";
 import { makeWriteSemanticSummary } from "./tools/writeSemanticSummary.js";
 import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
@@ -26,8 +27,11 @@ import { makeReaffirmDecision } from "./tools/reaffirmDecision.js";
 import { makeListDecisions } from "./tools/listDecisions.js";
 import { makeGetDecision } from "./tools/getDecision.js";
 import { resolveRepoId } from "./store/repoId.js";
+import type { RepoResolution } from "./store/resolveRepoPath.js";
+import { RepoSession } from "./store/repoSession.js";
+import { makeCache } from "./store/repoContextCache.js";
 import { ensureGraph } from "./indexer/ensureGraph.js";
-import { ensureIndexerBinary } from "./indexer/fetchBinary.js";
+import { ensureIndexerBinary, packageVersion } from "./indexer/fetchBinary.js";
 import { spawnIndexer } from "./indexer/runIndexer.js";
 
 /** Selects the store backend.
@@ -60,9 +64,70 @@ function buildStore(repoPath: string | undefined, repoId: string | undefined): G
   return neo4j();
 }
 
-const REPO_REQUIRED_MSG =
-  "REPOSKEIN_REPO_PATH (or REPOSKEIN_REPO_ID) must be set to use this tool. " +
-  "Set REPOSKEIN_REPO_PATH to the root of the repository you want to work with.";
+const HELP_TEXT = `reposkein-mcp — deterministic code-graph MCP server
+
+Usage:
+  reposkein-mcp                 start the MCP server (stdio transport)
+  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph)
+  reposkein-mcp index [path]    (re)build the committed graph
+  reposkein-mcp doctor [path]   health check (indexer binary, index, repo id)
+  reposkein-mcp adr <sub> ...   decision-log utilities
+  reposkein-mcp view [path]     open the constellation viewer (--export <dir> for a static site)
+  reposkein-mcp --help          show this help
+  reposkein-mcp --version       print the package version
+
+Repo resolution (used by the server and by [path]-less CLI commands):
+  1. an explicit path argument, if given
+  2. REPOSKEIN_REPO_PATH, if set
+  3. the nearest ancestor of the current directory containing .reposkein/
+  4. a single .reposkein/ found while scanning subdirectories (2 levels deep,
+     skipping node_modules/.git/target/dist/.worktrees/.claude)
+  If step 4 finds more than one .reposkein/, resolution fails with an error
+  naming the candidates — set REPOSKEIN_REPO_PATH (or pass a path) to pick one.
+
+Docs: https://github.com/reposkein/reposkein/tree/main/mcp#readme`;
+
+/** Structured, actionable message for repo-scoped tool calls when no repo
+ *  resolved (see `resolveRepoPath`). Names the discovered candidates when
+ *  resolution failed due to workspace-mode ambiguity, and points at
+ *  `list_repos` / `select_repo` so the agent can pick one instead of
+ *  abandoning the tools. */
+// Exported for the regression test below (repoRequiredMessage.test.ts) — it
+// must keep pointing agents at list_repos/select_repo, not just the env var.
+export function repoRequiredMessage(resolution: RepoResolution): string {
+  if (resolution.candidates && resolution.candidates.length > 0) {
+    return (
+      `Multiple RepoSkein repos were found under ${process.cwd()} and none is selected: ` +
+      resolution.candidates.join(", ") +
+      ". Call list_repos to see them, then select_repo with one of its `path` or `name` " +
+      "values (or set REPOSKEIN_REPO_PATH) to use this tool."
+    );
+  }
+  return (
+    "No RepoSkein repo found (checked the current directory, its ancestors, and its " +
+    "immediate subdirectories for .reposkein/). Run `reposkein-mcp init` in the repository " +
+    "you want to work with, call list_repos to check what was discovered, or set " +
+    "REPOSKEIN_REPO_PATH to its root."
+  );
+}
+
+// Exported for the regression test below (repoRequiredMessage.test.ts) — it
+// must name the found path and the fix (`reposkein-mcp index`), not repeat
+// the generic "no repo found" message: a repo WAS found here, it's just not
+// indexed yet (or, if `.reposkein/` isn't actually there, misconfigured).
+export function repoUnindexedMessage(repoPath: string): string {
+  if (existsSync(join(repoPath, ".reposkein"))) {
+    return (
+      `Found .reposkein/ at ${repoPath}, but it has no meta.json (not indexed yet). ` +
+      `Run \`reposkein-mcp index ${repoPath}\` (or the init_cpg_skeleton tool) to build it, ` +
+      "then retry this call."
+    );
+  }
+  return (
+    `${repoPath} has no .reposkein/ directory. Run \`reposkein-mcp init ${repoPath}\` there, ` +
+    "or point REPOSKEIN_REPO_PATH / select_repo at a repo that already has one."
+  );
+}
 
 // Exported for the regression test. `hops` MUST stay a bounded integer: a literal union
 // (z.union([z.literal(1), z.literal(2)])) serialises to JSON-Schema `anyOf:[{const:1},{const:2}]`,
@@ -111,19 +176,106 @@ export const getDecisionInputSchema = {
 };
 
 export async function main(): Promise<void> {
-  const repoPath = process.env.REPOSKEIN_REPO_PATH;
-  const repoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
-  // Build the graph if the repo has none yet. Derived JSONL is git-ignored, so a
-  // fresh clone arrives without it; without this the first query would fail on a
-  // repo that indexes fine in a couple of seconds.
-  await ensureGraph(repoPath, repoId, {
-    mode: (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase(),
-    neo4jConfigured: !!process.env.NEO4J_PASSWORD,
+  // Zero-config repo resolution: explicit arg (n/a here) > REPOSKEIN_REPO_PATH >
+  // walk-up (nearest ancestor with .reposkein/) > walk-down (workspace mode).
+  // See store/resolveRepoPath.ts for the full precedence + ambiguity rules.
+  // Session-scoped resolution: `select_repo` (below) can override this for
+  // the rest of the connection. Precedence: select_repo > REPOSKEIN_REPO_PATH
+  // > walk-up > walk-down. See store/repoSession.ts.
+  const session = new RepoSession({
+    cwd: process.cwd(),
+    envRepoPath: process.env.REPOSKEIN_REPO_PATH,
   });
-  const store = buildStore(repoPath, repoId);
+
+  // Per-repoPath {repoId, store} cache. Constructing a JsonlGraphStore is
+  // cheap (it lazily loads/re-parses its graph per call, keyed by file
+  // mtime) but re-running resolveRepoId/ensureGraph/buildStore on every tool
+  // call would still be wasted work for the common single-repo case, and
+  // rebuilding the store object would also throw away that per-instance
+  // mtime cache — so one context is built per repoPath and reused, letting
+  // `select_repo` switch back and forth cheaply too.
+  //
+  // Only a SUCCESSFUL resolution (repoId defined) is cached — see
+  // store/repoContextCache.ts. A repo whose `.reposkein/` exists but isn't
+  // indexed yet (no meta.json) is a transient, fixable state: an agent might
+  // run `reposkein-mcp index` (or init_cpg_skeleton) out-of-band and expect
+  // the very next call in this same session to pick it up. Caching that
+  // failure would freeze the session on a stale "not found" forever,
+  // undercutting select_repo's whole no-restart-needed point.
+  const getRepoContext = makeCache(
+    async (path: string): Promise<{ repoId: string | undefined; store: GraphStore }> => {
+      const id = resolveRepoId(path, process.env.REPOSKEIN_REPO_ID);
+      // Build the graph if the repo has none yet. Derived JSONL is
+      // git-ignored, so a fresh clone arrives without it; without this the
+      // first query on a newly selected repo would fail on one that indexes
+      // fine in seconds.
+      await ensureGraph(path, id, {
+        mode: (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase(),
+        neo4jConfigured: !!process.env.NEO4J_PASSWORD,
+      });
+      return { repoId: id, store: buildStore(path, id) };
+    },
+    (ctx) => !!ctx.repoId
+  );
+
+  type ActiveRepo =
+    | { ok: true; repoPath: string; repoId: string; store: GraphStore }
+    | { ok: false; message: string };
+  /** Resolves the session's current repo for a repo-scoped tool call.
+   *  Re-evaluated on every call (not once at startup) so `select_repo`
+   *  actually takes effect for calls made after it. */
+  async function resolveActiveRepo(): Promise<ActiveRepo> {
+    const resolution = session.resolve();
+    if (!resolution.repoPath) return { ok: false, message: repoRequiredMessage(resolution) };
+    const ctx = await getRepoContext(resolution.repoPath);
+    // Distinct from repoRequiredMessage: a repo path WAS resolved here — the
+    // problem is it isn't indexed (or doesn't actually have .reposkein/),
+    // not that none could be found at all. See repoUnindexedMessage.
+    if (!ctx.repoId) return { ok: false, message: repoUnindexedMessage(resolution.repoPath) };
+    return { ok: true, repoPath: resolution.repoPath, repoId: ctx.repoId, store: ctx.store };
+  }
+  const errResult = (message: string): ToolResult => ({ content: [{ type: "text", text: message }], isError: true });
 
   const server = new McpServer({ name: "@reposkein/mcp", version: "0.0.0" });
-  const readCypher = makeReadCypher(store, repoId);
+
+  server.registerTool(
+    "list_repos",
+    {
+      title: "List discovered repos",
+      description:
+        "Enumerate the RepoSkein repos discovered from the server's working directory (walk-up: the nearest ancestor with .reposkein/; walk-down/workspace mode: subdirectories, when no ancestor has one). Single-repo setups return exactly one entry. In workspace mode (multiple sibling repos, no default selected), use this to see the candidates, then `select_repo` one before calling other repo-scoped tools.",
+      inputSchema: {},
+    },
+    async () => {
+      const repos = session.list();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              mode: repos.length > 1 ? "workspace" : "single",
+              repos,
+            }),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "select_repo",
+    {
+      title: "Select the active repo",
+      description:
+        "Set the session-active repo for all subsequent repo-scoped tool calls (get_context_profile, semantic_find, impact, decisions, etc.) — the fix for workspace-mode ambiguity (list_repos returned more than one candidate). Pass a `repo` value from list_repos: its `path` or its `name`. Overrides REPOSKEIN_REPO_PATH and any earlier select_repo call for the rest of this connection; stays in effect until called again.",
+      inputSchema: { repo: z.string() },
+    },
+    async (args) => {
+      const result = session.select(args.repo);
+      if (!result.ok) return errResult(result.error);
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, selected: result.repo }) }] };
+    }
+  );
 
   server.registerTool(
     "read_cypher",
@@ -137,12 +289,18 @@ export async function main(): Promise<void> {
         federated: z.boolean().optional(),
       },
     },
-    async (args) => readCypher(args)
+    async (args) => {
+      // read_cypher tolerates an unresolved repo (falls back to whatever
+      // buildStore(undefined, undefined) picks — Neo4j if configured, else
+      // UnconfiguredStore — matching its pre-existing, non-gated behavior).
+      const resolution = session.resolve();
+      const ctx = resolution.repoPath
+        ? await getRepoContext(resolution.repoPath)
+        : { repoId: undefined, store: buildStore(undefined, undefined) };
+      return makeReadCypher(ctx.store, ctx.repoId)(args);
+    }
   );
 
-  // Repo-scoped tools are always registered; they check repoId at call time.
-  // Handlers are constructed with a real repoId only if it's available.
-  const getContextProfile = repoId ? makeGetContextProfile(store, repoId, repoPath) : null;
   server.registerTool(
     "get_context_profile",
     {
@@ -152,14 +310,12 @@ export async function main(): Promise<void> {
       inputSchema: getContextProfileInputSchema,
     },
     async (args) => {
-      if (!getContextProfile) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return getContextProfile(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeGetContextProfile(active.store, active.repoId, active.repoPath)(args);
     }
   );
 
-  const writeSummary = repoId ? makeWriteSemanticSummary(store, repoId) : null;
   server.registerTool(
     "write_semantic_summary",
     {
@@ -173,14 +329,12 @@ export async function main(): Promise<void> {
       },
     },
     async (args) => {
-      if (!writeSummary) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return writeSummary(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeWriteSemanticSummary(active.store, active.repoId)(args);
     }
   );
 
-  const initSkeleton = repoId ? makeInitCpgSkeleton(repoId) : null;
   server.registerTool(
     "init_cpg_skeleton",
     {
@@ -193,14 +347,15 @@ export async function main(): Promise<void> {
       },
     },
     async (args) => {
-      if (!initSkeleton) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return initSkeleton(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      // repoPath is threaded through explicitly (see indexerTools.ts) so this
+      // always targets the resolved active repo, not a cwd/env-based guess —
+      // an explicit args.path still wins inside makeInitCpgSkeleton itself.
+      return makeInitCpgSkeleton(active.repoId, active.repoPath)(args);
     }
   );
 
-  const reindexFile = repoId ? makeReindexFile(repoId) : null;
   server.registerTool(
     "reindex_file",
     {
@@ -210,16 +365,15 @@ export async function main(): Promise<void> {
       inputSchema: { path: z.string() },
     },
     async (args) => {
-      if (!reindexFile) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return reindexFile(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      // repoPath threaded explicitly — reindex_file has no path override of
+      // its own, so without this it would silently reindex whatever
+      // REPOSKEIN_REPO_PATH/cwd points at instead of the selected repo.
+      return makeReindexFile(active.repoId, active.repoPath)(args);
     }
   );
 
-  const semanticFind = repoId
-    ? makeSemanticFind(store, repoId, repoPath ?? ".", undefined, { decisions: !!repoPath })
-    : null;
   server.registerTool(
     "semantic_find",
     {
@@ -234,15 +388,12 @@ export async function main(): Promise<void> {
       },
     },
     async (args) => {
-      if (!semanticFind) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return semanticFind(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeSemanticFind(active.store, active.repoId, active.repoPath, undefined, { decisions: true })(args);
     }
   );
 
-  // get_temporal_context is gated on repoPath (not the store — it reads from .git directly).
-  const temporalContext = repoPath ? makeTemporalContext(repoPath) : null;
   server.registerTool(
     "get_temporal_context",
     {
@@ -252,14 +403,13 @@ export async function main(): Promise<void> {
       inputSchema: { path: z.string() },
     },
     async (args) => {
-      if (!temporalContext) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return temporalContext(args);
+      // Gated on repoPath only (not repoId/store) — it reads from .git directly.
+      const resolution = session.resolve();
+      if (!resolution.repoPath) return errResult(repoRequiredMessage(resolution));
+      return makeTemporalContext(resolution.repoPath)(args);
     }
   );
 
-  const impact = repoId ? makeImpact(store, repoId, repoPath) : null;
   server.registerTool(
     "impact",
     {
@@ -275,26 +425,16 @@ export async function main(): Promise<void> {
       },
     },
     async (args) => {
-      if (!impact) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return impact(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeImpact(active.store, active.repoId, active.repoPath)(args);
     }
   );
 
   // Decision tools are gated on repoPath + repoId: records live as committed
   // files under <repoPath>/.reposkein/decisions/, the graph is used only for
   // anchor resolution and hash stamping (Phase 1 — no GraphStore changes).
-  const decisionsReady = !!repoPath && !!repoId;
-  // Best-effort reindex before stamping anchors so a decision recorded right
-  // after an edit reflects the working tree, not the last index snapshot.
-  const decisionRefresh = async (): Promise<void> => {
-    const bin = await ensureIndexerBinary();
-    await spawnIndexer(bin, ["index", "--json", "--repo-id", repoId!, repoPath!]);
-  };
-  const recordDecision = decisionsReady
-    ? makeRecordDecision(store, repoId!, repoPath!, { refresh: decisionRefresh })
-    : null;
+  // `resolveActiveRepo` already requires both, so it doubles as the gate.
   server.registerTool(
     "record_decision",
     {
@@ -304,14 +444,18 @@ export async function main(): Promise<void> {
       inputSchema: recordDecisionInputSchema,
     },
     async (args) => {
-      if (!recordDecision) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return recordDecision(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      // Best-effort reindex before stamping anchors so a decision recorded
+      // right after an edit reflects the working tree, not the last index.
+      const decisionRefresh = async (): Promise<void> => {
+        const bin = await ensureIndexerBinary();
+        await spawnIndexer(bin, ["index", "--json", "--repo-id", active.repoId, active.repoPath]);
+      };
+      return makeRecordDecision(active.store, active.repoId, active.repoPath, { refresh: decisionRefresh })(args);
     }
   );
 
-  const setDecisionStatus = decisionsReady ? makeSetDecisionStatus(repoPath!) : null;
   server.registerTool(
     "set_decision_status",
     {
@@ -321,14 +465,12 @@ export async function main(): Promise<void> {
       inputSchema: setDecisionStatusInputSchema,
     },
     async (args) => {
-      if (!setDecisionStatus) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return setDecisionStatus(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeSetDecisionStatus(active.repoPath)(args);
     }
   );
 
-  const reaffirmDecision = decisionsReady ? makeReaffirmDecision(store, repoId!, repoPath!) : null;
   server.registerTool(
     "reaffirm_decision",
     {
@@ -338,14 +480,12 @@ export async function main(): Promise<void> {
       inputSchema: reaffirmDecisionInputSchema,
     },
     async (args) => {
-      if (!reaffirmDecision) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return reaffirmDecision(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeReaffirmDecision(active.store, active.repoId, active.repoPath)(args);
     }
   );
 
-  const listDecisions = decisionsReady ? makeListDecisions(store, repoId!, repoPath!) : null;
   server.registerTool(
     "list_decisions",
     {
@@ -355,14 +495,12 @@ export async function main(): Promise<void> {
       inputSchema: listDecisionsInputSchema,
     },
     async (args) => {
-      if (!listDecisions) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return listDecisions(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeListDecisions(active.store, active.repoId, active.repoPath)(args);
     }
   );
 
-  const getDecision = decisionsReady ? makeGetDecision(store, repoId!, repoPath!) : null;
   server.registerTool(
     "get_decision",
     {
@@ -372,18 +510,16 @@ export async function main(): Promise<void> {
       inputSchema: getDecisionInputSchema,
     },
     async (args) => {
-      if (!getDecision) {
-        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
-      }
-      return getDecision(args);
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeGetDecision(active.store, active.repoId, active.repoPath)(args);
     }
   );
 
-  if (!repoId) {
-    console.error(
-      "[reposkein-mcp] REPOSKEIN_REPO_PATH not set; repo-scoped tools will return an error until it is configured"
-    );
-  }
+  // No passive startup warning here: an unresolved (or ambiguous) repo is
+  // surfaced per-call, as a structured, actionable tool error pointing at
+  // list_repos/select_repo (repoRequiredMessage above) — not a stderr line
+  // an agent can miss and route around by grepping the repo.
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -405,7 +541,14 @@ function invokedAsBin(): boolean {
 }
 if (invokedAsBin()) {
   const sub = process.argv[2];
-  if (sub === "init") {
+  if (sub === "--help" || sub === "-h" || sub === "help") {
+    // No repo resolution, no config warnings — just usage, per requirement #3.
+    console.log(HELP_TEXT);
+    process.exit(0);
+  } else if (sub === "--version" || sub === "-v") {
+    console.log(packageVersion());
+    process.exit(0);
+  } else if (sub === "init") {
     const rest = process.argv.slice(3);
     const noIndex = rest.includes("--no-index");
     const path = rest.find((a) => !a.startsWith("-")) ?? ".";
@@ -420,7 +563,12 @@ if (invokedAsBin()) {
   } else if (sub === "doctor") {
     const rest = process.argv.slice(3);
     const json = rest.includes("--json");
-    const path = rest.find((a) => !a.startsWith("-")) ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+    const explicitPath = rest.find((a) => !a.startsWith("-"));
+    const { path, error } = resolveDoctorRepoPath(explicitPath, process.cwd(), process.env.REPOSKEIN_REPO_PATH);
+    if (error) {
+      console.error(`reposkein doctor: ${error}`);
+      process.exit(1);
+    }
     runDoctor(path, json)
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });

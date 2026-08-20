@@ -2,13 +2,44 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks } from "../src/cli/doctor.js";
+import { runChecks, resolveDoctorRepoPath } from "../src/cli/doctor.js";
 import { decisionChecks } from "../src/cli/doctorDecisions.js";
 import { computeBodyHash, writeDecision, decisionsDir, type DecisionRecord } from "../src/store/decisions.js";
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rs-doctor-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+describe("resolveDoctorRepoPath", () => {
+  it("walks up to the repo root when run from a subdirectory cwd (no path arg)", () => {
+    mkdirSync(join(dir, ".reposkein"));
+    const sub = join(dir, "src", "nested");
+    mkdirSync(sub, { recursive: true });
+    const result = resolveDoctorRepoPath(undefined, sub, undefined);
+    expect(result).toEqual({ path: dir });
+  });
+
+  it("an explicit path argument wins over cwd resolution", () => {
+    mkdirSync(join(dir, ".reposkein"));
+    const result = resolveDoctorRepoPath("/explicit/path", dir, undefined);
+    expect(result).toEqual({ path: "/explicit/path" });
+  });
+
+  it("REPOSKEIN_REPO_PATH wins over walk-up", () => {
+    mkdirSync(join(dir, ".reposkein"));
+    const result = resolveDoctorRepoPath(undefined, dir, "/env/path");
+    expect(result).toEqual({ path: "/env/path" });
+  });
+
+  it("reports an error naming candidates when the cwd is workspace-ambiguous", () => {
+    mkdirSync(join(dir, "repo-a", ".reposkein"), { recursive: true });
+    mkdirSync(join(dir, "repo-b", ".reposkein"), { recursive: true });
+    const result = resolveDoctorRepoPath(undefined, dir, undefined);
+    expect(result.path).toBe(dir);
+    expect(result.error).toContain(join(dir, "repo-a"));
+    expect(result.error).toContain(join(dir, "repo-b"));
+  });
+});
 
 describe("doctor runChecks", () => {
   it("flags an unindexed repo (no .reposkein/nodes.jsonl)", async () => {
