@@ -1,8 +1,14 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   buildGraphDataJs,
   injectGraphDataScript,
   parseViewArgs,
+  runExport,
+  vizDistDir,
 } from "../src/cli/view.js";
 
 describe("buildGraphDataJs (static export baking)", () => {
@@ -83,5 +89,235 @@ describe("parseViewArgs --export", () => {
     const { exportDir, opts } = parseViewArgs(["--port", "5000"]);
     expect(exportDir).toBeNull();
     expect(opts.port).toBe(5000);
+  });
+
+  it("parses --commit-sha / --repo-url / --built-at (bake metadata)", () => {
+    const { exportOpts } = parseViewArgs([
+      "--export=./_site",
+      "--commit-sha",
+      "abc123",
+      "--repo-url",
+      "https://github.com/reposkein/reposkein",
+      "--built-at",
+      "2026-08-20T00:00:00.000Z",
+    ]);
+    expect(exportOpts.commitSha).toBe("abc123");
+    expect(exportOpts.repoUrl).toBe("https://github.com/reposkein/reposkein");
+    expect(exportOpts.builtAt).toBe("2026-08-20T00:00:00.000Z");
+  });
+
+  it("parses --commit-sha=<x> equals form", () => {
+    const { exportOpts } = parseViewArgs(["--commit-sha=deadbeef"]);
+    expect(exportOpts.commitSha).toBe("deadbeef");
+  });
+
+  it("parses --with-source with an optional numeric byte cap", () => {
+    const withCap = parseViewArgs(["--with-source", "500000"]);
+    expect(withCap.exportOpts.withSource).toBe(true);
+    expect(withCap.exportOpts.sourceMaxBytes).toBe(500000);
+
+    const withoutCap = parseViewArgs(["--with-source"]);
+    expect(withoutCap.exportOpts.withSource).toBe(true);
+    expect(withoutCap.exportOpts.sourceMaxBytes).toBeUndefined();
+  });
+
+  it("defaults withSource to false and bake fields to null", () => {
+    const { exportOpts } = parseViewArgs(["--export=./_site"]);
+    expect(exportOpts.withSource).toBe(false);
+    expect(exportOpts.commitSha).toBeNull();
+    expect(exportOpts.repoUrl).toBeNull();
+    expect(exportOpts.builtAt).toBeNull();
+  });
+});
+
+describe("buildGraphDataJs (bake metadata + temporal + federation)", () => {
+  it("bakes meta {commitSha, builtAt, repoUrl} into the payload", () => {
+    const js = buildGraphDataJs("demo", "n\n", "e\n", {
+      meta: { commitSha: "abc123", builtAt: "2026-08-20T00:00:00.000Z", repoUrl: "https://github.com/o/r" },
+    });
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as { meta: { commitSha: string; builtAt: string; repoUrl: string } };
+    expect(payload.meta).toEqual({
+      commitSha: "abc123",
+      builtAt: "2026-08-20T00:00:00.000Z",
+      repoUrl: "https://github.com/o/r",
+    });
+  });
+
+  it("defaults meta to nulls when omitted", () => {
+    const js = buildGraphDataJs("demo", "n\n", "e\n");
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as { meta: { commitSha: null; builtAt: null; repoUrl: null } };
+    expect(payload.meta).toEqual({ commitSha: null, builtAt: null, repoUrl: null });
+  });
+
+  it("bakes the temporal co-change map (same shape /api/temporal returns)", () => {
+    const cochange = { "a.ts": [{ path: "b.ts", support: 4, confidence: 0.8 }] };
+    const js = buildGraphDataJs("demo", "n\n", "e\n", { cochange });
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as { cochange: typeof cochange };
+    expect(payload.cochange).toEqual(cochange);
+  });
+
+  it("defaults cochange to {} when omitted", () => {
+    const js = buildGraphDataJs("demo", "n\n", "e\n");
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as { cochange: unknown };
+    expect(payload.cochange).toEqual({});
+  });
+
+  it("bakes federated repos inline (manifest.federated + federatedText, no fetchable URLs)", () => {
+    const js = buildGraphDataJs("demo", "n\n", "e\n", {
+      federated: [
+        { repoId: "widgets", rootPath: "packages/widgets", nodesText: "wn\n", edgesText: "we\n" },
+      ],
+    });
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as {
+      manifest: { federated: { repoId: string; rootPath: string; nodesUrl: string; edgesUrl: string }[] };
+      federatedText: { repoId: string; nodesText: string; edgesText: string }[];
+    };
+    expect(payload.manifest.federated).toEqual([
+      { repoId: "widgets", rootPath: "packages/widgets", nodesUrl: "", edgesUrl: "" },
+    ]);
+    expect(payload.federatedText).toEqual([{ repoId: "widgets", nodesText: "wn\n", edgesText: "we\n" }]);
+  });
+
+  it("omits sourceSlices when not provided (no size cost for the common case)", () => {
+    const js = buildGraphDataJs("demo", "n\n", "e\n");
+    expect(js).not.toContain("sourceSlices");
+  });
+
+  it("bakes sourceSlices when provided", () => {
+    const js = buildGraphDataJs("demo", "n\n", "e\n", {
+      sourceSlices: { "rs1:demo:func:a#f@0": { path: "a.py", start: 1, end: 2, lines: ["x", "y"] } },
+    });
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as { sourceSlices: Record<string, unknown> };
+    expect(payload.sourceSlices["rs1:demo:func:a#f@0"]).toEqual({
+      path: "a.py",
+      start: 1,
+      end: 2,
+      lines: ["x", "y"],
+    });
+  });
+});
+
+// Needs the real viz/ SPA bundle at mcp/dist/viz (ci.yml builds it before running
+// mcp tests: "Build + bundle viz" -> "Bundle viz into mcp/dist" -> "Tests"). Skipped
+// in a plain `npm test` before that bundling step has run.
+const distBuilt = existsSync(join(vizDistDir(), "index.html"));
+const gated = distBuilt ? describe : describe.skip;
+
+gated("runExport (integration: bakes sha + temporal + federation)", () => {
+  it("bakes commitSha/repoUrl/builtAt + a real git-derived temporal co-change map", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rs-export-"));
+    try {
+      execFileSync("git", ["init"], { cwd: dir });
+      execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+      mkdirSync(join(dir, ".reposkein"), { recursive: true });
+      writeFileSync(
+        join(dir, ".reposkein", "nodes.jsonl"),
+        JSON.stringify({ id: "rs1:demo:file:a.py", labels: ["File"], props: { path: "a.py" } }) + "\n",
+      );
+      writeFileSync(join(dir, ".reposkein", "edges.jsonl"), "");
+      writeFileSync(join(dir, "a.py"), "x = 1\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+
+      const outDir = join(dir, "_site");
+      const code = await runExport(dir, "demo", outDir, {
+        commitSha: "deadbeef",
+        repoUrl: "https://github.com/o/r",
+        builtAt: "2026-08-20T00:00:00.000Z",
+      });
+      expect(code).toBe(0);
+
+      const js = readFileSync(join(outDir, "graph-data.js"), "utf8");
+      const payload = JSON.parse(
+        js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, ""),
+      ) as {
+        meta: { commitSha: string; repoUrl: string; builtAt: string };
+        cochange: Record<string, unknown>;
+        manifest: { federated: unknown[] };
+      };
+      expect(payload.meta).toEqual({
+        commitSha: "deadbeef",
+        repoUrl: "https://github.com/o/r",
+        builtAt: "2026-08-20T00:00:00.000Z",
+      });
+      // A one-commit repo has no co-change pairs, but the temporal code path
+      // must have run without throwing (proves getTemporal was actually called).
+      expect(payload.cochange).toEqual({});
+      expect(payload.manifest.federated).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults builtAt to bake time when not passed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rs-export-"));
+    try {
+      execFileSync("git", ["init"], { cwd: dir });
+      mkdirSync(join(dir, ".reposkein"), { recursive: true });
+      writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), "");
+      writeFileSync(join(dir, ".reposkein", "edges.jsonl"), "");
+      const outDir = join(dir, "_site");
+      const before = Date.now();
+      await runExport(dir, "demo", outDir, {});
+      const after = Date.now();
+
+      const js = readFileSync(join(outDir, "graph-data.js"), "utf8");
+      const payload = JSON.parse(
+        js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, ""),
+      ) as { meta: { builtAt: string } };
+      const t = Date.parse(payload.meta.builtAt);
+      expect(t).toBeGreaterThanOrEqual(before);
+      expect(t).toBeLessThanOrEqual(after);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("populates federated[] from a nested .reposkein/ repo", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rs-export-"));
+    try {
+      execFileSync("git", ["init"], { cwd: dir });
+      mkdirSync(join(dir, ".reposkein"), { recursive: true });
+      writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), "");
+      writeFileSync(join(dir, ".reposkein", "edges.jsonl"), "");
+
+      const nested = join(dir, "packages", "widgets");
+      mkdirSync(join(nested, ".reposkein"), { recursive: true });
+      writeFileSync(
+        join(nested, ".reposkein", "meta.json"),
+        JSON.stringify({ id_scheme: "rs1", indexer_version_min: "0.0.0", repo_id: "widgets", schema_version: 1 }),
+      );
+      writeFileSync(
+        join(nested, ".reposkein", "nodes.jsonl"),
+        JSON.stringify({ id: "rs1:widgets:file:x.ts", labels: ["File"], props: { path: "x.ts" } }) + "\n",
+      );
+      writeFileSync(join(nested, ".reposkein", "edges.jsonl"), "");
+
+      const outDir = join(dir, "_site");
+      const code = await runExport(dir, "demo", outDir, {});
+      expect(code).toBe(0);
+
+      const js = readFileSync(join(outDir, "graph-data.js"), "utf8");
+      const payload = JSON.parse(
+        js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, ""),
+      ) as {
+        manifest: { federated: { repoId: string; rootPath: string }[] };
+        federatedText: { repoId: string; nodesText: string }[];
+      };
+      expect(payload.manifest.federated).toEqual([
+        { repoId: "widgets", rootPath: "packages/widgets", nodesUrl: "", edgesUrl: "" },
+      ]);
+      expect(payload.federatedText[0]!.repoId).toBe("widgets");
+      expect(payload.federatedText[0]!.nodesText).toContain("rs1:widgets:file:x.ts");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

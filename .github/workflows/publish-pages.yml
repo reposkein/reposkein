@@ -1,0 +1,186 @@
+name: Publish RepoSkein constellation (reusable)
+
+# Reusable workflow (called via `uses: reposkein/reposkein/.github/workflows/publish-pages.yml@main`):
+# downloads a RELEASED reposkein-indexer binary (no Rust toolchain), indexes
+# the caller's repo, exports a self-contained static constellation with
+# `reposkein-mcp view --export`, and uploads it as a Pages artifact.
+#
+# Deploys to the CALLER's GitHub Pages — the caller must:
+#   1. Enable Settings → Pages → Build and deployment → Source: "GitHub Actions".
+#   2. Grant `pages: write` + `id-token: write` on the job that calls `uses:`
+#      (permissions do not implicitly flow into a reusable workflow's jobs).
+#
+# See docs/HOSTING.md ("Host your constellation") before enabling — GitHub
+# Pages is PUBLIC by default.
+
+on:
+  workflow_call:
+    inputs:
+      repo-path:
+        description: 'Path (relative to the checkout root) of the repo to index + export.'
+        type: string
+        default: "."
+      mcp-version:
+        description: >
+          @reposkein/mcp + reposkein-indexer release version to use (e.g. "0.3.0").
+          Empty (default) resolves the latest non-draft, non-prerelease GitHub
+          release of reposkein/reposkein.
+        type: string
+        default: ""
+      with-source:
+        description: 'Bake size-capped per-node source slices into the export (design: optional, flag-gated).'
+        type: boolean
+        default: false
+      source-max-bytes:
+        description: 'Byte cap for baked source slices; only consulted when with-source is true.'
+        type: number
+        default: 2000000
+      artifact-name:
+        description: 'Name of the uploaded Pages artifact (rarely needs changing).'
+        type: string
+        default: github-pages
+      deploy:
+        description: 'Deploy the built artifact to GitHub Pages. Set false to only build (e.g. for a dry-run PR check).'
+        type: boolean
+        default: true
+
+# EXPECTED_SCHEMA_VERSION mirrors indexer/crates/core/src/meta.rs SCHEMA_VERSION
+# (currently 1). Bump both together — this is the compatibility gate between
+# the released indexer binary this workflow downloads and the graph shape
+# `reposkein-mcp view --export` expects to read.
+env:
+  EXPECTED_SCHEMA_VERSION: "1"
+
+jobs:
+  build:
+    name: build static export
+    runs-on: ubuntu-latest
+    env:
+      REPO_PATH: ${{ inputs.repo-path }}
+      MCP_VERSION_INPUT: ${{ inputs.mcp-version }}
+      WITH_SOURCE: ${{ inputs.with-source }}
+      SOURCE_MAX_BYTES: ${{ inputs.source-max-bytes }}
+      COMMIT_SHA: ${{ github.sha }}
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V="${MCP_VERSION_INPUT}"
+          if [ -z "${V}" ]; then
+            V="$(gh release list --repo reposkein/reposkein --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName' | sed 's/^v//')"
+          fi
+          if [ -z "${V}" ]; then
+            echo "::error::could not resolve a reposkein release version (no mcp-version input and no releases found)" >&2
+            exit 1
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "Using reposkein release v${V}"
+
+      - name: Determine indexer platform key
+        id: platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) echo "key=linux-x64" >> "$GITHUB_OUTPUT" ;;
+            Linux-aarch64|Linux-arm64) echo "key=linux-arm64" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::no released reposkein-indexer binary for this runner ($(uname -s)-$(uname -m)) — linux-x64/linux-arm64 only" >&2; exit 1 ;;
+          esac
+
+      - name: Download the released indexer binary
+        id: indexer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORM_KEY: ${{ steps.platform.outputs.key }}
+        run: |
+          set -euo pipefail
+          ASSET="reposkein-indexer-${PLATFORM_KEY}"
+          BIN_DIR="${RUNNER_TEMP}/reposkein-bin"
+          mkdir -p "${BIN_DIR}"
+          gh release download "v${VERSION}" --repo reposkein/reposkein -p "${ASSET}" -p SHA256SUMS -D "${BIN_DIR}" --clobber
+          cd "${BIN_DIR}"
+          if [ -f SHA256SUMS ]; then
+            grep " ${ASSET}\$" SHA256SUMS | sha256sum -c -
+          else
+            echo "::warning::v${VERSION} has no SHA256SUMS asset — skipping integrity check"
+          fi
+          chmod +x "${ASSET}"
+          echo "bin=${BIN_DIR}/${ASSET}" >> "$GITHUB_OUTPUT"
+          echo "REPOSKEIN_INDEXER_BIN=${BIN_DIR}/${ASSET}" >> "$GITHUB_ENV"
+
+      - name: Assert the downloaded binary reports the requested release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          OUT="$("${REPOSKEIN_INDEXER_BIN}" --version)"
+          echo "indexer reports: ${OUT}"
+          case "${OUT}" in
+            *"${VERSION}"*)
+              echo "OK: binary version matches v${VERSION}" ;;
+            *)
+              echo "::error::indexer binary --version ('${OUT}') does not contain the requested release v${VERSION} — asset/version skew, refusing to publish" >&2
+              exit 1 ;;
+          esac
+
+      - name: Index the repo
+        run: '"${REPOSKEIN_INDEXER_BIN}" index "${REPO_PATH}"'
+
+      - name: Assert meta.json schema_version compatibility
+        run: |
+          set -euo pipefail
+          META="${REPO_PATH}/.reposkein/meta.json"
+          if [ ! -f "${META}" ]; then
+            echo "::error::no ${META} after indexing — has \`reposkein-mcp init\` been run for this repo (committed .reposkein/)?" >&2
+            exit 1
+          fi
+          SCHEMA="$(node -p "require('${GITHUB_WORKSPACE}/${META}').schema_version")"
+          if [ "${SCHEMA}" != "${EXPECTED_SCHEMA_VERSION}" ]; then
+            echo "::error::meta.json schema_version (${SCHEMA}) != this workflow's expected schema_version (${EXPECTED_SCHEMA_VERSION}) — the indexer binary and publish-pages.yml have drifted; bump EXPECTED_SCHEMA_VERSION (after confirming compatibility) before publishing" >&2
+            exit 1
+          fi
+          echo "OK: meta.json schema_version=${SCHEMA} matches expected ${EXPECTED_SCHEMA_VERSION}"
+
+      - name: Export the static constellation
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ARGS=(view --export "${RUNNER_TEMP}/_site" "${REPO_PATH}"
+                --commit-sha "${COMMIT_SHA}"
+                --repo-url "${REPO_URL}")
+          if [ "${WITH_SOURCE}" = "true" ]; then
+            ARGS+=(--with-source "${SOURCE_MAX_BYTES}")
+          fi
+          npx --yes "@reposkein/mcp@${VERSION}" "${ARGS[@]}"
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/_site
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    if: ${{ inputs.deploy }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5
+        with:
+          artifact_name: ${{ inputs.artifact-name }}

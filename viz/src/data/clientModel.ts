@@ -4,11 +4,14 @@
 import type { ClusterNode } from "./cluster";
 import type { DrawEdge, NodeRecord } from "./model";
 import type { WorkerResult } from "./worker/graph.worker";
+import type { RepoMeta } from "./api";
 
 export interface ClientModel {
   repoId: string;
   /** Absolute path of the served repo root, or null (for editor links). */
   repoRoot: string | null;
+  /** Bake-time / server-start-time provenance for the staleness badge, or null. */
+  repoMeta: RepoMeta | null;
   rootKey: string;
   byKey: Map<string, ClusterNode>;
   keys: string[];
@@ -112,6 +115,7 @@ export function fromWorker(r: WorkerResult): ClientModel {
   return {
     repoId: r.repoId,
     repoRoot: r.repoRoot,
+    repoMeta: r.repoMeta ?? null,
     rootKey: r.rootKey,
     byKey,
     keys: r.keys,

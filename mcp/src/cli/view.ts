@@ -11,9 +11,11 @@ import {
 } from "node:fs";
 import { join, resolve, normalize, extname } from "node:path";
 import { gzipSync } from "node:zlib";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { packageRoot } from "../indexer/fetchBinary.js";
 import { getTemporal } from "../temporal/temporal.js";
+import { discoverFederatedRepos } from "./federatedDiscovery.js";
+import { collectSourceSlices, type SourceSliceEntry } from "./sourceSlices.js";
 
 /** The prebuilt viz/ SPA bundle, copied into the mcp package at build time
  *  (scripts/bundle-viz.mjs copies viz/dist -> mcp/dist/viz). */
@@ -81,7 +83,42 @@ function safeJoin(root: string, urlPath: string): string | null {
   return null;
 }
 
-function buildManifest(repoId: string, repoRoot: string): string {
+export interface RepoBakeMeta {
+  commitSha: string | null;
+  builtAt: string | null;
+  repoUrl: string | null;
+}
+
+/** Best-effort git introspection for the live `view` server: the current HEAD
+ *  sha + a guessed web URL for `origin` (github.com only; other hosts degrade
+ *  to null rather than guessing wrong). Never throws — any git failure (not a
+ *  repo, no origin, git missing) yields nulls so the badge just doesn't render.
+ *  Computed ONCE at server start (not per-request) since it shells out to git. */
+export function resolveServerRepoMeta(repoPath: string): RepoBakeMeta {
+  const git = (args: string[]): string | null => {
+    try {
+      return execFileSync("git", args, { cwd: repoPath, encoding: "utf8" }).trim() || null;
+    } catch {
+      return null;
+    }
+  };
+  const commitSha = git(["rev-parse", "HEAD"]);
+  const remote = git(["remote", "get-url", "origin"]);
+  const repoUrl = remote ? githubHttpsUrl(remote) : null;
+  return { commitSha, builtAt: new Date().toISOString(), repoUrl };
+}
+
+/** Normalizes a git remote URL (https or ssh form) to an https://github.com/...
+ *  web URL. Returns null for non-github.com remotes (no safe guess). */
+function githubHttpsUrl(remote: string): string | null {
+  const httpsMatch = remote.match(/^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?\/?$/);
+  if (httpsMatch) return `https://github.com/${httpsMatch[1]}/${httpsMatch[2]}`;
+  const sshMatch = remote.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?\/?$/);
+  if (sshMatch) return `https://github.com/${sshMatch[1]}/${sshMatch[2]}`;
+  return null;
+}
+
+function buildManifest(repoId: string, repoRoot: string, meta: RepoBakeMeta): string {
   return JSON.stringify({
     root: {
       repoId,
@@ -98,6 +135,7 @@ function buildManifest(repoId: string, repoRoot: string): string {
     },
     federated: [], // M1: single repo. Federation deferred to M3.
     counts: { nodes: 0, edges: 0 }, // counts are advisory; the client re-derives.
+    meta,
   });
 }
 
@@ -140,6 +178,9 @@ export function makeViewHandler(repoPath: string, repoId: string) {
   const distDir = vizDistDir();
 
   const repoRoot = resolve(repoPath);
+  // Computed once (shells out to git) — cheap and stable for the server's
+  // lifetime; recomputing per-request would add a git spawn to every load.
+  const repoMeta = resolveServerRepoMeta(repoPath);
 
   return function handler(req: IncomingMessage, res: ServerResponse): void {
     const rawUrl = req.url ?? "/";
@@ -148,7 +189,7 @@ export function makeViewHandler(repoPath: string, repoId: string) {
 
     // --- API routes ---
     if (url === "/api/graph") {
-      sendGzip(res, buildManifest(repoId, repoRoot), "application/json; charset=utf-8");
+      sendGzip(res, buildManifest(repoId, repoRoot, repoMeta), "application/json; charset=utf-8");
       return;
     }
 
@@ -279,15 +320,38 @@ export async function runView(repoPath: string, repoId: string, opts: ViewOption
 
 /** Parses `view` CLI args (after the `view` subcommand). When `--export <dir>`
  *  is present, returns `exportDir` set (and the server opts are ignored). */
+/** Metadata baked into a static export, driving the viewer's staleness badge.
+ *  `builtAt` defaults to bake-time (now) when not given explicitly — it is the
+ *  one time-derived field: the same repo + commitSha + builtAt always bakes
+ *  byte-identical output, but builtAt itself is naturally different per run
+ *  unless the caller pins it (e.g. for a reproducibility test). */
+export interface ExportBakeOptions {
+  commitSha?: string | null;
+  repoUrl?: string | null;
+  builtAt?: string | null;
+  /** Bake size-capped per-node source slices (design: optional, flag-gated). */
+  withSource?: boolean;
+  /** Byte cap for baked source slices; only consulted when withSource is true. */
+  sourceMaxBytes?: number;
+  /** How many directory levels to scan for nested `.reposkein/` repos. */
+  federatedDepth?: number;
+}
+
 export function parseViewArgs(argv: string[]): {
   repoPath: string;
   opts: ViewOptions;
   exportDir: string | null;
+  exportOpts: ExportBakeOptions;
 } {
   let port = 4317;
   let host = "127.0.0.1";
   let open = true;
   let exportDir: string | null = null;
+  let commitSha: string | null = null;
+  let repoUrl: string | null = null;
+  let builtAt: string | null = null;
+  let withSource = false;
+  let sourceMaxBytes: number | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -298,10 +362,52 @@ export function parseViewArgs(argv: string[]): {
     else if (a.startsWith("--host=")) host = a.slice(7);
     else if (a === "--export") exportDir = argv[++i] ?? null;
     else if (a.startsWith("--export=")) exportDir = a.slice(9);
-    else if (!a.startsWith("-")) positional.push(a);
+    else if (a === "--commit-sha") commitSha = argv[++i] ?? null;
+    else if (a.startsWith("--commit-sha=")) commitSha = a.slice(13);
+    else if (a === "--repo-url") repoUrl = argv[++i] ?? null;
+    else if (a.startsWith("--repo-url=")) repoUrl = a.slice(11);
+    else if (a === "--built-at") builtAt = argv[++i] ?? null;
+    else if (a.startsWith("--built-at=")) builtAt = a.slice(11);
+    else if (a === "--with-source") {
+      withSource = true;
+      // Optional numeric byte-cap as the next bare token (e.g. `--with-source 500000`).
+      const next = argv[i + 1];
+      if (next && /^\d+$/.test(next)) sourceMaxBytes = parseInt(argv[++i]!, 10);
+    } else if (a.startsWith("--with-source=")) {
+      withSource = true;
+      const v = a.slice(14);
+      if (/^\d+$/.test(v)) sourceMaxBytes = parseInt(v, 10);
+    } else if (!a.startsWith("-")) positional.push(a);
   }
   const repoPath = positional[0] ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
-  return { repoPath, opts: { port, host, open }, exportDir };
+  const exportOpts: ExportBakeOptions = {
+    commitSha: commitSha ?? process.env.REPOSKEIN_COMMIT_SHA ?? null,
+    repoUrl: repoUrl ?? process.env.REPOSKEIN_REPO_URL ?? null,
+    builtAt,
+    withSource,
+    sourceMaxBytes,
+  };
+  return { repoPath, opts: { port, host, open }, exportDir, exportOpts };
+}
+
+/** A federated repo's data inlined into a static export (self-contained: no
+ *  fetch of nodesUrl/edgesUrl at runtime — the viewer reads federatedText). */
+export interface FederatedBakeEntry {
+  repoId: string;
+  rootPath: string;
+  nodesText: string;
+  edgesText: string;
+}
+
+/** Extra data baked into `graph-data.js` alongside the root repo's JSONL. */
+export interface GraphDataExtra {
+  meta?: RepoBakeMeta;
+  /** Git-derived file co-change map (same shape /api/temporal returns), or
+   *  omitted/{} when temporal data is unavailable. */
+  cochange?: Record<string, { path: string; support: number; confidence: number }[]>;
+  federated?: FederatedBakeEntry[];
+  /** node id -> source slice, size-capped (design: optional, flag-gated). */
+  sourceSlices?: Record<string, SourceSliceEntry>;
 }
 
 /** Builds the contents of `graph-data.js` for a static export: a single
@@ -315,7 +421,9 @@ export function buildGraphDataJs(
   repoId: string,
   nodesText: string,
   edgesText: string,
+  extra: GraphDataExtra = {},
 ): string {
+  const federated = extra.federated ?? [];
   // Static export bakes a single repo (no federation) and intentionally OMITS
   // repoRoot — the export is shared/hosted, so a local absolute path is both
   // meaningless and a leak; server-only features degrade in the viewer.
@@ -328,11 +436,26 @@ export function buildGraphDataJs(
         nodesUrl: "/api/jsonl/nodes.jsonl",
         edgesUrl: "/api/jsonl/edges.jsonl",
       },
-      federated: [],
+      // federated[] entries carry no fetchable URLs in a static export — the
+      // actual text is inlined below (federatedText), read entirely offline.
+      federated: federated.map((f) => ({
+        repoId: f.repoId,
+        rootPath: f.rootPath,
+        nodesUrl: "",
+        edgesUrl: "",
+      })),
       counts: { nodes: 0, edges: 0 },
     },
     nodesText,
     edgesText,
+    federatedText: federated.map((f) => ({
+      repoId: f.repoId,
+      nodesText: f.nodesText,
+      edgesText: f.edgesText,
+    })),
+    meta: extra.meta ?? { commitSha: null, builtAt: null, repoUrl: null },
+    cochange: extra.cochange ?? {},
+    ...(extra.sourceSlices ? { sourceSlices: extra.sourceSlices } : {}),
   };
   return `window.__REPOSKEIN_GRAPH__ = ${JSON.stringify(payload)};\n`;
 }
@@ -357,11 +480,17 @@ export function injectGraphDataScript(html: string): string {
 /** `reposkein-mcp view --export <outDir> [repoPath]`.
  *  Writes a SELF-CONTAINED static site to `<outDir>`: the viz bundle plus the
  *  repo's graph baked into `graph-data.js`, so it loads with NO server (works
- *  from file:// and from any static-host subpath). Returns the exit code. */
+ *  from file:// and from any static-host subpath). Returns the exit code.
+ *
+ *  Determinism: given the same repo state + the same {commitSha, repoUrl,
+ *  builtAt} inputs, the export is byte-identical. `builtAt` is the one
+ *  time-derived field (defaults to bake-time `new Date().toISOString()` when
+ *  not passed) — pin it explicitly for a reproducible export. */
 export async function runExport(
   repoPath: string,
   repoId: string,
   outDir: string,
+  bake: ExportBakeOptions = {},
 ): Promise<number> {
   const reposkeinDir = join(repoPath, ".reposkein");
   const nodesPath = join(reposkeinDir, "nodes.jsonl");
@@ -388,12 +517,46 @@ export async function runExport(
     mkdirSync(absOut, { recursive: true });
     cpSync(distDir, absOut, { recursive: true });
 
-    // 2) Bake the repo graph into graph-data.js.
+    // 2) Bake the repo graph + metadata + temporal + federation into graph-data.js.
     const nodesText = readFileSync(nodesPath, "utf8");
     const edgesText = existsSync(edgesPath) ? readFileSync(edgesPath, "utf8") : "";
+
+    const meta: RepoBakeMeta = {
+      commitSha: bake.commitSha ?? null,
+      repoUrl: bake.repoUrl ?? null,
+      builtAt: bake.builtAt ?? new Date().toISOString(),
+    };
+
+    // Temporal co-change data: the SAME code path /api/temporal uses, called
+    // once at export time so the static viewer's coupling overlay works
+    // offline. Best-effort — degrades to {} on any failure (never blocks the
+    // export).
+    const temporalResult = await getTemporal(repoPath);
+    const cochange = "cochange" in temporalResult ? temporalResult.cochange : {};
+
+    // Federation: nested `.reposkein/` repos discovered under repoPath, inlined
+    // in full (self-contained — no network fetch of federated JSONL at runtime).
+    const federatedRepos = discoverFederatedRepos(repoPath, bake.federatedDepth ?? 6);
+    const federated: FederatedBakeEntry[] = [];
+    for (const fed of federatedRepos) {
+      const fNodes = join(fed.absPath, ".reposkein", "nodes.jsonl");
+      const fEdges = join(fed.absPath, ".reposkein", "edges.jsonl");
+      if (!existsSync(fNodes)) continue; // not indexed — skip, don't fail the export
+      federated.push({
+        repoId: fed.repoId,
+        rootPath: fed.rootPath,
+        nodesText: readFileSync(fNodes, "utf8"),
+        edgesText: existsSync(fEdges) ? readFileSync(fEdges, "utf8") : "",
+      });
+    }
+
+    const sourceSlices = bake.withSource
+      ? collectSourceSlices(repoPath, nodesText, bake.sourceMaxBytes ?? DEFAULT_SOURCE_MAX_BYTES)
+      : undefined;
+
     writeFileSync(
       join(absOut, "graph-data.js"),
-      buildGraphDataJs(repoId, nodesText, edgesText),
+      buildGraphDataJs(repoId, nodesText, edgesText, { meta, cochange, federated, sourceSlices }),
       "utf8",
     );
 
@@ -419,3 +582,6 @@ export async function runExport(
   console.error(`  open ${join(absOut, "index.html")} or host this folder.`);
   return 0;
 }
+
+/** Default byte cap for baked per-node source slices (--with-source). */
+const DEFAULT_SOURCE_MAX_BYTES = 2_000_000;

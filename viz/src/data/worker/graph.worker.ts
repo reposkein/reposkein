@@ -5,7 +5,7 @@
  *  M2: supports federated repos (manifest.federated). Each federated repo's
  *  nodes/edges are merged into the combined graph before building the model. */
 
-import { fetchManifest, fetchText } from "../api";
+import { fetchManifest, fetchText, type RepoMeta } from "../api";
 import { parseGraph } from "../parse";
 import { buildModel } from "../model";
 import { layoutFingerprint } from "../layout";
@@ -28,6 +28,11 @@ export interface WorkerResult {
   counts: { nodes: number; edges: number };
   /** Absolute path of the served repo root (for "open in editor" links). */
   repoRoot: string | null;
+  /** Bake-time / server-start-time provenance for the staleness badge, or null
+   *  when the manifest carried none (older server, or none resolvable).
+   *  Optional so pre-existing test fixtures constructing WorkerResult by hand
+   *  don't all need updating; fromWorker() defaults a missing field to null. */
+  repoMeta?: RepoMeta | null;
 }
 
 export interface WorkerError {
@@ -96,6 +101,7 @@ async function run(): Promise<void> {
     fingerprint: model.fingerprint,
     counts: { nodes: graph.nodes.length, edges: graph.edges.length },
     repoRoot: manifest.root.repoRoot ?? null,
+    repoMeta: manifest.meta ?? null,
   };
 
   // Transfer the positions buffer (zero-copy).

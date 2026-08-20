@@ -1,0 +1,53 @@
+name: Pages freshness check (reusable)
+
+# Fails loudly (visible red X) when the last SUCCESSFUL run of the caller's
+# publish workflow is older than `threshold-days` — the signal that the
+# publish pipeline has silently stopped (a broken binary release, a revoked
+# Pages permission, an expired token) rather than that the graph is merely
+# unchanged. Call from a scheduled thin caller (see .github/workflows/
+# pages-freshness.yml for this repo's own instance).
+
+on:
+  workflow_call:
+    inputs:
+      threshold-days:
+        description: 'Fail if the last successful run is older than this many days.'
+        type: number
+        default: 7
+      workflow-file:
+        description: 'Filename (under .github/workflows/) of the publish workflow to check.'
+        type: string
+        default: pages.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    name: last successful publish age
+    runs-on: ubuntu-latest
+    env:
+      WORKFLOW_FILE: ${{ inputs.workflow-file }}
+      THRESHOLD_DAYS: ${{ inputs.threshold-days }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Check last successful run age
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LAST="$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?status=success&per_page=1" -q '.workflow_runs[0].updated_at // empty')"
+          if [ -z "${LAST}" ]; then
+            echo "::error::no successful run of ${WORKFLOW_FILE} found — the constellation has never published successfully" >&2
+            exit 1
+          fi
+          LAST_EPOCH="$(date -u -d "${LAST}" +%s)"
+          NOW_EPOCH="$(date -u +%s)"
+          AGE_DAYS=$(( (NOW_EPOCH - LAST_EPOCH) / 86400 ))
+          echo "last successful ${WORKFLOW_FILE} run: ${LAST} (${AGE_DAYS} day(s) ago)"
+          if [ "${AGE_DAYS}" -gt "${THRESHOLD_DAYS}" ]; then
+            echo "::error::last successful ${WORKFLOW_FILE} run is ${AGE_DAYS} day(s) old (threshold ${THRESHOLD_DAYS}) — the publish pipeline looks stopped" >&2
+            exit 1
+          fi
+          echo "OK: last publish ${AGE_DAYS} day(s) ago (<= ${THRESHOLD_DAYS})"

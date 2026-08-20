@@ -15,14 +15,28 @@ import { parseGraph } from "./parse";
 import { buildModel } from "./model";
 import { layoutFingerprint } from "./layout";
 import { loadCachedPositions, storeCachedPositions } from "./positionCache";
-import type { GraphManifest } from "./api";
+import type { GraphManifest, RepoMeta, SourceSlice } from "./api";
 import type { WorkerResult } from "./worker/graph.worker";
+import type { CochangeMap } from "./temporal";
+
+/** One federated repo's data, inlined in full for a self-contained export
+ *  (no fetch of the manifest's federated[] nodesUrl/edgesUrl at runtime). */
+export interface StaticFederatedEntry {
+  repoId: string;
+  nodesText: string;
+  edgesText: string;
+}
 
 /** Shape injected by graph-data.js. nodesText/edgesText are the raw JSONL. */
 export interface StaticGraphPayload {
   manifest: GraphManifest;
   nodesText: string;
   edgesText: string;
+  federatedText?: StaticFederatedEntry[];
+  meta?: RepoMeta;
+  cochange?: CochangeMap;
+  /** node id -> baked source slice (--with-source, size-capped). */
+  sourceSlices?: Record<string, SourceSlice>;
 }
 
 declare global {
@@ -46,11 +60,17 @@ export function isStaticMode(): boolean {
 /** Build the worker-result-shaped model on the main thread from the baked
  *  payload (federation included, mirroring graph.worker.ts). The result is
  *  handed to the SAME fromWorker() the worker path uses, so downstream code is
- *  identical. The federated branch reads inlined text from the manifest's
- *  federated[] entries' nodesUrl/edgesUrl ONLY if they are data: inlined —
- *  the export bakes a single repo (M1), so federation is typically empty. */
+ *  identical. Federated repos are merged from `payload.federatedText` (inlined
+ *  text baked by `runExport` — no network fetch, so the export stays
+ *  self-contained even under file://). */
 export async function buildStaticResult(payload: StaticGraphPayload): Promise<WorkerResult> {
   const graph = parseGraph(payload.nodesText, payload.edgesText);
+
+  for (const fed of payload.federatedText ?? []) {
+    const fedGraph = parseGraph(fed.nodesText, fed.edgesText);
+    graph.nodes.push(...fedGraph.nodes);
+    graph.edges.push(...fedGraph.edges);
+  }
 
   // Position cache (IndexedDB, main-thread here): reuse a byte-stable layout for
   // this node set + layout version if present, else compute and store. Purely a
@@ -72,5 +92,25 @@ export async function buildStaticResult(payload: StaticGraphPayload): Promise<Wo
     fingerprint: model.fingerprint,
     counts: { nodes: graph.nodes.length, edges: graph.edges.length },
     repoRoot: payload.manifest.root.repoRoot ?? null,
+    repoMeta: payload.meta ?? null,
   };
+}
+
+/** Baked co-change map for a static export (from `runExport`'s temporal bake),
+ *  or {} when not running statically / none was baked. Mirrors fetchTemporal's
+ *  server call so the coupling overlay works offline. */
+export function staticCochange(): CochangeMap {
+  return staticPayload()?.cochange ?? {};
+}
+
+/** Looks up a baked source slice (--with-source) for an exact [path,start,end]
+ *  match, or null when static mode has no baked slice for that range (the
+ *  DetailPanel then shows no source, same as any other static degrade). */
+export function staticSourceSlice(path: string, start: number, end: number): SourceSlice | null {
+  const slices = staticPayload()?.sourceSlices;
+  if (!slices) return null;
+  for (const entry of Object.values(slices)) {
+    if (entry.path === path && entry.start === start && entry.end === end) return entry;
+  }
+  return null;
 }

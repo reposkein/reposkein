@@ -1,0 +1,22 @@
+name: Pages freshness
+
+# Weekly canary: fails (visible red X + email/notification) if the live-demo
+# publish pipeline (pages.yml) hasn't succeeded in over a week — catches a
+# silently-broken publish (bad release, revoked Pages permission) rather than
+# relying on someone noticing the demo went stale.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    uses: ./.github/workflows/publish-pages-freshness.yml
+    with:
+      threshold-days: 7
+      workflow-file: pages.yml
