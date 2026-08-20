@@ -57,6 +57,8 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 
 | Tool | What it does |
 | --- | --- |
+| `list_repos` | enumerate the repos discovered by resolution — path, name, cheap node/edge counts. One entry in single-repo mode; workspace mode lists every sibling repo found |
+| `select_repo` | set the session-active repo (by `path` or `name` from `list_repos`) for every repo-scoped tool below — how workspace mode resolves ambiguity, and how you switch repos without restarting the server |
 | `get_context_profile` | resolve a function/class → its caller/callee neighborhood as ready-to-read prose |
 | `semantic_find` | find where to start — rank functions/classes by meaning (lexical BM25F; optional pluggable embeddings), seeding `get_context_profile` |
 | `impact` | transitive callers of a function/class — split into impacted code vs covering tests — with counts and truncated flag |
@@ -97,20 +99,29 @@ npx skills add reposkein/reposkein --all
 ### Repo resolution (zero-config)
 
 `REPOSKEIN_REPO_PATH` is optional — the server resolves the target repo from
-the process's working directory, in this order:
+the process's working directory. Full precedence:
 
-1. `REPOSKEIN_REPO_PATH`, if set.
-2. **Walk up:** the nearest ancestor of the cwd containing `.reposkein/`.
-3. **Walk down** (workspace mode, only tried when no ancestor has one): scans
+1. **`select_repo`** — an MCP tool call that sets the session-active repo
+   (by `path` or `name` from `list_repos`) for every repo-scoped tool call
+   made afterward, for the rest of the connection. The only one of these
+   that's mutable at runtime — everything below it is fixed at server start.
+2. `REPOSKEIN_REPO_PATH`, if set.
+3. **Walk up:** the nearest ancestor of the cwd containing `.reposkein/`.
+4. **Walk down** (workspace mode, only tried when no ancestor has one): scans
    the cwd's children and grandchildren (skipping `node_modules`, `.git`,
    `target`, `dist`, `.worktrees`, `.claude`) for `.reposkein/` dirs. One hit
-   is used automatically; two or more leave the repo unresolved.
+   is used automatically; two or more leave the repo unresolved until a
+   `select_repo` call picks one — `list_repos` always enumerates every repo
+   the walk finds (plus a `REPOSKEIN_REPO_PATH` pin, if one is set and not
+   already among them), regardless of which one is currently active.
 
-If nothing resolves — or step 3 finds more than one repo — repo-scoped tools
-don't fail silently at startup: each call returns a structured error telling
-you what to run (`reposkein-mcp init`) or which `REPOSKEIN_REPO_PATH` to set
-(naming the candidates when ambiguous). `reposkein-mcp doctor` and `--help`
-never require a resolved repo. See `mcp/src/store/resolveRepoPath.ts`.
+If nothing resolves — or step 4 finds more than one repo and none has been
+`select_repo`'d — repo-scoped tools don't fail silently at startup: each call
+returns a structured error telling you what to run (`reposkein-mcp init`,
+`list_repos`/`select_repo`, or which `REPOSKEIN_REPO_PATH` to set — naming the
+candidates when ambiguous). `reposkein-mcp doctor` and `--help` never require
+a resolved repo. See `mcp/src/store/resolveRepoPath.ts` and
+`mcp/src/store/repoSession.ts`.
 
 | Env var | Purpose |
 | --- | --- |

@@ -15,14 +15,25 @@ guess file dependencies, and do NOT explore the repo by directory listing or
 grep when the graph can answer structurally.
 
 The server resolves the target repo automatically from your working
-directory — no setup is required. If a tool call still returns an error
-naming `REPOSKEIN_REPO_PATH`, do not abandon these tools and fall back to
-grep: the error is actionable — run `reposkein-mcp init` in the repo (if it
-has no `.reposkein/` yet), or set `REPOSKEIN_REPO_PATH` to the repo it names
-(the error lists candidates if more than one repo was found) — then retry the
-same call.
+directory — no setup is required. If a tool call returns an error naming
+`list_repos`/`select_repo` or `REPOSKEIN_REPO_PATH`, do not abandon these
+tools and fall back to grep — the error is actionable:
+
+- **No repo found at all** — run `reposkein-mcp init` in the repo (if it has
+  no `.reposkein/` yet), or set `REPOSKEIN_REPO_PATH`.
+- **Multiple repos found (workspace mode)** — the error names the
+  candidates. Call `list_repos` to see them (path, name, node/edge counts),
+  then `select_repo` with one candidate's `path` or `name` — this sets the
+  active repo for the rest of the session, so you only do it once. Retry the
+  call that failed.
 
 ## Tools
+
+- **`list_repos`** / **`select_repo`** — only needed in workspace mode
+  (multiple sibling repos, no unambiguous default). `list_repos` enumerates
+  what was discovered; `select_repo` (a `path` or `name` from that list) sets
+  the active repo for every repo-scoped tool below, for the rest of the
+  session. Skip these in the common single-repo case — resolution just works.
 
 - **`semantic_find`** — **start here when you don't have a seed symbol.** Rank
   functions/classes/interfaces/enums by a lexical match (BM25F) over their
