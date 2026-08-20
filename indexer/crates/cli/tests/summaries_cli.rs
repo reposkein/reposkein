@@ -924,6 +924,51 @@ fn an_id_only_line_cannot_evict_a_real_summary() {
 }
 
 #[test]
+fn a_null_valued_summary_cannot_evict_a_real_one() {
+    // A summary field that is PRESENT but says nothing is not a summary. Rust
+    // tested this with contains_key while TypeScript required a string, so a
+    // null-valued line with a late summary_at won the tiebreak here and evicted
+    // real prose into conflicts.jsonl — while the MCP server, skipping it as
+    // malformed, went on serving the prose. The two disagreed about the truth.
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    seed(root);
+    index(root);
+    let hash = content_hash(root, FUNC_ID);
+    write_sidecar(root, FUNC_ID, "real prose", &hash);
+    index(root);
+
+    let name = only_shard_name(root);
+    let real = summaries(root).unwrap();
+    for empty in [
+        r#""semantic_summary":null"#,
+        r#""semantic_summary":42"#,
+        r#""semantic_summary":"""#,
+    ] {
+        write_shard_raw(
+            root,
+            &name,
+            &format!(
+                "{{\"id\":\"{FUNC_ID}\",{empty},\"summary_at\":\"2099-01-01\",\"summary_of_hash\":\"{hash}\"}}\n{real}"
+            ),
+        );
+
+        index(root);
+
+        let s = summaries(root).unwrap();
+        assert!(
+            s.contains("real prose"),
+            "an empty record ({empty}) must never displace authored prose: {s}"
+        );
+        assert_eq!(s.lines().count(), 1, "and must not linger as a line: {s}");
+        assert!(
+            !conflicts_text(root).contains("2099-01-01"),
+            "it is malformed, not a losing side of a divergence"
+        );
+    }
+}
+
+#[test]
 fn a_shard_of_pure_garbage_does_not_abort_the_index() {
     let dir = tempdir().unwrap();
     let root = dir.path();

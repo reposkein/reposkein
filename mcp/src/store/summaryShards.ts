@@ -6,7 +6,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 /** Reader for the committed authored summaries, `.reposkein/summaries/<xx>.jsonl`.
  *
@@ -79,6 +79,23 @@ export function isConflictMarker(line: string): boolean {
     line.startsWith(">>>>>>>") ||
     line.startsWith("|||||||")
   );
+}
+
+/** True for a value that is actually authored prose: a non-empty string.
+ *  `null`, a number, or `""` all mean "the field is present but says nothing". */
+function isProse(v: unknown): boolean {
+  return typeof v === "string" && v !== "";
+}
+
+/** Whether these props carry an authored summary worth keeping.
+ *
+ *  Deliberately identical to the Rust `has_summary`. The two languages read the
+ *  same committed shards, so a record one accepts and the other rejects is a
+ *  divergence between what the server serves and what the indexer writes — and
+ *  a record with nothing in it must never displace one that has prose, in
+ *  either language. Pinned by the `null-valued`/`non-string` fixture vectors. */
+export function hasSummary(props: Record<string, unknown>): boolean {
+  return isProse(props.semantic_summary) || isProse(props.purpose_summary);
 }
 
 function summaryAt(rec: SummaryShardRecord): string {
@@ -203,10 +220,10 @@ export function absorbSummaryLines(
       continue;
     }
     const { id: _drop, ...props } = obj;
-    // An id-only line carries no authored prose. Letting it into the map would
-    // let it WIN a tiebreak against a real summary and evict it — a record with
-    // nothing in it must never displace one.
-    if (typeof props.semantic_summary !== "string" && typeof props.purpose_summary !== "string") {
+    // A line with no authored prose is not a summary. Letting it into the map
+    // would let it WIN a tiebreak against a real summary and evict it — see
+    // `hasSummary` for the null-valued case that did exactly that.
+    if (!hasSummary(props)) {
       malformed++;
       continue;
     }
@@ -257,14 +274,21 @@ export function loadSummaryShards(repoPath: string): LoadedSummaryShards {
   return { summaries, conflicts: acc.conflicts, warnings: acc.warnings, legacyFilePresent };
 }
 
-/** A cheap fingerprint of the committed-summary state on disk.
+/** A cheap fingerprint of everything the summary overlay reads on disk.
  *
  *  The store keys its reload on this, so a `git pull` that brings in a
- *  teammate's shards is visible without restarting the process. Stat calls
- *  only — O(number of shards), no content read — because this runs on every
- *  read, not just on change. mtime alone is not enough on filesystems with
- *  coarse timestamps, so size rides along. */
-export function summaryShardsStamp(repoPath: string): string {
+ *  teammate's shards — or another agent's sidecar write on this machine — is
+ *  visible without restarting the process. Stat calls only, O(shards +
+ *  sidecars), no content read, because this runs on every read and not just on
+ *  change. mtime alone is not enough on filesystems with coarse timestamps, so
+ *  size rides along.
+ *
+ *  `sidecarFiles` is injected rather than imported to keep this module free of
+ *  a cycle with sidecar.ts, which imports the fold from here. */
+export function summaryShardsStamp(
+  repoPath: string,
+  sidecarFiles: (repoPath: string) => string[] = () => []
+): string {
   const parts: string[] = [];
   const dir = summariesDir(repoPath);
   let names: string[] = [];
@@ -286,6 +310,17 @@ export function summaryShardsStamp(repoPath: string): string {
     parts.push(`legacy:${s.mtimeMs}:${s.size}`);
   } catch {
     // absent, which is the post-migration norm
+  }
+  // Sidecars too. Without them a second agent's write on the same checkout was
+  // invisible to an already-open server for the life of the process — which
+  // the overlay explicitly promises to surface.
+  for (const p of sidecarFiles(repoPath)) {
+    try {
+      const s = statSync(p);
+      parts.push(`sc/${basename(p)}:${s.mtimeMs}:${s.size}`);
+    } catch {
+      parts.push(`sc/${basename(p)}:?`);
+    }
   }
   return parts.join("|");
 }

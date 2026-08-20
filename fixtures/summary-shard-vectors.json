@@ -161,10 +161,13 @@
       },
       {
         "$comment": [
-          "Single-backslash \\u escapes on purpose: they resolve when the FIXTURE",
-          "is parsed, so the vector's lines carry the real characters and the",
-          "tiebreak compares decoded bytes. Doubling them would leave the escape",
-          "text in the line and test ASCII ordering of 'u','d','f' instead."
+          "These lines hold LITERAL UTF-8 characters, not \\u escape text, and",
+          "that is the point: the tiebreak compares the bytes of the line as it",
+          "sits in the shard. Writing the characters as escaped \\\\u sequences",
+          "would leave the escape TEXT in the line, so the comparison would run",
+          "over ASCII 'u','d','f' and pass for entirely the wrong reason. If you",
+          "need an escape here, use a single backslash so it resolves when the",
+          "fixture itself is parsed — never a doubled one."
         ],
         "name": "unicode prose round-trips and compares by utf-8 bytes",
         "lines": [
@@ -202,6 +205,43 @@
           "{\"id\":\"a\",\"semantic_summary\":\"𐀀 astral\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
         ],
         "skipped": 0
+      },
+      {
+        "$comment": [
+          "A summary field that is PRESENT but says nothing is not a summary.",
+          "Rust once tested this with contains_key and TypeScript with",
+          "typeof === 'string', so a null-valued line was a record on one side",
+          "and malformed on the other. With a late summary_at it then WON the",
+          "tiebreak in Rust and evicted real prose into conflicts.jsonl, while",
+          "the server went on serving the prose. Both sides now require a",
+          "NON-EMPTY STRING, and this vector is what holds them to it."
+        ],
+        "name": "null, non-string and empty summaries are rejected, not ranked",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}",
+          "{\"id\":\"a\",\"semantic_summary\":null,\"summary_at\":\"2099-01-01\"}",
+          "{\"id\":\"a\",\"semantic_summary\":123,\"summary_at\":\"2099-01-02\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"\",\"summary_at\":\"2099-01-03\"}",
+          "{\"id\":\"a\",\"semantic_summary\":[\"not\",\"prose\"],\"summary_at\":\"2099-01-04\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 4
+      },
+      {
+        "name": "a purpose_summary alone is enough, but only as non-empty prose",
+        "lines": [
+          "{\"id\":\"a\",\"purpose_summary\":\"why it exists\",\"summary_at\":\"2026-01-01\"}",
+          "{\"id\":\"b\",\"purpose_summary\":null,\"summary_at\":\"2099-01-01\"}",
+          "{\"id\":\"c\",\"purpose_summary\":\"\",\"summary_at\":\"2099-01-01\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"purpose_summary\":\"why it exists\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 2
       }
     ]
   },
@@ -333,6 +373,30 @@
         },
         "conflicts": [],
         "skipped": 1
+      },
+      {
+        "$comment": [
+          "The same rejection, for a field that is present but empty of prose.",
+          "This is the shape the reviewer reproduced live: a null-valued summary",
+          "with a late timestamp, arriving from the newer source, evicting real",
+          "prose into conflicts.jsonl on the Rust side while the TypeScript",
+          "reader skipped it — so the server and the indexer disagreed about",
+          "what the node's summary was."
+        ],
+        "name": "a null-valued summary in the newer source cannot evict authored prose",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":null,\"summary_at\":\"2099-01-01\"}",
+          "{\"id\":\"a\",\"semantic_summary\":42,\"summary_at\":\"2099-01-02\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"\",\"summary_at\":\"2099-01-03\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 3
       },
       {
         "$comment": [
