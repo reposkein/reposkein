@@ -103,6 +103,14 @@ describe("JsonlGraphStore", () => {
     expect(after).toHaveLength(1);
   });
 
+  it("findByContentHash returns live nodes with that hash, scoped by repo", async () => {
+    const store = new JsonlGraphStore(root, CONFORMANCE_REPO);
+    const hits = await store.findByContentHash!([CONFORMANCE_REPO], "hm");
+    expect(hits.map((h) => h.id)).toEqual(["rs1:proftest:func:svc.py#Svc.mid@0"]);
+    expect(await store.findByContentHash!(["otherrepo"], "hm")).toEqual([]);
+    expect(await store.findByContentHash!([CONFORMANCE_REPO], "nope")).toEqual([]);
+  });
+
   it("tags resolved targets and neighbors with repo_id", async () => {
     const store = new JsonlGraphStore(root, CONFORMANCE_REPO);
     const helper = await store.resolveByName([CONFORMANCE_REPO], "helper");

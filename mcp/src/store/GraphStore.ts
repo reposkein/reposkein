@@ -95,6 +95,12 @@ export interface GraphStore {
    *  Used by the shared BM25F scorer for semantic_find. */
   searchCorpus(repoIds: string[]): Promise<CorpusNode[]>;
 
+  /** Optional: live nodes whose content_hash equals hash, ordered by id.
+   *  Used by decision-anchor recovery ("moved" state) — the recorded hash is
+   *  the only signal that survives a rename. Stores that don't implement it
+   *  degrade those anchors to "orphaned". */
+  findByContentHash?(repoIds: string[], hash: string): Promise<TargetRow[]>;
+
   /** Raw read-only Cypher (read_cypher tool only). Stores without a Cypher
    *  engine throw CypherUnsupportedError. */
   runRead(

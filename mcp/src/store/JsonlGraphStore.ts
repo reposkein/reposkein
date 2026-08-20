@@ -180,6 +180,14 @@ export class JsonlGraphStore implements GraphStore {
     return n && repoIds.includes(n.repoId) ? toTargetRow(n) : null;
   }
 
+  async findByContentHash(repoIds: string[], hash: string): Promise<TargetRow[]> {
+    this.ensureFresh();
+    return this.graph.nodes
+      .filter((n) => repoIds.includes(n.repoId) && str(n.props.content_hash) === hash)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map(toTargetRow);
+  }
+
   async resolveByPathAndName(repoIds: string[], filePath: string, name: string): Promise<TargetRow[]> {
     this.ensureFresh();
     return this.graph.nodes
