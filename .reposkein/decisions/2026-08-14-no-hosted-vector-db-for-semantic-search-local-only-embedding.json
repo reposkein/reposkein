@@ -3,7 +3,7 @@
   "alternatives": "Neo4j vector index (adds infra, breaks determinism); hosted embedding APIs (cloud dependency, nondeterministic drift); no semantic search at all.",
   "anchors": [
     {
-      "hash": "d7bf070615ab1a700f3c2e3ad37ed273fc0a2aae57418cb5e775d52511852a3b",
+      "hash": "a651a41bba7c831ea05a621a7e0a7853c7cbab8077fcfc0c1fed4705f9914a64",
       "kind": "File",
       "name": "semanticFind.ts",
       "node_id": "rs1:reposkein-mcp:file:src/tools/semanticFind.ts",

@@ -3,7 +3,7 @@
   "alternatives": "Single decisions.jsonl with a conflict-tolerant reader (repairs damage but still shows conflicted PRs on forges); markdown ADRs in docs/adr as source of truth (loses graph anchoring; sequential numbering collides across branches); decisions as derived graph nodes only (lost on rebuild).",
   "anchors": [
     {
-      "hash": "cc5d76d576b9103cdaab72770f526bf846c2887d3c1cd8a89b9db21a5ae0a3b8",
+      "hash": "17cc5d73036159dba5de7d359a18174d3d93c71412155372ebdf2cfe6e5d352e",
       "kind": "File",
       "name": "decisions.ts",
       "node_id": "rs1:reposkein-mcp:file:src/store/decisions.ts",
