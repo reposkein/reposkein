@@ -48,6 +48,20 @@ fn write_sidecar_named(root: &Path, file: &str, id: &str, summary: &str, hash: &
     .unwrap();
 }
 
+/// A sidecar write carrying an explicit `summary_at`, the way the MCP server
+/// stamps one (`write_semantic_summary` sets it to today, day-precision).
+fn write_sidecar_dated(root: &Path, id: &str, summary: &str, hash: &str, at: &str) {
+    let sidecar = root.join(".reposkein/local/summaries-agent.jsonl");
+    fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+    fs::write(
+        &sidecar,
+        format!(
+            "{{\"id\":\"{id}\",\"semantic_summary\":\"{summary}\",\"summary_at\":\"{at}\",\"summary_of_hash\":\"{hash}\"}}\n"
+        ),
+    )
+    .unwrap();
+}
+
 /// Every shard file name present, sorted.
 fn shard_names(root: &Path) -> Vec<String> {
     let dir = root.join(".reposkein/summaries");
@@ -741,6 +755,171 @@ fn two_branches_touching_different_shards_never_meet() {
         names.len() >= 12,
         "24 summaries should spread over many shards, got {}: {names:?}",
         names.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cross-source folds: a stale local record must not silently clobber a newer
+// committed one
+// ---------------------------------------------------------------------------
+
+/// Replaces the repo's single shard with one hand-written record carrying an
+/// explicit `summary_at` — what a teammate's commit looks like after a pull.
+/// Call after an index that already produced a shard for `id`, so the shard
+/// file name is the one the indexer will converge on.
+fn write_shard_record(root: &Path, id: &str, summary: &str, hash: &str, at: &str) {
+    let name = only_shard_name(root);
+    write_shard_raw(
+        root,
+        &name,
+        &format!(
+            "{{\"id\":\"{id}\",\"semantic_summary\":\"{summary}\",\"summary_at\":\"{at}\",\"summary_of_hash\":\"{hash}\"}}\n"
+        ),
+    );
+}
+
+fn conflicts_text(root: &Path) -> String {
+    fs::read_to_string(root.join(".reposkein/local/conflicts.jsonl")).unwrap_or_default()
+}
+
+#[test]
+fn a_stale_sidecar_does_not_silently_clobber_a_newer_committed_summary() {
+    // The reviewer's repro. A teammate's summary arrives in a shard stamped
+    // 2026-09-01; this machine still holds a sidecar stamped 2026-01-01. The
+    // cross-source fold used to be an unconditional insert — last source wins —
+    // so the stale local record overwrote the newer committed one and NOTHING
+    // was recorded. The teammate's prose was simply gone.
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    seed(root);
+    index(root);
+    let hash = content_hash(root, FUNC_ID);
+
+    // Establish a shard, then overwrite it with the teammate's newer record.
+    write_sidecar(root, FUNC_ID, "placeholder", &hash);
+    index(root);
+    write_shard_record(
+        root,
+        FUNC_ID,
+        "teammate: the newer one",
+        &hash,
+        "2026-09-01",
+    );
+
+    // And a stale local sidecar for the same node.
+    write_sidecar_dated(root, FUNC_ID, "stale local", &hash, "2026-01-01");
+
+    index(root);
+
+    let s = summaries(root).unwrap();
+    assert!(
+        s.contains("teammate: the newer one"),
+        "the newer committed record must survive a stale local one: {s}"
+    );
+    assert!(
+        !s.contains("stale local"),
+        "the stale record must not be served: {s}"
+    );
+    let c = conflicts_text(root);
+    assert!(
+        c.contains("stale local"),
+        "and the displaced record must still be recorded, not dropped: {c:?}"
+    );
+}
+
+#[test]
+fn a_newer_sidecar_does_supersede_an_older_committed_summary() {
+    // The inverse, so the rule is not just "committed always wins": a genuinely
+    // newer local write takes, and the record it displaces is preserved.
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    seed(root);
+    index(root);
+    let hash = content_hash(root, FUNC_ID);
+
+    write_sidecar(root, FUNC_ID, "placeholder", &hash);
+    index(root);
+    write_shard_record(
+        root,
+        FUNC_ID,
+        "committed: the older one",
+        &hash,
+        "2026-01-01",
+    );
+
+    write_sidecar_dated(root, FUNC_ID, "fresh local", &hash, "2026-09-01");
+
+    index(root);
+
+    let s = summaries(root).unwrap();
+    assert!(
+        s.contains("fresh local"),
+        "a newer local write must take: {s}"
+    );
+    let c = conflicts_text(root);
+    assert!(
+        c.contains("committed: the older one"),
+        "and the record it displaced must be preserved: {c:?}"
+    );
+}
+
+#[test]
+fn a_same_day_rewrite_takes_because_summary_at_is_day_precision() {
+    // `summary_at` is day-precision (PRD §6.2.5 keeps wall-clock time out of
+    // committed bytes), so re-summarising a node that was already summarised
+    // today produces a TIE. Resolving that tie by byte order would silently
+    // discard the rewrite — the agent's work would not take. Provenance
+    // settles it: the sidecar was written after the index that made the shard.
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    seed(root);
+    index(root);
+    let hash = content_hash(root, FUNC_ID);
+
+    write_sidecar_dated(root, FUNC_ID, "zzz first version", &hash, "2026-08-21");
+    index(root);
+    assert!(summaries(root).unwrap().contains("zzz first version"));
+
+    // Same day, and deliberately sorting EARLIER by byte order than the first,
+    // so a byte-order tiebreak would be indistinguishable from a real win.
+    write_sidecar_dated(root, FUNC_ID, "aaa rewritten version", &hash, "2026-08-21");
+    index(root);
+
+    let s = summaries(root).unwrap();
+    assert!(
+        s.contains("aaa rewritten version"),
+        "the rewrite must take: {s}"
+    );
+    assert_eq!(s.lines().count(), 1, "and replace, not accumulate: {s}");
+}
+
+#[test]
+fn an_id_only_line_cannot_evict_a_real_summary() {
+    // A line carrying an id and a timestamp but no prose is not a summary. It
+    // used to enter the map anyway, where a late `summary_at` would let it WIN
+    // a tiebreak and evict real authored prose.
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    seed(root);
+    index(root);
+    let hash = content_hash(root, FUNC_ID);
+    write_sidecar(root, FUNC_ID, "real prose", &hash);
+    index(root);
+
+    let name = only_shard_name(root);
+    let real = summaries(root).unwrap();
+    write_shard_raw(
+        root,
+        &name,
+        &format!("{{\"id\":\"{FUNC_ID}\",\"summary_at\":\"2099-01-01\"}}\n{real}"),
+    );
+
+    index(root);
+
+    let s = summaries(root).unwrap();
+    assert!(
+        s.contains("real prose"),
+        "an empty record must never displace authored prose: {s}"
     );
 }
 

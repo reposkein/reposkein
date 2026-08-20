@@ -103,7 +103,8 @@ impl SummaryRecord {
     }
 }
 
-/// Deterministic winner between two records that claim the same node id.
+/// Deterministic winner between two records that claim the same node id, when
+/// nothing is known about where either came from.
 ///
 /// 1. Newer `summary_at` wins (ISO-8601 sorts lexicographically).
 /// 2. Tie → the byte-lexicographically smaller raw line wins.
@@ -112,12 +113,37 @@ impl SummaryRecord {
 /// TypeScript reader — picks the same winner without coordinating. Rule 2 is
 /// arbitrary on purpose: what matters is that the loser is *preserved*, not
 /// which side wins. See [`LoadedSummaries::conflicts`].
+///
+/// This is the rule for records found in the SAME source — two lines in one
+/// merged shard, or two agents' sidecars — where there is no happens-before to
+/// appeal to. Across sources of known provenance, use [`supersedes`].
 pub fn beats(candidate: &SummaryRecord, incumbent: &SummaryRecord) -> bool {
     match candidate.summary_at().cmp(incumbent.summary_at()) {
         std::cmp::Ordering::Greater => true,
         std::cmp::Ordering::Less => false,
         std::cmp::Ordering::Equal => candidate.line.as_bytes() < incumbent.line.as_bytes(),
     }
+}
+
+/// Whether a record from a strictly NEWER-provenance source displaces one
+/// already held from an older source.
+///
+/// `summary_at` is day-precision on purpose (PRD §6.2.5 keeps wall-clock time
+/// out of committed bytes), so an agent re-summarising a node that was already
+/// summarised today produces a record that TIES with the committed one. Under
+/// [`beats`] alone that tie falls to byte order, which would silently discard
+/// the rewrite — the agent's work would simply not take.
+///
+/// Provenance settles it where the data cannot: a sidecar written after the
+/// last index demonstrably happened after the shard that index produced. So a
+/// newer source wins unless it is *strictly older* by `summary_at` — which is
+/// the case that matters, because that is a stale local record about to clobber
+/// a teammate's newer one. Either way the loser is preserved.
+///
+/// Still deterministic: the same shards plus the same sidecars resolve the same
+/// way on any machine. Provenance is an input, not a clock.
+pub fn supersedes(candidate: &SummaryRecord, incumbent: &SummaryRecord) -> bool {
+    candidate.summary_at() >= incumbent.summary_at()
 }
 
 #[derive(Debug, Default, Clone)]
@@ -133,7 +159,35 @@ pub struct LoadedSummaries {
 }
 
 impl LoadedSummaries {
+    /// Folds one candidate in, keeping whichever record `wins` selects and
+    /// preserving the other. The single place a record can ever be displaced,
+    /// so no caller can bypass conflict recording by accident — which is
+    /// exactly how a stale local record used to clobber a teammate's newer one
+    /// with no trace.
+    fn offer(&mut self, rec: SummaryRecord, wins: impl Fn(&SummaryRecord, &SummaryRecord) -> bool) {
+        let Some(existing) = self.records.get(&rec.id) else {
+            self.records.insert(rec.id.clone(), rec);
+            return;
+        };
+        // Byte-identical duplicates (a union merge keeping both sides of an
+        // unchanged record, or a re-index seeing its own output) are not a
+        // divergence and must never be reported as one.
+        if existing.line == rec.line {
+            return;
+        }
+        if wins(&rec, existing) {
+            let id = rec.id.clone();
+            let loser = self.records.insert(id, rec).expect("checked present");
+            self.conflicts.push(loser);
+        } else {
+            self.conflicts.push(rec);
+        }
+    }
+
     /// Folds one file's text in. `source` names the file in warnings.
+    ///
+    /// Records within one source are resolved with [`beats`]: two lines in a
+    /// merged shard carry no happens-before, so only their content can decide.
     pub fn absorb(&mut self, source: &str, text: &str) {
         let mut markers = 0usize;
         let mut malformed = 0usize;
@@ -160,27 +214,21 @@ impl LoadedSummaries {
                     continue;
                 }
             };
-            let rec = SummaryRecord {
-                id: id.clone(),
-                props: obj,
-                line: trimmed.to_string(),
-            };
-            match self.records.get(&id) {
-                None => {
-                    self.records.insert(id, rec);
-                }
-                Some(existing) => {
-                    if existing.line == rec.line {
-                        continue; // union-merge duplicate: identical, not a conflict
-                    }
-                    if beats(&rec, existing) {
-                        let loser = self.records.insert(id, rec).expect("checked present");
-                        self.conflicts.push(loser);
-                    } else {
-                        self.conflicts.push(rec);
-                    }
-                }
+            // An id-only line carries no authored prose. Letting it into the
+            // map would let it WIN a tiebreak against a real summary and evict
+            // it — a record with nothing in it must never displace one.
+            if !crate::merge::has_summary(&obj) {
+                malformed += 1;
+                continue;
             }
+            self.offer(
+                SummaryRecord {
+                    id,
+                    props: obj,
+                    line: trimmed.to_string(),
+                },
+                beats,
+            );
         }
         if markers > 0 {
             self.warnings.push(format!(
@@ -192,6 +240,58 @@ impl LoadedSummaries {
             self.warnings
                 .push(format!("{source}: skipped {malformed} malformed line(s)"));
         }
+    }
+
+    /// Folds authored summaries carried on `Node` records — the graph database,
+    /// and the one-shot harvest out of a legacy `nodes.jsonl`.
+    ///
+    /// Each is canonicalised to the same line form the shard writer emits, so a
+    /// record that arrives this way and one read from a shard compare as equal
+    /// when they are equal, and only diverge when they genuinely differ.
+    pub fn absorb_nodes(&mut self, nodes: &[Node]) {
+        for n in nodes {
+            let Some(line) = crate::jsonl::summary_line(&n.id, &n.props) else {
+                continue; // no authored prose on this node
+            };
+            self.offer(
+                SummaryRecord {
+                    id: n.id.clone(),
+                    props: crate::merge::summary_part(&n.props),
+                    line,
+                },
+                beats,
+            );
+        }
+    }
+
+    /// Folds a whole source of strictly NEWER provenance into this one.
+    ///
+    /// The index reads several sources in a known order — the legacy harvest,
+    /// then committed shards, then the database, then this machine's sidecars —
+    /// and each is newer than the last. Displacement across that boundary uses
+    /// [`supersedes`] rather than [`beats`]: a same-day rewrite must take, and
+    /// a strictly older record must not clobber a newer one.
+    ///
+    /// This used to be an unconditional `insert`, which is how a stale sidecar
+    /// silently overwrote a teammate's newer summary with nothing recorded.
+    pub fn absorb_source(&mut self, other: LoadedSummaries) {
+        let LoadedSummaries {
+            records,
+            conflicts,
+            warnings,
+        } = other;
+        for (_, rec) in records {
+            self.offer(rec, supersedes);
+        }
+        self.conflicts.extend(conflicts);
+        self.warnings.extend(warnings);
+    }
+
+    /// Convenience for a node-carried source folded as newer provenance.
+    pub fn absorb_node_source(&mut self, nodes: &[Node]) {
+        let mut source = LoadedSummaries::default();
+        source.absorb_nodes(nodes);
+        self.absorb_source(source);
     }
 
     pub fn nodes(&self) -> Vec<Node> {
@@ -439,5 +539,152 @@ mod tests {
             "earlier losers are retained"
         );
         assert!(with_second.lines().next().unwrap().contains("first loser"));
+    }
+
+    // ---- cross-source folds -------------------------------------------------
+
+    fn source_of(lines: &[&str]) -> LoadedSummaries {
+        let mut s = LoadedSummaries::default();
+        s.absorb(
+            "test",
+            &lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+        );
+        s
+    }
+
+    #[test]
+    fn a_strictly_older_newer_source_record_does_not_displace() {
+        // The reviewer's repro in miniature: a stale local record must not
+        // overwrite a newer committed one just because it is folded last.
+        let mut committed = source_of(&[
+            r#"{"id":"a","semantic_summary":"teammate newer","summary_at":"2026-09-01"}"#,
+        ]);
+        let stale = source_of(&[
+            r#"{"id":"a","semantic_summary":"stale local","summary_at":"2026-01-01"}"#,
+        ]);
+        committed.absorb_source(stale);
+
+        assert_eq!(
+            committed.records["a"].props["semantic_summary"],
+            json!("teammate newer")
+        );
+        assert_eq!(
+            committed.conflicts.len(),
+            1,
+            "and the displaced record is recorded, never silently dropped"
+        );
+        assert_eq!(
+            committed.conflicts[0].props["semantic_summary"],
+            json!("stale local")
+        );
+    }
+
+    #[test]
+    fn a_strictly_newer_source_record_does_displace() {
+        let mut committed = source_of(&[
+            r#"{"id":"a","semantic_summary":"committed older","summary_at":"2026-01-01"}"#,
+        ]);
+        let fresh = source_of(&[
+            r#"{"id":"a","semantic_summary":"fresh local","summary_at":"2026-09-01"}"#,
+        ]);
+        committed.absorb_source(fresh);
+
+        assert_eq!(
+            committed.records["a"].props["semantic_summary"],
+            json!("fresh local")
+        );
+        assert_eq!(committed.conflicts.len(), 1);
+        assert_eq!(
+            committed.conflicts[0].props["semantic_summary"],
+            json!("committed older")
+        );
+    }
+
+    #[test]
+    fn an_equal_timestamp_goes_to_the_newer_source_not_to_byte_order() {
+        // `summary_at` is day-precision, so a same-day rewrite ties. Byte order
+        // would be a coin flip that can silently discard the rewrite; the
+        // newer source is the right answer, and `zzz` proves byte order lost.
+        let mut committed =
+            source_of(&[r#"{"id":"a","semantic_summary":"aaa old","summary_at":"2026-08-21"}"#]);
+        let rewrite =
+            source_of(&[r#"{"id":"a","semantic_summary":"zzz new","summary_at":"2026-08-21"}"#]);
+        committed.absorb_source(rewrite);
+
+        assert_eq!(
+            committed.records["a"].props["semantic_summary"],
+            json!("zzz new"),
+            "a same-day rewrite must take"
+        );
+    }
+
+    #[test]
+    fn an_identical_record_from_another_source_is_not_a_conflict() {
+        // A re-index sees its own output in the shards and the same record in a
+        // sidecar that has not been consumed yet. Reporting that as divergence
+        // would train people to ignore conflicts.jsonl.
+        let line = r#"{"id":"a","semantic_summary":"same","summary_at":"2026-08-21"}"#;
+        let mut committed = source_of(&[line]);
+        committed.absorb_source(source_of(&[line]));
+        assert_eq!(committed.records.len(), 1);
+        assert!(committed.conflicts.is_empty());
+    }
+
+    #[test]
+    fn absorb_nodes_canonicalises_so_equal_records_compare_equal() {
+        // Node-carried sources (the DB, the one-shot nodes.jsonl harvest) have
+        // no raw line. Canonicalising them the way the shard writer does is
+        // what lets an identical record arriving that way dedupe silently
+        // instead of registering as a conflict against the shard it came from.
+        let node = Node::new("rs1:r:func:a.py#f@0", "Function")
+            .set("semantic_summary", json!("does f"))
+            .set("summary_at", json!("2026-08-21"))
+            .set("content_hash", json!("h1")); // structural: must not ride along
+        let shard_text = summaries_to_shards(std::slice::from_ref(&node))
+            .into_values()
+            .collect::<String>();
+
+        let mut from_shard = LoadedSummaries::default();
+        from_shard.absorb("summaries/xx.jsonl", &shard_text);
+        from_shard.absorb_node_source(std::slice::from_ref(&node));
+
+        assert_eq!(from_shard.records.len(), 1);
+        assert!(
+            from_shard.conflicts.is_empty(),
+            "the same record via two routes must not look like divergence"
+        );
+        assert!(
+            !from_shard.records["rs1:r:func:a.py#f@0"]
+                .line
+                .contains("content_hash"),
+            "structural fields must not leak into an authored record"
+        );
+    }
+
+    #[test]
+    fn a_node_with_no_authored_prose_is_not_a_source_record() {
+        let mut acc = LoadedSummaries::default();
+        acc.absorb_nodes(&[Node::new("rs1:r:file:a.py", "File").set("path", json!("a.py"))]);
+        assert!(acc.records.is_empty());
+    }
+
+    #[test]
+    fn an_id_only_line_is_rejected_rather_than_left_to_win_a_tiebreak() {
+        let mut acc = LoadedSummaries::default();
+        acc.absorb(
+            "s",
+            concat!(
+                r#"{"id":"a","semantic_summary":"real prose","summary_at":"2026-01-01"}"#,
+                "\n",
+                // Later timestamp, no prose: would otherwise evict the above.
+                r#"{"id":"a","summary_at":"2099-01-01"}"#,
+                "\n",
+            ),
+        );
+        assert_eq!(
+            acc.records["a"].props["semantic_summary"],
+            json!("real prose")
+        );
+        assert!(acc.warnings.join(" ").contains("malformed"));
     }
 }

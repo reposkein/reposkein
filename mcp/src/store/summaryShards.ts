@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 /** Reader for the committed authored summaries, `.reposkein/summaries/<xx>.jsonl`.
@@ -87,11 +94,16 @@ function lineIsSmaller(a: string, b: string): boolean {
   return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")) < 0;
 }
 
-/** Deterministic winner between two records claiming the same node id:
+/** Deterministic winner between two records claiming the same node id, when
+ *  nothing is known about where either came from:
  *  newer `summary_at`, then smaller raw line by UTF-8 byte order. Both are
  *  pure functions of bytes on disk, so every machine — and the Rust indexer —
  *  picks the same winner without coordinating. Kept in lockstep with the Rust
- *  `beats` by the shared vectors in `fixtures/summary-shard-vectors.json`. */
+ *  `beats` by the shared vectors in `fixtures/summary-shard-vectors.json`.
+ *
+ *  This is the rule for records found in the SAME source (two lines of one
+ *  merged shard, two agents' sidecars). Across sources of known provenance,
+ *  use `supersedes`. */
 export function beats(candidate: SummaryShardRecord, incumbent: SummaryShardRecord): boolean {
   const ca = summaryAt(candidate);
   const ia = summaryAt(incumbent);
@@ -99,9 +111,68 @@ export function beats(candidate: SummaryShardRecord, incumbent: SummaryShardReco
   return lineIsSmaller(candidate.line, incumbent.line);
 }
 
-/** Folds one file's text into an accumulator. Exported for the shared vectors. */
+/** Whether a record from a strictly NEWER-provenance source displaces one
+ *  already held from an older source.
+ *
+ *  `summary_at` is day-precision (PRD §6.2.5 keeps wall-clock time out of
+ *  committed bytes), so re-summarising a node already summarised today TIES.
+ *  Resolving that tie by byte order would silently discard the rewrite. A
+ *  newer source therefore wins unless it is *strictly older* — which is the
+ *  case that matters, because that is a stale local record about to clobber a
+ *  teammate's newer one. Mirrors the Rust `supersedes`. */
+export function supersedes(
+  candidate: SummaryShardRecord,
+  incumbent: SummaryShardRecord
+): boolean {
+  return summaryAt(candidate) >= summaryAt(incumbent);
+}
+
+export interface SummaryAccumulator {
+  summaries: Map<string, SummaryShardRecord>;
+  conflicts: SummaryShardRecord[];
+  warnings: string[];
+}
+
+export function emptyAccumulator(): SummaryAccumulator {
+  return { summaries: new Map(), conflicts: [], warnings: [] };
+}
+
+/** Folds one candidate in, keeping whichever record `wins` selects and
+ *  preserving the other. The single place a record can be displaced, so no
+ *  caller can bypass conflict recording by accident. */
+function offer(
+  acc: SummaryAccumulator,
+  rec: SummaryShardRecord,
+  wins: (a: SummaryShardRecord, b: SummaryShardRecord) => boolean
+): void {
+  const existing = acc.summaries.get(rec.id);
+  if (!existing) {
+    acc.summaries.set(rec.id, rec);
+    return;
+  }
+  // A union merge duplicating an unchanged line is not a conflict.
+  if (existing.line === rec.line) return;
+  if (wins(rec, existing)) {
+    acc.summaries.set(rec.id, rec);
+    acc.conflicts.push(existing);
+  } else {
+    acc.conflicts.push(rec);
+  }
+}
+
+/** Folds a whole source of strictly NEWER provenance into `acc`. Mirrors the
+ *  Rust `absorb_source`: displacement uses `supersedes`, and every displaced
+ *  record is preserved. */
+export function absorbSummarySource(acc: SummaryAccumulator, other: SummaryAccumulator): void {
+  for (const rec of other.summaries.values()) offer(acc, rec, supersedes);
+  acc.conflicts.push(...other.conflicts);
+  acc.warnings.push(...other.warnings);
+}
+
+/** Folds one file's text in, resolving same-source records with `beats`.
+ *  Exported for the shared vectors. */
 export function absorbSummaryLines(
-  acc: { summaries: Map<string, SummaryShardRecord>; conflicts: SummaryShardRecord[]; warnings: string[] },
+  acc: SummaryAccumulator,
   source: string,
   text: string
 ): void {
@@ -132,20 +203,14 @@ export function absorbSummaryLines(
       continue;
     }
     const { id: _drop, ...props } = obj;
-    const rec: SummaryShardRecord = { id, props, line };
-    const existing = acc.summaries.get(id);
-    if (!existing) {
-      acc.summaries.set(id, rec);
+    // An id-only line carries no authored prose. Letting it into the map would
+    // let it WIN a tiebreak against a real summary and evict it — a record with
+    // nothing in it must never displace one.
+    if (typeof props.semantic_summary !== "string" && typeof props.purpose_summary !== "string") {
+      malformed++;
       continue;
     }
-    // A union merge duplicating an unchanged line is not a conflict.
-    if (existing.line === rec.line) continue;
-    if (beats(rec, existing)) {
-      acc.summaries.set(id, rec);
-      acc.conflicts.push(existing);
-    } else {
-      acc.conflicts.push(rec);
-    }
+    offer(acc, { id, props, line }, beats);
   }
   if (markers > 0) {
     acc.warnings.push(
@@ -161,11 +226,7 @@ export function absorbSummaryLines(
  *  A missing directory is the normal state for a repo with no authored prose,
  *  and returns an empty result rather than an error. */
 export function loadSummaryShards(repoPath: string): LoadedSummaryShards {
-  const acc = {
-    summaries: new Map<string, SummaryShardRecord>(),
-    conflicts: [] as SummaryShardRecord[],
-    warnings: [] as string[],
-  };
+  const acc = emptyAccumulator();
   const dir = summariesDir(repoPath);
   let names: string[] = [];
   try {
@@ -194,6 +255,39 @@ export function loadSummaryShards(repoPath: string): LoadedSummaryShards {
     [...acc.summaries.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
   );
   return { summaries, conflicts: acc.conflicts, warnings: acc.warnings, legacyFilePresent };
+}
+
+/** A cheap fingerprint of the committed-summary state on disk.
+ *
+ *  The store keys its reload on this, so a `git pull` that brings in a
+ *  teammate's shards is visible without restarting the process. Stat calls
+ *  only — O(number of shards), no content read — because this runs on every
+ *  read, not just on change. mtime alone is not enough on filesystems with
+ *  coarse timestamps, so size rides along. */
+export function summaryShardsStamp(repoPath: string): string {
+  const parts: string[] = [];
+  const dir = summariesDir(repoPath);
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir).filter(isShardFileName).sort();
+  } catch {
+    names = [];
+  }
+  for (const name of names) {
+    try {
+      const s = statSync(join(dir, name));
+      parts.push(`${name}:${s.mtimeMs}:${s.size}`);
+    } catch {
+      parts.push(`${name}:?`);
+    }
+  }
+  try {
+    const s = statSync(legacySummariesPath(repoPath));
+    parts.push(`legacy:${s.mtimeMs}:${s.size}`);
+  } catch {
+    // absent, which is the post-migration norm
+  }
+  return parts.join("|");
 }
 
 /** Merges divergence losers into the git-ignored `local/conflicts.jsonl`.

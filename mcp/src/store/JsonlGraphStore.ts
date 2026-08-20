@@ -16,8 +16,14 @@ import {
   type ParsedNode,
   type RepoSource,
 } from "./jsonlGraph.js";
-import { readAllSidecars, upsertSidecar, sidecarPath } from "./sidecar.js";
-import { loadSummaryShards, recordSummaryConflicts } from "./summaryShards.js";
+import { loadAllSidecars, upsertSidecar, sidecarPath } from "./sidecar.js";
+import {
+  absorbSummarySource,
+  emptyAccumulator,
+  loadSummaryShards,
+  recordSummaryConflicts,
+  summaryShardsStamp,
+} from "./summaryShards.js";
 
 function str(v: unknown): string | null {
   return typeof v === "string" ? v : null;
@@ -86,7 +92,7 @@ const hasLabel = (n: ParsedNode, l: string): boolean => n.labels.includes(l);
  *  (.reposkein/local/summaries-<agent>.jsonl). */
 export class JsonlGraphStore implements GraphStore {
   private graph: ParsedGraph = emptyGraph();
-  private mtime = -1;
+  private stamp = "";
   private readonly repoPath: string;
   private readonly nodesPath: string;
   private readonly edgesPath: string;
@@ -147,8 +153,14 @@ export class JsonlGraphStore implements GraphStore {
     return repos;
   }
 
-  /** Reloads the graph if either ROOT file's mtime changed since last load. */
-  private ensureFresh(): void {
+  /** Reloads the graph when anything it reads has changed on disk.
+   *
+   *  The key covers the derived JSONL AND the committed summary shards. Keying
+   *  on nodes/edges alone made a `git pull` that brought in only a teammate's
+   *  shards invisible for the life of the process — the shards are committed
+   *  and the derived graph is not, so that is the ordinary case, and the code
+   *  claimed to handle it. Stat calls only, O(number of shards). */
+  private freshnessKey(): string {
     let m = 0;
     try {
       if (existsSync(this.nodesPath)) m = Math.max(m, statSync(this.nodesPath).mtimeMs);
@@ -156,41 +168,48 @@ export class JsonlGraphStore implements GraphStore {
     } catch {
       m = 0;
     }
-    if (m === this.mtime) return;
-    this.mtime = m;
+    return `${m}|${summaryShardsStamp(this.repoPath)}`;
+  }
+
+  private ensureFresh(): void {
+    const key = this.freshnessKey();
+    if (key === this.stamp) return;
+    this.stamp = key;
     try {
       this.graph = buildFederatedGraph(this.collectRepos());
-      // Overlay the committed shards. `index` already grafts them into
-      // nodes.jsonl, so this only matters between indexes — a teammate's
-      // summaries arriving with a `git pull` are readable before the next
-      // re-index. Gated on the content hash for exactly the reason the indexer
-      // gates its graft: a summary whose node has since changed is stale, and
-      // serving it as current is worse than not serving it.
+      // Overlay authored summaries: the committed shards first, then this
+      // machine's sidecars as a strictly newer source, folded through the same
+      // rules the indexer uses. So what the server serves is exactly what the
+      // next `index` will write — including which side wins a divergence.
+      //
+      // The shard overlay only matters between indexes (`index` already grafts
+      // them into nodes.jsonl), but that is the ordinary case: a teammate's
+      // summaries arrive with a `git pull` long before anyone re-indexes.
+      // Sidecars are every agent's, not just this process's, so two agents on
+      // one checkout see each other's work.
       const shards = loadSummaryShards(this.repoPath);
-      for (const [id, rec] of shards.summaries) {
+      const overlay = emptyAccumulator();
+      absorbSummarySource(overlay, {
+        summaries: shards.summaries,
+        conflicts: [],
+        warnings: [],
+      });
+      absorbSummarySource(overlay, loadAllSidecars(this.repoPath));
+      for (const [id, rec] of overlay.summaries) {
         const n = this.graph.byId.get(id);
         if (!n) continue;
+        // Gated on the content hash for exactly the reason the indexer gates
+        // its graft: a summary whose node has since changed is stale, and
+        // serving it as current is worse than not serving it. Sidecar records
+        // are stamped with the node's live hash at write time, so an unchanged
+        // node passes this the same way a shard record does.
         if (rec.props.summary_of_hash !== n.props.content_hash) continue;
         for (const [k, v] of Object.entries(rec.props)) n.props[k] = v;
       }
-      // A merged shard can hold two different summaries for one node. The
-      // winner is deterministic and matches what the indexer will write; the
-      // loser is authored prose, so it is preserved for a human rather than
-      // discarded on the read path.
-      recordSummaryConflicts(this.repoPath, shards.conflicts);
-      // Then this machine's sidecars — every agent's, not just this process's,
-      // so two agents on one checkout see each other's work. These are newer
-      // than anything committed by construction.
-      for (const [id, rec] of readAllSidecars(this.repoPath)) {
-        const n = this.graph.byId.get(id);
-        if (n) {
-          n.props.semantic_summary = rec.semantic_summary;
-          n.props.summary_of_hash = rec.summary_of_hash;
-          n.props.summary_model = rec.summary_model;
-          n.props.summary_at = rec.summary_at;
-          n.props.summary_by = rec.summary_by;
-        }
-      }
+      // Divergence losers — from a merged shard, or from two agents writing the
+      // same node — are authored prose. Preserve them for a human rather than
+      // discarding them on the read path.
+      recordSummaryConflicts(this.repoPath, [...shards.conflicts, ...overlay.conflicts]);
     } catch {
       this.graph = emptyGraph();
     }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agentSlug,
+  loadAllSidecars,
   readAllSidecars,
   readSidecar,
   sidecarPath,
@@ -110,12 +111,15 @@ describe("per-agent sidecars", () => {
     expect(readAllSidecars(root).get("old")?.semantic_summary).toBe("legacy");
   });
 
-  it("merges agents in a deterministic order, not directory order", () => {
+  it("merges agents by the same rule the indexer uses, not by directory order", () => {
+    // All three carry the same day-precision summary_at, so this is a genuine
+    // tie inside one source: resolved by raw-line byte order, exactly as the
+    // Rust indexer resolves it. A last-file-wins merge here would serve prose
+    // the next `index` is about to replace.
     for (const agent of ["zed", "alpha", "mid"]) {
       upsertSidecar(sidecarPath(root, agent), rec("shared", `by ${agent}`));
     }
-    // summaries-alpha < summaries-mid < summaries-zed, last wins.
-    expect(readAllSidecars(root).get("shared")?.semantic_summary).toBe("by zed");
+    expect(readAllSidecars(root).get("shared")?.semantic_summary).toBe("by alpha");
     expect(sidecarPaths(root).map((p) => p.split("/").pop())).toEqual([
       "summaries-alpha.jsonl",
       "summaries-mid.jsonl",
@@ -123,8 +127,33 @@ describe("per-agent sidecars", () => {
     ]);
   });
 
+  it("preserves the agents that lost the tie instead of dropping them", () => {
+    // Two agents summarising the same node is a real divergence. Silently
+    // keeping one used to lose the other with no trace anywhere.
+    for (const agent of ["zed", "alpha"]) {
+      upsertSidecar(sidecarPath(root, agent), rec("shared", `by ${agent}`));
+    }
+    const loaded = loadAllSidecars(root);
+    expect(loaded.summaries.get("shared")?.props.semantic_summary).toBe("by alpha");
+    expect(loaded.conflicts).toHaveLength(1);
+    expect(loaded.conflicts[0]!.props.semantic_summary).toBe("by zed");
+  });
+
+  it("lets a newer summary_at win regardless of which file it is in", () => {
+    upsertSidecar(sidecarPath(root, "zed"), {
+      ...rec("shared", "older"),
+      summary_at: "2026-01-01",
+    });
+    upsertSidecar(sidecarPath(root, "alpha"), {
+      ...rec("shared", "newer"),
+      summary_at: "2026-09-01",
+    });
+    expect(readAllSidecars(root).get("shared")?.semantic_summary).toBe("newer");
+  });
+
   it("lists nothing for a repo with no sidecars", () => {
     expect(sidecarPaths(root)).toEqual([]);
     expect(readAllSidecars(root).size).toBe(0);
+    expect(loadAllSidecars(root).conflicts).toEqual([]);
   });
 });

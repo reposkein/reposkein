@@ -304,7 +304,7 @@ Write `<repo>/.mcp.json`:
 
 Drop any block whose feature the user didn't enable. `REPOSKEIN_REPO_PATH` is the only required key.
 
-> **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. What is shared from `.reposkein/` is `meta.json`, `config.toml` and `summaries.jsonl`.
+> **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. What is shared from `.reposkein/` is `meta.json`, `config.toml`, `.gitignore`, `.gitattributes`, `summaries/` and `decisions/` (§4.2).
 
 ### 6.2 OpenCode (+ omo)
 

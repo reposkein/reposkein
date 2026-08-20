@@ -155,16 +155,46 @@
         "skipped": 2
       },
       {
+        "$comment": [
+          "Single-backslash \\u escapes on purpose: they resolve when the FIXTURE",
+          "is parsed, so the vector's lines carry the real characters and the",
+          "tiebreak compares decoded bytes. Doubling them would leave the escape",
+          "text in the line and test ASCII ordering of 'u','d','f' instead."
+        ],
         "name": "unicode prose round-trips and compares by utf-8 bytes",
         "lines": [
-          "{\"id\":\"a\",\"semantic_summary\":\"caf\\u00e9 ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"café ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
           "{\"id\":\"a\",\"semantic_summary\":\"Ω omega\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
         ],
         "winners": {
-          "a": "{\"id\":\"a\",\"semantic_summary\":\"caf\\u00e9 ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"café ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
         },
         "conflicts": [
           "{\"id\":\"a\",\"semantic_summary\":\"Ω omega\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "The case that motivated comparing encoded bytes rather than a",
+          "language's native string `<`. U+FFFD encodes as EF BF BD; U+10000 as",
+          "F0 90 80 80, but in UTF-16 it is the surrogate pair D800 DC00.",
+          "UTF-8 byte order puts U+FFFD first (EF < F0); JavaScript's `<`, which",
+          "compares UTF-16 code units, puts the astral character first",
+          "(D800 < FFFD). The two orders DISAGREE, so this vector fails on any",
+          "implementation that reaches for the native comparison — which is",
+          "exactly the drift it exists to catch."
+        ],
+        "name": "utf-8 byte order breaks the tie, not utf-16 code-unit order",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"𐀀 astral\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"� replacement\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"� replacement\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"𐀀 astral\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
         ],
         "skipped": 0
       }

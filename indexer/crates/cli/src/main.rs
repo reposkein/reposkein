@@ -10,8 +10,7 @@ use reposkein_lang_java::JavaExtractor;
 use reposkein_lang_python::PythonExtractor;
 use reposkein_lang_rust::RustExtractor;
 use reposkein_lang_ts::{JavaScriptExtractor, TypeScriptExtractor};
-use serde_json::{Map, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -418,8 +417,12 @@ fn run_index(
     // wrote them and nothing can regenerate them. They are therefore gathered
     // separately and persisted to `.reposkein/summaries/<xx>.jsonl`, the shards
     // that are the one part of .reposkein/ worth committing.
-    let mut authored: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
-    let mut conflicts: Vec<reposkein_core::summaries::SummaryRecord> = Vec::new();
+    // ONE accumulator for every source, folded oldest provenance first. Each
+    // fold goes through `LoadedSummaries`, so displacement is always a decided
+    // outcome with the loser preserved — never a silent overwrite. Cross-source
+    // folds use `supersedes` (a newer source wins unless it is strictly older
+    // by `summary_at`); records within one source use `beats`.
+    let mut authored = reposkein_core::summaries::LoadedSummaries::default();
     // 1) Legacy: summaries inside a previously committed nodes.jsonl, so the
     //    first index after upgrading harvests them instead of dropping them.
     //    ONE-SHOT — see `legacy_nodes_harvest_needed` for why running this on
@@ -431,7 +434,7 @@ fn run_index(
         .and_then(|prev| reposkein_core::jsonl::read_nodes(&prev).ok());
     if legacy_nodes_harvest_needed(&out_dir) {
         if let Some(ref existing) = prev_nodes {
-            absorb_summaries(&mut authored, existing);
+            authored.absorb_nodes(existing);
         }
     }
     // Claim every file that must be folded in and then removed, BEFORE reading
@@ -455,14 +458,10 @@ fn run_index(
             committed.absorb(&label_of(p), &text);
         }
     }
-    absorb_summaries(&mut authored, &committed.nodes());
-    for w in &committed.warnings {
-        eprintln!("reposkein: {w}");
-    }
-    conflicts.append(&mut committed.conflicts);
+    authored.absorb_source(committed);
     // 4) The live DB's summaries (PRD §9 Phase 3).
     if let Some(db_nodes) = db_summary_nodes(&repo) {
-        absorb_summaries(&mut authored, &db_nodes);
+        authored.absorb_node_source(&db_nodes);
     }
     // 5) The per-agent JSONL sidecars, claimed above. Newest source: these are
     //    the writes made since the last index, by every agent on this machine.
@@ -472,16 +471,12 @@ fn run_index(
             sidecars.absorb(&label_of(p), &text);
         }
     }
-    absorb_summaries(&mut authored, &sidecars.nodes());
-    conflicts.append(&mut sidecars.conflicts);
-    let authored_nodes: Vec<reposkein_core::model::Node> = authored
-        .into_iter()
-        .map(|(id, props)| reposkein_core::model::Node {
-            id,
-            labels: Vec::new(),
-            props,
-        })
-        .collect();
+    authored.absorb_source(sidecars);
+    for w in &authored.warnings {
+        eprintln!("reposkein: {w}");
+    }
+    let conflicts = std::mem::take(&mut authored.conflicts);
+    let authored_nodes: Vec<reposkein_core::model::Node> = authored.nodes();
 
     // Derived output. Summaries are grafted in only where `summary_of_hash`
     // still matches the node, so a stale summary never reads as current.
@@ -582,20 +577,6 @@ fn is_reposkein_merge_attr(line: &str) -> bool {
     let l = line.trim();
     (l.starts_with(".reposkein/nodes.jsonl") || l.starts_with(".reposkein/edges.jsonl"))
         && l.contains("merge=")
-}
-
-/// Folds any nodes carrying summary props into `authored`, keyed by node id.
-/// Later calls win, so callers should feed sources oldest-first.
-fn absorb_summaries(
-    authored: &mut BTreeMap<String, Map<String, Value>>,
-    records: &[reposkein_core::model::Node],
-) {
-    for n in records {
-        let part = reposkein_core::merge::summary_part(&n.props);
-        if reposkein_core::merge::has_summary(&part) {
-            authored.insert(n.id.clone(), part);
-        }
-    }
 }
 
 /// Pre-commit companion: notice when the authored summary shards changed and

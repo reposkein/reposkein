@@ -1,5 +1,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import {
+  absorbSummaryLines,
+  emptyAccumulator,
+  type SummaryAccumulator,
+} from "./summaryShards.js";
 
 /** A persisted summary record (git-ignored .reposkein/local/summaries-<agent>.jsonl). */
 export interface SidecarSummary {
@@ -90,12 +95,43 @@ export function readSidecar(path: string): Map<string, SidecarSummary> {
   return map;
 }
 
-/** Every agent's sidecar records, merged. Later files win on a collision, and
- *  file order is sorted, so the result does not depend on directory order. */
+/** Every agent's sidecar records, folded through the SAME rules the Rust
+ *  indexer applies — `beats` within the sidecar set, losers preserved — so the
+ *  server serves exactly the record the next `index` is going to write.
+ *
+ *  This used to be a plain last-file-wins merge, which disagreed with the
+ *  indexer whenever two agents summarised the same node, and dropped the loser
+ *  with no trace. Callers should hand `conflicts` to `recordSummaryConflicts`. */
+export function loadAllSidecars(repoPath: string): SummaryAccumulator {
+  const acc = emptyAccumulator();
+  for (const p of sidecarPaths(repoPath)) {
+    let text: string;
+    try {
+      text = readFileSync(p, "utf8");
+    } catch {
+      continue;
+    }
+    absorbSummaryLines(acc, `local/${basename(p)}`, text);
+  }
+  return acc;
+}
+
+/** Convenience view of `loadAllSidecars` for callers that only want the
+ *  winning record per node id. Divergence losers are dropped on the floor
+ *  here, so prefer `loadAllSidecars` anywhere they can be recorded. */
 export function readAllSidecars(repoPath: string): Map<string, SidecarSummary> {
   const merged = new Map<string, SidecarSummary>();
-  for (const p of sidecarPaths(repoPath)) {
-    for (const [id, rec] of readSidecar(p)) merged.set(id, rec);
+  for (const [id, rec] of loadAllSidecars(repoPath).summaries) {
+    const s = (k: string): string =>
+      typeof rec.props[k] === "string" ? (rec.props[k] as string) : "";
+    merged.set(id, {
+      id,
+      semantic_summary: s("semantic_summary"),
+      summary_of_hash: s("summary_of_hash"),
+      summary_model: s("summary_model"),
+      summary_at: s("summary_at"),
+      summary_by: s("summary_by"),
+    });
   }
   return merged;
 }
