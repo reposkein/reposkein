@@ -141,7 +141,7 @@ export async function main(): Promise<void> {
 
   // Repo-scoped tools are always registered; they check repoId at call time.
   // Handlers are constructed with a real repoId only if it's available.
-  const getContextProfile = repoId ? makeGetContextProfile(store, repoId) : null;
+  const getContextProfile = repoId ? makeGetContextProfile(store, repoId, repoPath) : null;
   server.registerTool(
     "get_context_profile",
     {
@@ -256,7 +256,7 @@ export async function main(): Promise<void> {
     }
   );
 
-  const impact = repoId ? makeImpact(store, repoId) : null;
+  const impact = repoId ? makeImpact(store, repoId, repoPath) : null;
   server.registerTool(
     "impact",
     {

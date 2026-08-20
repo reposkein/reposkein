@@ -34,6 +34,9 @@ export interface ProfileTarget {
   summary: string | null;
   stale: boolean;
   repo_id?: string;
+  /** ADRs governing this node (max 5) — see profile/decisions.ts. Absent when
+   *  the repo has no decisions touching it. */
+  decisions?: import("./decisions.js").GoverningDecision[];
 }
 
 export interface ContextProfile {
@@ -42,6 +45,11 @@ export interface ContextProfile {
   downstream: NeighborEntry[];
   inlined_context: string;
   enrichment_needed: string[];
+  /** Accepted decisions whose anchor on the target went stale. Deliberately
+   *  NOT folded into enrichment_needed — that field's contract is node ids
+   *  fed to write_semantic_summary. Re-read these and conform / supersede /
+   *  reaffirm instead. */
+  decisions_needing_review?: string[];
   truncated?: { upstream: boolean; downstream: boolean };
 }
 

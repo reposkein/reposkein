@@ -1,6 +1,7 @@
 import type { GraphStore } from "../store/GraphStore.js";
 import { resolveTarget, type Selector } from "../profile/resolve.js";
 import { computeImpact } from "../profile/impact.js";
+import { governingDecisionsForNodes } from "../profile/decisions.js";
 import { federationIds } from "../store/federation.js";
 import type { ToolResult } from "./readCypher.js";
 
@@ -22,7 +23,7 @@ function clamp(val: number, min: number, max: number): number {
  *  edges are captured in the committed graph for read_cypher/visualization but are
  *  intentionally NOT traversed here (recorded decision, matched across both
  *  backends) — instantiation sites are not treated as impact-bearing callers. */
-export function makeImpact(store: GraphStore, repoId: string) {
+export function makeImpact(store: GraphStore, repoId: string, repoPath?: string) {
   return async (args: ImpactArgs): Promise<ToolResult> => {
     const sel: Selector = {
       node_id: args.node_id,
@@ -78,6 +79,17 @@ export function makeImpact(store: GraphStore, repoId: string) {
         { depth, maxNodes: 500 },
       );
 
+      if (repoPath) {
+        const gov = governingDecisionsForNodes(repoPath, [
+          { node_id: target.id, file_path: target.file_path, content_hash: target.content_hash },
+          ...result.impacted.map((r) => ({ node_id: r.node_id, file_path: r.file_path })),
+        ]);
+        if (gov.length > 0) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ...result, governing_decisions: gov }) }],
+          };
+        }
+      }
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
       };

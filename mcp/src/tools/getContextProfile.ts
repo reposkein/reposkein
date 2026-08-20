@@ -1,6 +1,7 @@
 import type { GraphStore } from "../store/GraphStore.js";
 import { resolveTarget, type Selector } from "../profile/resolve.js";
 import { assembleProfile } from "../profile/assemble.js";
+import { governingDecisionsFor } from "../profile/decisions.js";
 import { federationIds } from "../store/federation.js";
 import type { ToolResult } from "./readCypher.js";
 
@@ -12,7 +13,7 @@ export interface GetContextProfileArgs {
   federated?: boolean;
 }
 
-export function makeGetContextProfile(store: GraphStore, repoId: string) {
+export function makeGetContextProfile(store: GraphStore, repoId: string, repoPath?: string) {
   return async (args: GetContextProfileArgs): Promise<ToolResult> => {
     const sel: Selector = { node_id: args.node_id, file_path: args.file_path, name: args.name };
     if (!sel.node_id && !sel.name && !sel.file_path) {
@@ -45,6 +46,11 @@ export function makeGetContextProfile(store: GraphStore, repoId: string) {
         };
       }
       const profile = await assembleProfile(store, repoIds, resolved.target, hops);
+      if (repoPath) {
+        const gov = governingDecisionsFor(repoPath, resolved.target);
+        if (gov.decisions.length > 0) profile.target.decisions = gov.decisions;
+        if (gov.needing_review.length > 0) profile.decisions_needing_review = gov.needing_review;
+      }
       return { content: [{ type: "text", text: JSON.stringify(profile) }] };
     } catch (e) {
       return { content: [{ type: "text", text: (e as Error).message }], isError: true };
