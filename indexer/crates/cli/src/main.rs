@@ -270,6 +270,8 @@ struct IndexRun {
     edges: usize,
     children: usize,
     warnings: Vec<String>,
+    /// Old-vs-new node diff; None on a first index (nothing to diff against).
+    delta: Option<reposkein_core::delta::GraphDelta>,
 }
 
 /// Shared index routine used by both `index` and `reindex`. When
@@ -367,10 +369,12 @@ fn run_index(
     // 1) Legacy: summaries inside a previously committed nodes.jsonl, so the
     //    first index after upgrading harvests them instead of dropping them.
     //    Best-effort — a corrupt derived file must never abort an index.
-    if let Ok(prev) = std::fs::read_to_string(&nodes_path) {
-        if let Ok(existing) = reposkein_core::jsonl::read_nodes(&prev) {
-            absorb_summaries(&mut authored, &existing);
-        }
+    //    Retained (not just absorbed) so the graph_delta diff below is free.
+    let prev_nodes: Option<Vec<reposkein_core::model::Node>> = std::fs::read_to_string(&nodes_path)
+        .ok()
+        .and_then(|prev| reposkein_core::jsonl::read_nodes(&prev).ok());
+    if let Some(ref existing) = prev_nodes {
+        absorb_summaries(&mut authored, existing);
     }
     // 2) The committed summaries file: what teammates share.
     if let Ok(text) = std::fs::read_to_string(&summaries_path) {
@@ -443,6 +447,30 @@ fn run_index(
 
     write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
 
+    // Decision drift trigger: diff the previous graph against the fresh one
+    // and persist any non-empty delta to local/last_delta.json. Hook-driven
+    // indexes (pre-commit, post-merge, post-checkout) discard stdout, and
+    // post-merge — teammate changes landing — is precisely when decisions go
+    // stale; the persisted file lets the MCP server surface decisions_affected
+    // on its next call. Best-effort: drift detection must never fail an index.
+    let delta = prev_nodes
+        .as_deref()
+        .map(|prev| reposkein_core::delta::compute_graph_delta(prev, &graph.nodes));
+    if let Some(ref d) = delta {
+        if !d.is_empty() {
+            let pending_path = out_dir.join("local").join("last_delta.json");
+            let merged = std::fs::read_to_string(&pending_path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<reposkein_core::delta::GraphDelta>(&t).ok())
+                .map(|pending| reposkein_core::delta::merge_graph_delta(&pending, d))
+                .unwrap_or_else(|| d.clone());
+            let _ = std::fs::create_dir_all(out_dir.join("local"));
+            if let Ok(json) = serde_json::to_string(&merged) {
+                let _ = std::fs::write(&pending_path, json);
+            }
+        }
+    }
+
     Ok(IndexRun {
         repo,
         repo_name,
@@ -451,11 +479,12 @@ fn run_index(
         edges: graph.edges.len(),
         children: out.children.len(),
         warnings: out.warnings,
+        delta,
     })
 }
 
 fn index_stats_json(r: &IndexRun) -> String {
-    let stats = serde_json::json!({
+    let mut stats = serde_json::json!({
         "repo_id": r.repo,
         "files": r.files,
         "nodes": r.nodes,
@@ -463,6 +492,11 @@ fn index_stats_json(r: &IndexRun) -> String {
         "children": r.children,
         "warnings": r.warnings,
     });
+    if let Some(ref d) = r.delta {
+        if !d.is_empty() {
+            stats["graph_delta"] = serde_json::to_value(d).unwrap_or(serde_json::Value::Null);
+        }
+    }
     serde_json::to_string(&stats).unwrap()
 }
 

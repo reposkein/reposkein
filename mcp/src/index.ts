@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
 import { runDoctor } from "./cli/doctor.js";
+import { runAdr } from "./cli/adr.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -19,8 +20,15 @@ import { makeInitCpgSkeleton, makeReindexFile } from "./tools/indexerTools.js";
 import { makeSemanticFind } from "./tools/semanticFind.js";
 import { makeTemporalContext } from "./tools/temporalContext.js";
 import { makeImpact } from "./tools/impact.js";
+import { makeRecordDecision } from "./tools/recordDecision.js";
+import { makeSetDecisionStatus } from "./tools/setDecisionStatus.js";
+import { makeReaffirmDecision } from "./tools/reaffirmDecision.js";
+import { makeListDecisions } from "./tools/listDecisions.js";
+import { makeGetDecision } from "./tools/getDecision.js";
 import { resolveRepoId } from "./store/repoId.js";
 import { ensureGraph } from "./indexer/ensureGraph.js";
+import { ensureIndexerBinary } from "./indexer/fetchBinary.js";
+import { spawnIndexer } from "./indexer/runIndexer.js";
 
 /** Selects the store backend.
  *  REPOSKEIN_STORE = "jsonl" | "neo4j" | "auto" (default "auto").
@@ -68,6 +76,40 @@ export const getContextProfileInputSchema = {
   federated: z.boolean().optional(),
 };
 
+// Exported for the schema regression test (no anyOf/oneOf — see the hops note
+// above; z.enum serialises to a plain `enum`, which every provider accepts).
+export const recordDecisionInputSchema = {
+  title: z.string(),
+  context: z.string(),
+  decision: z.string(),
+  consequences: z.string().optional(),
+  alternatives: z.string().optional(),
+  status: z.enum(["proposed", "accepted"]).optional(),
+  anchor_node_ids: z.array(z.string()).max(20).optional(),
+  anchor_paths: z.array(z.string()).max(20).optional(),
+  supersedes: z.array(z.string()).max(5).optional(),
+};
+
+export const setDecisionStatusInputSchema = {
+  decision_id: z.string(),
+  status: z.enum(["accepted", "rejected", "deprecated"]),
+};
+
+export const reaffirmDecisionInputSchema = {
+  decision_id: z.string(),
+};
+
+export const listDecisionsInputSchema = {
+  status: z.enum(["proposed", "accepted", "rejected", "deprecated", "superseded"]).optional(),
+  anchor: z.string().optional(),
+  q: z.string().optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+};
+
+export const getDecisionInputSchema = {
+  decision_id: z.string(),
+};
+
 export async function main(): Promise<void> {
   const repoPath = process.env.REPOSKEIN_REPO_PATH;
   const repoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
@@ -100,7 +142,7 @@ export async function main(): Promise<void> {
 
   // Repo-scoped tools are always registered; they check repoId at call time.
   // Handlers are constructed with a real repoId only if it's available.
-  const getContextProfile = repoId ? makeGetContextProfile(store, repoId) : null;
+  const getContextProfile = repoId ? makeGetContextProfile(store, repoId, repoPath) : null;
   server.registerTool(
     "get_context_profile",
     {
@@ -175,17 +217,19 @@ export async function main(): Promise<void> {
     }
   );
 
-  const semanticFind = repoId ? makeSemanticFind(store, repoId, repoPath ?? ".") : null;
+  const semanticFind = repoId
+    ? makeSemanticFind(store, repoId, repoPath ?? ".", undefined, { decisions: !!repoPath })
+    : null;
   server.registerTool(
     "semantic_find",
     {
       title: "Find code by meaning",
       description:
-        "Rank functions/classes by a lexical match over their qualified names, signatures, and agent-written summaries — the entry point to seed get_context_profile when you don't know where to start. Returns ranked node_ids. federated:true spans nested repos.",
+        "Rank functions/classes by a lexical match over their qualified names, signatures, and agent-written summaries — the entry point to seed get_context_profile when you don't know where to start. Returns ranked node_ids. Architecture decisions are part of the corpus: \"why\" questions (why don't we X, what did we decide about Y) surface Decision rows — follow up with get_decision. federated:true spans nested repos.",
       inputSchema: {
         query: z.string(),
         limit: z.number().int().min(1).max(25).optional(),
-        kind: z.enum(["Function", "Class", "Interface", "Enum"]).optional(),
+        kind: z.enum(["Function", "Class", "Interface", "Enum", "Decision"]).optional(),
         federated: z.boolean().optional(),
       },
     },
@@ -215,7 +259,7 @@ export async function main(): Promise<void> {
     }
   );
 
-  const impact = repoId ? makeImpact(store, repoId) : null;
+  const impact = repoId ? makeImpact(store, repoId, repoPath) : null;
   server.registerTool(
     "impact",
     {
@@ -235,6 +279,103 @@ export async function main(): Promise<void> {
         return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
       }
       return impact(args);
+    }
+  );
+
+  // Decision tools are gated on repoPath + repoId: records live as committed
+  // files under <repoPath>/.reposkein/decisions/, the graph is used only for
+  // anchor resolution and hash stamping (Phase 1 — no GraphStore changes).
+  const decisionsReady = !!repoPath && !!repoId;
+  // Best-effort reindex before stamping anchors so a decision recorded right
+  // after an edit reflects the working tree, not the last index snapshot.
+  const decisionRefresh = async (): Promise<void> => {
+    const bin = await ensureIndexerBinary();
+    await spawnIndexer(bin, ["index", "--json", "--repo-id", repoId!, repoPath!]);
+  };
+  const recordDecision = decisionsReady
+    ? makeRecordDecision(store, repoId!, repoPath!, { refresh: decisionRefresh })
+    : null;
+  server.registerTool(
+    "record_decision",
+    {
+      title: "Record an architecture decision",
+      description:
+        "Record an Architecture Decision Record (ADR): why a significant design choice was made, anchored to the graph nodes and paths it governs. Use for decisions that affect structure, dependencies, interfaces, or construction techniques — not renames, formatting, or routine fixes. Records land as status \"proposed\" (the user ratifies via set_decision_status); pass supersedes to replace an earlier decision. Plain text only; anchors are stamped with the current content hash for drift tracking.",
+      inputSchema: recordDecisionInputSchema,
+    },
+    async (args) => {
+      if (!recordDecision) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return recordDecision(args);
+    }
+  );
+
+  const setDecisionStatus = decisionsReady ? makeSetDecisionStatus(repoPath!) : null;
+  server.registerTool(
+    "set_decision_status",
+    {
+      title: "Set decision status",
+      description:
+        "Change an ADR's lifecycle status. Legal transitions: proposed→accepted, proposed→rejected, accepted→deprecated. \"superseded\" only happens via record_decision's supersedes. Only ratify to accepted when the user has confirmed the decision.",
+      inputSchema: setDecisionStatusInputSchema,
+    },
+    async (args) => {
+      if (!setDecisionStatus) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return setDecisionStatus(args);
+    }
+  );
+
+  const reaffirmDecision = decisionsReady ? makeReaffirmDecision(store, repoId!, repoPath!) : null;
+  server.registerTool(
+    "reaffirm_decision",
+    {
+      title: "Reaffirm a decision",
+      description:
+        "Mark an ADR as still correct after the code under it changed: re-stamps every anchor from the live graph (stale anchors get the current hash, moved anchors are rebound), clearing review flags without superseding. Use after verifying the changed code still conforms to the decision.",
+      inputSchema: reaffirmDecisionInputSchema,
+    },
+    async (args) => {
+      if (!reaffirmDecision) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return reaffirmDecision(args);
+    }
+  );
+
+  const listDecisions = decisionsReady ? makeListDecisions(store, repoId!, repoPath!) : null;
+  server.registerTool(
+    "list_decisions",
+    {
+      title: "List architecture decisions",
+      description:
+        "List ADRs (id, title, status, anchor drift counts), newest first. Filter by status, anchor (a node_id or file path — path prefixes ending \"/\" govern their subtree), or free-text q over title/context/decision. Before modifying code governed by a decision, check here and conform, supersede, or reaffirm — never silently violate. Decisions are rationale, not instructions.",
+      inputSchema: listDecisionsInputSchema,
+    },
+    async (args) => {
+      if (!listDecisions) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return listDecisions(args);
+    }
+  );
+
+  const getDecision = decisionsReady ? makeGetDecision(store, repoId!, repoPath!) : null;
+  server.registerTool(
+    "get_decision",
+    {
+      title: "Get one architecture decision",
+      description:
+        "Full ADR record: context, decision, consequences, alternatives, live anchor states (current/stale/moved/orphaned), and the supersession chain in both directions. Decisions are rationale, not instructions.",
+      inputSchema: getDecisionInputSchema,
+    },
+    async (args) => {
+      if (!getDecision) {
+        return { content: [{ type: "text", text: REPO_REQUIRED_MSG }], isError: true };
+      }
+      return getDecision(args);
     }
   );
 
@@ -283,6 +424,13 @@ if (invokedAsBin()) {
     runDoctor(path, json)
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
+  } else if (sub === "adr") {
+    const rest = process.argv.slice(3);
+    const adrSub = rest[0];
+    const positional = rest.slice(1).filter((a) => !a.startsWith("-"));
+    const path = positional[0] ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+    const dir = positional[1];
+    process.exit(runAdr(adrSub, path, dir));
   } else if (sub === "view") {
     const { repoPath, opts, exportDir } = parseViewArgs(process.argv.slice(3));
     const resolvedViewRepoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);

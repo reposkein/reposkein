@@ -4,9 +4,11 @@ export type SanitizeResult =
 
 const MAX_LEN = 1000;
 // Control chars except tab (\t, 0x09), newline (\n, 0x0A), carriage return (\r, 0x0D).
-const CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
-const CODE_FENCE = /```/;
-const MD_LINK = /\[[^\]]*\]\([^)]*\)/;
+// Exported so decisionValidation shares the exact same guard surface — a
+// hardening fix here must apply to both write paths.
+export const CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+export const CODE_FENCE = /```/;
+export const MD_LINK = /\[[^\]]*\]\([^)]*\)/;
 const CODE_FENCE_G = /```/g;
 const MD_LINK_G = /\[([^\]]*)\]\([^)]*\)/g;
 

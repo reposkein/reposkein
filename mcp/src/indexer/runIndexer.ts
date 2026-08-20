@@ -66,6 +66,9 @@ export interface IndexJsonStats {
   edges: number;
   children: number;
   warnings: string[];
+  /** Old-vs-new node diff (absent on a first index or when nothing changed) —
+   *  see indexer/crates/core/src/delta.rs. */
+  graph_delta?: import("./decisionsAffected.js").GraphDeltaJson;
 }
 
 /** Parse the JSON object emitted by `index --json`. Returns null on parse failure. */

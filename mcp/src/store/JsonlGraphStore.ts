@@ -43,7 +43,8 @@ function toTargetRow(n: ParsedNode): TargetRow {
     repo_id: n.repoId,
     name,
     qualified_name: str(n.props.qualified_name) ?? name,
-    file_path: str(n.props.file_path) ?? "",
+    // File/Directory nodes carry `path` instead of `file_path`.
+    file_path: str(n.props.file_path) ?? str(n.props.path) ?? "",
     start_line: num(n.props.start_line),
     end_line: num(n.props.end_line),
     semantic_summary: str(n.props.semantic_summary),
@@ -180,6 +181,14 @@ export class JsonlGraphStore implements GraphStore {
     return n && repoIds.includes(n.repoId) ? toTargetRow(n) : null;
   }
 
+  async findByContentHash(repoIds: string[], hash: string): Promise<TargetRow[]> {
+    this.ensureFresh();
+    return this.graph.nodes
+      .filter((n) => repoIds.includes(n.repoId) && str(n.props.content_hash) === hash)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map(toTargetRow);
+  }
+
   async resolveByPathAndName(repoIds: string[], filePath: string, name: string): Promise<TargetRow[]> {
     this.ensureFresh();
     return this.graph.nodes
@@ -294,7 +303,8 @@ export class JsonlGraphStore implements GraphStore {
         qualified_name: str(n.props.qualified_name) ?? name,
         signature: str(n.props.signature) ?? "",
         summary: str(n.props.semantic_summary) ?? "",
-        file_path: str(n.props.file_path) ?? "",
+        // File/Directory nodes carry `path` instead of `file_path`.
+    file_path: str(n.props.file_path) ?? str(n.props.path) ?? "",
         repo_id: n.repoId,
       });
     }
