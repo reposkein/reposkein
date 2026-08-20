@@ -48,6 +48,17 @@ All notable changes to RepoSkein. Format roughly follows
     governed code — never silently violate a decision. RepoSkein's own repo ships
     three seeded decisions recorded through these tools.
 
+### Security
+
+- **All nine open Dependabot alerts resolved** (lockfile-only; no API changes).
+  The one runtime exposure in the shipped package — `body-parser` < 2.3.0 (DoS
+  when an invalid `limit` silently disables size enforcement, low severity, via
+  `@modelcontextprotocol/sdk` → `express`) — is bumped to 2.3.0. The remaining
+  eight were development-scope build tooling in the mcp and viz dependency
+  trees: `postcss` → 8.5.26 (source-map path traversal + its incomplete fix),
+  `js-yaml` → 4.3.1 (quadratic CPU in `!!omap` and merge-key chains), and
+  `brace-expansion` → 1.1.18 / 5.0.9 (exponential-time expansion DoS).
+
 ## [0.2.7] - 2026-08-07
 
 ### Changed
