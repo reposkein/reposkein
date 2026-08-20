@@ -5,6 +5,7 @@ import { spawnIndexer } from "../indexer/runIndexer.js";
 import { resolveRepoId } from "../store/repoId.js";
 import { resolveRepoPath } from "../store/resolveRepoPath.js";
 import { decisionChecks } from "./doctorDecisions.js";
+import { summaryChecks } from "./doctorSummaries.js";
 
 export interface DoctorPathResolution {
   path: string;
@@ -112,7 +113,10 @@ export async function runChecks(repoPath: string): Promise<DoctorReport> {
     fix: repoId ? undefined : "set REPOSKEIN_REPO_PATH (or REPOSKEIN_REPO_ID) for the MCP server",
   });
 
-  // 4) Decision log validation (all non-critical: degrade, don't block).
+  // 4) Committed summary shards (all non-critical: degrade, don't block).
+  checks.push(...summaryChecks(repoPath));
+
+  // 5) Decision log validation (all non-critical: degrade, don't block).
   checks.push(...decisionChecks(repoPath));
 
   const ok = checks.filter((c) => c.critical).every((c) => c.ok);

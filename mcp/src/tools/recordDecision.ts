@@ -122,7 +122,17 @@ export function makeRecordDecision(
       const date = today();
       // Filename-aware taken set: a damaged file's id must not be re-minted,
       // or writeDecision would rename over the hand-recoverable record.
-      const id = mintDecisionId(date, prose.value.title, takenDecisionIds(repoPath));
+      //
+      // The salt is the decision's own prose, so two branches recording a
+      // same-day decision under the same title mint DIFFERENT ids (and
+      // therefore different files) instead of colliding on `<slug>.1` — which
+      // would put the conflict right back into a store that exists to avoid it.
+      const id = mintDecisionId(
+        date,
+        prose.value.title,
+        takenDecisionIds(repoPath),
+        `${prose.value.context}\n${prose.value.decision}`
+      );
       const trigger: { kind: DecisionTriggerKind } = { kind: "manual" };
       const rec: DecisionRecord = {
         id,

@@ -113,10 +113,47 @@ export function decisionBaseId(date: string, title: string): string {
   return `adr:${date}-${slugify(title)}`;
 }
 
-/** Mints `adr:<date>-<slug>`, appending `.1`, `.2`, … while taken. */
-export function mintDecisionId(date: string, title: string, taken: ReadonlySet<string>): string {
+/** A short, content-derived salt for a colliding slug.
+ *
+ *  The old collision escape was an ordinal (`.1`, `.2`). That is exactly wrong
+ *  for the case it exists for: two branches recording a same-day decision with
+ *  the same title BOTH see `.1` free and both mint it, so both write the same
+ *  filename — reintroducing the merge conflict that file-per-decision exists to
+ *  remove, on a file whose bodies differ.
+ *
+ *  Salting from the body instead makes the id a function of the content: two
+ *  branches with genuinely different decisions get different files and merge
+ *  without touching each other, while two identical recordings collapse to one
+ *  id (which is the right answer — they are the same decision). */
+export function decisionSlugSalt(source: string): string {
+  return createHash("sha256").update(source).digest("hex").slice(0, 6);
+}
+
+/** Mints `adr:<date>-<slug>`, salting the slug with content when taken.
+ *
+ *  `saltSource` should be something that differs between two decisions a person
+ *  would consider distinct — the body hash, or the prose itself. Omitting it
+ *  falls back to the old ordinal, which is fine for a single-writer context
+ *  (an import loop) but not for concurrent branches. */
+export function mintDecisionId(
+  date: string,
+  title: string,
+  taken: ReadonlySet<string>,
+  saltSource?: string
+): string {
   const base = decisionBaseId(date, title);
   if (!taken.has(base)) return base;
+  if (saltSource !== undefined) {
+    const salted = `${base}-${decisionSlugSalt(saltSource)}`;
+    if (!taken.has(salted)) return salted;
+    // Same date, same title, same body, and the id is taken: the record is
+    // already there. Anything further is a genuine duplicate, so an ordinal is
+    // the honest fallback.
+    for (let i = 1; ; i++) {
+      const candidate = `${salted}.${i}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+  }
   for (let i = 1; ; i++) {
     const candidate = `${base}.${i}`;
     if (!taken.has(candidate)) return candidate;

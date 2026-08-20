@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-/** A persisted summary record (git-ignored .reposkein/local/summaries.jsonl). */
+/** A persisted summary record (git-ignored .reposkein/local/summaries-<agent>.jsonl). */
 export interface SidecarSummary {
   id: string;
   semantic_summary: string;
@@ -11,8 +11,51 @@ export interface SidecarSummary {
   summary_by: string;
 }
 
-export function sidecarPath(repoPath: string): string {
-  return join(repoPath, ".reposkein", "local", "summaries.jsonl");
+/** Directory holding every agent's sidecar. Git-ignored in full. */
+export function sidecarDir(repoPath: string): string {
+  return join(repoPath, ".reposkein", "local");
+}
+
+/** Filesystem-safe slug for the writing agent.
+ *
+ *  Untrusted input: REPOSKEIN_AGENT comes from whatever launched the server, so
+ *  it is reduced to `[a-z0-9._-]` and capped. A value that reduces to nothing
+ *  (or is absent) falls back to "agent", which is also the pre-multi-agent
+ *  name — so a single-agent setup keeps one stable file. */
+export function agentSlug(agent = process.env.REPOSKEIN_AGENT): string {
+  const slug = (agent ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 40)
+    .replace(/[-.]+$/, "");
+  return slug === "" ? "agent" : slug;
+}
+
+/** THIS process's sidecar: one file per agent.
+ *
+ *  A single shared `local/summaries.jsonl` meant two agents running against the
+ *  same checkout silently overwrote each other — `upsertSidecar` rewrites the
+ *  whole file, so the slower writer's prose vanished with no error anywhere.
+ *  One file per writer removes the shared mutable state; the indexer folds
+ *  every `local/summaries*.jsonl` into the committed shards. */
+export function sidecarPath(repoPath: string, agent?: string): string {
+  return join(sidecarDir(repoPath), `summaries-${agentSlug(agent)}.jsonl`);
+}
+
+/** Every agent's sidecar in this repo, sorted, so reads are deterministic and
+ *  independent of directory order. Includes the pre-split
+ *  `local/summaries.jsonl` an older client may still be writing. */
+export function sidecarPaths(repoPath: string): string[] {
+  const dir = sidecarDir(repoPath);
+  try {
+    return readdirSync(dir)
+      .filter((f) => f.startsWith("summaries") && f.endsWith(".jsonl"))
+      .sort()
+      .map((f) => join(dir, f));
+  } catch {
+    return [];
+  }
 }
 
 /** Reads the sidecar into a map keyed by node id. Missing file → empty map.
@@ -47,8 +90,21 @@ export function readSidecar(path: string): Map<string, SidecarSummary> {
   return map;
 }
 
+/** Every agent's sidecar records, merged. Later files win on a collision, and
+ *  file order is sorted, so the result does not depend on directory order. */
+export function readAllSidecars(repoPath: string): Map<string, SidecarSummary> {
+  const merged = new Map<string, SidecarSummary>();
+  for (const p of sidecarPaths(repoPath)) {
+    for (const [id, rec] of readSidecar(p)) merged.set(id, rec);
+  }
+  return merged;
+}
+
 /** Upserts one record and rewrites the sidecar sorted by id (deterministic, no
- *  duplicate lines). Creates the local/ dir if needed. Best-effort. */
+ *  duplicate lines). Creates the local/ dir if needed. Best-effort.
+ *
+ *  Rewriting the whole file is safe only because `path` belongs to one agent:
+ *  see `sidecarPath`. */
 export function upsertSidecar(path: string, rec: SidecarSummary): void {
   const map = readSidecar(path);
   map.set(rec.id, rec);

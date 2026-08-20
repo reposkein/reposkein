@@ -16,7 +16,8 @@ import {
   type ParsedNode,
   type RepoSource,
 } from "./jsonlGraph.js";
-import { readSidecar, upsertSidecar, sidecarPath } from "./sidecar.js";
+import { readAllSidecars, upsertSidecar, sidecarPath } from "./sidecar.js";
+import { loadSummaryShards, recordSummaryConflicts } from "./summaryShards.js";
 
 function str(v: unknown): string | null {
   return typeof v === "string" ? v : null;
@@ -81,7 +82,8 @@ const hasLabel = (n: ParsedNode, l: string): boolean => n.labels.includes(l);
  *
  *  Reloads when either ROOT JSONL file's mtime changes (v1: a child-only
  *  change without a root change won't trigger reload — acceptable).
- *  writeSummary persists to the durable sidecar (.reposkein/local/summaries.jsonl). */
+ *  writeSummary persists to this agent's durable sidecar
+ *  (.reposkein/local/summaries-<agent>.jsonl). */
 export class JsonlGraphStore implements GraphStore {
   private graph: ParsedGraph = emptyGraph();
   private mtime = -1;
@@ -158,9 +160,28 @@ export class JsonlGraphStore implements GraphStore {
     this.mtime = m;
     try {
       this.graph = buildFederatedGraph(this.collectRepos());
-      // Overlay the ROOT's durable sidecar summaries (child sidecars are their
-      // own concern; v1 overlays the active repo only).
-      for (const [id, rec] of readSidecar(this.sidecarFile)) {
+      // Overlay the committed shards. `index` already grafts them into
+      // nodes.jsonl, so this only matters between indexes — a teammate's
+      // summaries arriving with a `git pull` are readable before the next
+      // re-index. Gated on the content hash for exactly the reason the indexer
+      // gates its graft: a summary whose node has since changed is stale, and
+      // serving it as current is worse than not serving it.
+      const shards = loadSummaryShards(this.repoPath);
+      for (const [id, rec] of shards.summaries) {
+        const n = this.graph.byId.get(id);
+        if (!n) continue;
+        if (rec.props.summary_of_hash !== n.props.content_hash) continue;
+        for (const [k, v] of Object.entries(rec.props)) n.props[k] = v;
+      }
+      // A merged shard can hold two different summaries for one node. The
+      // winner is deterministic and matches what the indexer will write; the
+      // loser is authored prose, so it is preserved for a human rather than
+      // discarded on the read path.
+      recordSummaryConflicts(this.repoPath, shards.conflicts);
+      // Then this machine's sidecars — every agent's, not just this process's,
+      // so two agents on one checkout see each other's work. These are newer
+      // than anything committed by construction.
+      for (const [id, rec] of readAllSidecars(this.repoPath)) {
         const n = this.graph.byId.get(id);
         if (n) {
           n.props.semantic_summary = rec.semantic_summary;

@@ -1,0 +1,173 @@
+{
+  "$comment": [
+    "Shared test vectors for the sharded summary store. Asserted by BOTH suites:",
+    "indexer/crates/cli/tests/summary_vectors.rs and mcp/test/summaryShards.test.ts.",
+    "",
+    "The point is that the Rust indexer (sole writer) and the TypeScript MCP",
+    "server (reader) resolve a merged shard to the SAME winner. If they disagree,",
+    "the server serves prose the next index is about to overwrite. Both sides read",
+    "these exact lines and must agree line for line, so a change to either",
+    "implementation that drifts from the other fails here first.",
+    "",
+    "shard_keys are Rust-only: they exist so the committed layout cannot change",
+    "silently, but TypeScript never computes a shard key — it enumerates shard",
+    "files with readdir, which is why no BLAKE3 implementation is needed there."
+  ],
+  "shard_key": {
+    "algorithm": "first 2 lowercase hex chars of BLAKE3(node_id utf-8)",
+    "vectors": [
+      { "node_id": "rs1:abcdef012345:func:src/app.py#handler@0", "shard": "3f" },
+      { "node_id": "rs1:abcdef012345:class:src/models.py#User@0", "shard": "34" },
+      { "node_id": "rs1:abcdef012345:file:README.md", "shard": "04" },
+      { "node_id": "rs1:r:func:m.py#f@0", "shard": "64" },
+      { "node_id": "", "shard": "af" }
+    ]
+  },
+  "dedupe": {
+    "rule": [
+      "Records claiming the same id are reduced to one winner:",
+      "1. greater summary_at wins (missing summary_at counts as the empty string)",
+      "2. tie -> the byte-lexicographically smaller RAW SOURCE LINE wins",
+      "Byte order over the raw line (never a re-serialization) is what lets two",
+      "languages agree without sharing a serializer.",
+      "Identical duplicate lines collapse silently and are NOT conflicts.",
+      "Every non-winning DIVERGENT record is preserved as a conflict, never dropped.",
+      "Lines starting with a git conflict marker are skipped with a warning."
+    ],
+    "cases": [
+      {
+        "name": "single record passes through",
+        "lines": ["{\"id\":\"a\",\"semantic_summary\":\"only\"}"],
+        "winners": { "a": "{\"id\":\"a\",\"semantic_summary\":\"only\"}" },
+        "conflicts": [],
+        "skipped": 0
+      },
+      {
+        "name": "union merge duplicated an unchanged line",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"same\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"same\"}"
+        ],
+        "winners": { "a": "{\"id\":\"a\",\"semantic_summary\":\"same\"}" },
+        "conflicts": [],
+        "skipped": 0
+      },
+      {
+        "name": "newer summary_at wins regardless of file order",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "name": "newer summary_at wins with the file order reversed",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "name": "equal timestamps fall back to raw-line byte order",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zebra\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"apple\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"apple\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zebra\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "name": "a record with no summary_at loses to one that has it",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"undated\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"dated\",\"summary_at\":\"2020-01-01T00:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"dated\",\"summary_at\":\"2020-01-01T00:00:00Z\"}"
+        },
+        "conflicts": ["{\"id\":\"a\",\"semantic_summary\":\"undated\"}"],
+        "skipped": 0
+      },
+      {
+        "name": "unresolved merge markers are skipped and both sides survive",
+        "lines": [
+          "<<<<<<< HEAD",
+          "{\"id\":\"a\",\"semantic_summary\":\"ours\"}",
+          "=======",
+          "{\"id\":\"b\",\"semantic_summary\":\"theirs\"}",
+          ">>>>>>> feature/other"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"ours\"}",
+          "b": "{\"id\":\"b\",\"semantic_summary\":\"theirs\"}"
+        },
+        "conflicts": [],
+        "skipped": 3
+      },
+      {
+        "name": "diff3 markers are skipped too",
+        "lines": [
+          "<<<<<<< ours",
+          "{\"id\":\"a\",\"semantic_summary\":\"ours\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "||||||| base",
+          "{\"id\":\"a\",\"semantic_summary\":\"base\",\"summary_at\":\"2026-08-01T10:00:00Z\"}",
+          "=======",
+          "{\"id\":\"a\",\"semantic_summary\":\"theirs\",\"summary_at\":\"2026-08-21T10:00:00Z\"}",
+          ">>>>>>> theirs"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"theirs\",\"summary_at\":\"2026-08-21T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"base\",\"summary_at\":\"2026-08-01T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"ours\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 4
+      },
+      {
+        "name": "malformed and id-less lines are dropped, valid ones are not",
+        "lines": [
+          "not json at all",
+          "{\"semantic_summary\":\"no id\"}",
+          "",
+          "{\"id\":\"a\",\"semantic_summary\":\"kept\"}"
+        ],
+        "winners": { "a": "{\"id\":\"a\",\"semantic_summary\":\"kept\"}" },
+        "conflicts": [],
+        "skipped": 2
+      },
+      {
+        "name": "unicode prose round-trips and compares by utf-8 bytes",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"caf\\u00e9 ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"Ω omega\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"caf\\u00e9 ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"Ω omega\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      }
+    ]
+  }
+}

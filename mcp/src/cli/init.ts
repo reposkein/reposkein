@@ -109,9 +109,11 @@ export async function runInit(repoPath = ".", opts: { index?: boolean } = {}): P
   console.error("\nreposkein: ready. Add this MCP server to your client config:\n");
   console.error(mcpConfigSnippet(repoPath));
   console.error(
-    "\nCommit .reposkein/meta.json, config.toml and summaries.jsonl. nodes.jsonl and edges.jsonl are " +
-      "derived from your working tree and git-ignored: every clone rebuilds them in seconds, and committing " +
-      "them would conflict on every branch that touches code." +
+    "\nCommit .reposkein/meta.json, config.toml, .gitignore, .gitattributes and summaries/. " +
+      "nodes.jsonl and edges.jsonl are derived from your working tree and git-ignored: every clone " +
+      "rebuilds them in seconds, and committing them would conflict on every branch that touches code. " +
+      "Authored summaries live in .reposkein/summaries/<xx>.jsonl — one small file per hash bucket, so " +
+      "two branches summarising different code never touch the same file." +
       "\nVerify anytime with `reposkein-mcp doctor`; re-index after big changes with `reposkein-mcp index` " +
       "(or the agent's reindex_file / init_cpg_skeleton tools)."
   );

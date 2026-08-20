@@ -93,14 +93,29 @@ describe("record_decision", () => {
     expect(res.isError).toBe(true);
   });
 
-  it("mints an ordinal id on same-day same-slug collision instead of overwriting", async () => {
+  it("salts the slug from the body on a same-day same-slug collision instead of overwriting", async () => {
     const store = fakeStore({});
     const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
     await record({ ...baseArgs });
     const res2 = await record({ ...baseArgs, decision: "We will use X differently." });
     const out2 = parse(res2);
-    expect(out2.decision_id).toBe("adr:2026-08-20-use-x-for-y.1");
+    // Content-derived, not an ordinal: two branches recording the same title on
+    // the same day would both pick `.1` and collide on one filename, putting a
+    // merge conflict back into the store that file-per-decision exists to
+    // avoid. Different bodies must produce different files.
+    expect(out2.decision_id).toMatch(/^adr:2026-08-20-use-x-for-y-[0-9a-f]{6}$/);
+    expect(out2.decision_id).not.toBe("adr:2026-08-20-use-x-for-y");
     expect(loadDecisions(root).decisions).toHaveLength(2);
+  });
+
+  it("gives two different bodies two different salted ids", async () => {
+    const store = fakeStore({});
+    const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
+    await record({ ...baseArgs });
+    const a = parse(await record({ ...baseArgs, decision: "We will use X one way." }));
+    const b = parse(await record({ ...baseArgs, decision: "We will use X another way." }));
+    expect(a.decision_id).not.toBe(b.decision_id);
+    expect(loadDecisions(root).decisions).toHaveLength(3);
   });
 
   it("flips superseded records atomically and links both directions", async () => {
@@ -137,7 +152,7 @@ describe("record_decision", () => {
     const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
     const res = await record({ ...baseArgs });
     const out = parse(res);
-    expect(out.decision_id).toBe("adr:2026-08-20-use-x-for-y.1");
+    expect(out.decision_id).toMatch(/^adr:2026-08-20-use-x-for-y-[0-9a-f]{6}$/);
     expect(readFileSync(damaged, "utf8")).toContain("<<<<<<<"); // untouched
   });
 
