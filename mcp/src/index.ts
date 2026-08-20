@@ -29,6 +29,7 @@ import { makeGetDecision } from "./tools/getDecision.js";
 import { resolveRepoId } from "./store/repoId.js";
 import type { RepoResolution } from "./store/resolveRepoPath.js";
 import { RepoSession } from "./store/repoSession.js";
+import { makeCache } from "./store/repoContextCache.js";
 import { ensureGraph } from "./indexer/ensureGraph.js";
 import { ensureIndexerBinary, packageVersion } from "./indexer/fetchBinary.js";
 import { spawnIndexer } from "./indexer/runIndexer.js";
@@ -110,6 +111,24 @@ export function repoRequiredMessage(resolution: RepoResolution): string {
   );
 }
 
+// Exported for the regression test below (repoRequiredMessage.test.ts) — it
+// must name the found path and the fix (`reposkein-mcp index`), not repeat
+// the generic "no repo found" message: a repo WAS found here, it's just not
+// indexed yet (or, if `.reposkein/` isn't actually there, misconfigured).
+export function repoUnindexedMessage(repoPath: string): string {
+  if (existsSync(join(repoPath, ".reposkein"))) {
+    return (
+      `Found .reposkein/ at ${repoPath}, but it has no meta.json (not indexed yet). ` +
+      `Run \`reposkein-mcp index ${repoPath}\` (or the init_cpg_skeleton tool) to build it, ` +
+      "then retry this call."
+    );
+  }
+  return (
+    `${repoPath} has no .reposkein/ directory. Run \`reposkein-mcp init ${repoPath}\` there, ` +
+    "or point REPOSKEIN_REPO_PATH / select_repo at a repo that already has one."
+  );
+}
+
 // Exported for the regression test. `hops` MUST stay a bounded integer: a literal union
 // (z.union([z.literal(1), z.literal(2)])) serialises to JSON-Schema `anyOf:[{const:1},{const:2}]`,
 // which Gemini's tool-schema validator 400-rejects — and one bad tool declaration fails the
@@ -175,22 +194,29 @@ export async function main(): Promise<void> {
   // rebuilding the store object would also throw away that per-instance
   // mtime cache — so one context is built per repoPath and reused, letting
   // `select_repo` switch back and forth cheaply too.
-  const repoContexts = new Map<string, { repoId: string | undefined; store: GraphStore }>();
-  async function getRepoContext(path: string): Promise<{ repoId: string | undefined; store: GraphStore }> {
-    const cached = repoContexts.get(path);
-    if (cached) return cached;
-    const id = resolveRepoId(path, process.env.REPOSKEIN_REPO_ID);
-    // Build the graph if the repo has none yet. Derived JSONL is git-ignored,
-    // so a fresh clone arrives without it; without this the first query on a
-    // newly selected repo would fail on one that indexes fine in seconds.
-    await ensureGraph(path, id, {
-      mode: (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase(),
-      neo4jConfigured: !!process.env.NEO4J_PASSWORD,
-    });
-    const ctx = { repoId: id, store: buildStore(path, id) };
-    repoContexts.set(path, ctx);
-    return ctx;
-  }
+  //
+  // Only a SUCCESSFUL resolution (repoId defined) is cached — see
+  // store/repoContextCache.ts. A repo whose `.reposkein/` exists but isn't
+  // indexed yet (no meta.json) is a transient, fixable state: an agent might
+  // run `reposkein-mcp index` (or init_cpg_skeleton) out-of-band and expect
+  // the very next call in this same session to pick it up. Caching that
+  // failure would freeze the session on a stale "not found" forever,
+  // undercutting select_repo's whole no-restart-needed point.
+  const getRepoContext = makeCache(
+    async (path: string): Promise<{ repoId: string | undefined; store: GraphStore }> => {
+      const id = resolveRepoId(path, process.env.REPOSKEIN_REPO_ID);
+      // Build the graph if the repo has none yet. Derived JSONL is
+      // git-ignored, so a fresh clone arrives without it; without this the
+      // first query on a newly selected repo would fail on one that indexes
+      // fine in seconds.
+      await ensureGraph(path, id, {
+        mode: (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase(),
+        neo4jConfigured: !!process.env.NEO4J_PASSWORD,
+      });
+      return { repoId: id, store: buildStore(path, id) };
+    },
+    (ctx) => !!ctx.repoId
+  );
 
   type ActiveRepo =
     | { ok: true; repoPath: string; repoId: string; store: GraphStore }
@@ -202,7 +228,10 @@ export async function main(): Promise<void> {
     const resolution = session.resolve();
     if (!resolution.repoPath) return { ok: false, message: repoRequiredMessage(resolution) };
     const ctx = await getRepoContext(resolution.repoPath);
-    if (!ctx.repoId) return { ok: false, message: repoRequiredMessage(resolution) };
+    // Distinct from repoRequiredMessage: a repo path WAS resolved here — the
+    // problem is it isn't indexed (or doesn't actually have .reposkein/),
+    // not that none could be found at all. See repoUnindexedMessage.
+    if (!ctx.repoId) return { ok: false, message: repoUnindexedMessage(resolution.repoPath) };
     return { ok: true, repoPath: resolution.repoPath, repoId: ctx.repoId, store: ctx.store };
   }
   const errResult = (message: string): ToolResult => ({ content: [{ type: "text", text: message }], isError: true });
