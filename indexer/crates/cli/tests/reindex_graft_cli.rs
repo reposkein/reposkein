@@ -18,22 +18,36 @@ fn summary_survives_reindex_when_source_unchanged() {
     fs::write(root.join("m.py"), b"def f():\n    return 1\n").unwrap();
     index(root);
 
-    // Inject a summary onto f, stamped with its current content_hash.
+    // Author a summary on f, stamped with its current content_hash.
+    //
+    // Written through the sidecar — the supported authored path — rather than
+    // injected into nodes.jsonl. nodes.jsonl is derived and git-ignored; the
+    // indexer only mines it for summaries during the one-shot #35 migration,
+    // because it survives `git checkout` and treating it as an authored source
+    // forever leaks prose between branches. What is under test here is the
+    // graft rule (hash matches → keep, hash moved → drop), and that rule is
+    // the same whichever source the record came from.
+    let id = "rs1:r:func:m.py#f@0";
     let nodes_path = root.join(".reposkein/nodes.jsonl");
-    let text = fs::read_to_string(&nodes_path).unwrap();
-    let mut lines: Vec<String> = Vec::new();
-    let mut hash = String::new();
-    for line in text.lines() {
-        let mut v: serde_json::Value = serde_json::from_str(line).unwrap();
-        if v["id"].as_str().unwrap().contains(":func:m.py#f@0") {
-            hash = v["content_hash"].as_str().unwrap().to_string();
-            v["semantic_summary"] = serde_json::json!("returns one");
-            v["summary_of_hash"] = serde_json::json!(hash);
-        }
-        lines.push(serde_json::to_string(&v).unwrap());
-    }
-    fs::write(&nodes_path, lines.join("\n") + "\n").unwrap();
+    let hash = {
+        let text = fs::read_to_string(&nodes_path).unwrap();
+        text.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| v["id"] == id)
+            .and_then(|v| v["content_hash"].as_str().map(String::from))
+            .expect("f content_hash")
+    };
     assert!(!hash.is_empty());
+    let sidecar = root.join(".reposkein/local/summaries-agent.jsonl");
+    fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+    fs::write(
+        &sidecar,
+        format!(
+            "{{\"id\":\"{id}\",\"semantic_summary\":\"returns one\",\"summary_of_hash\":\"{hash}\"}}\n"
+        ),
+    )
+    .unwrap();
+    index(root);
 
     // Reindex without changing the source → summary preserved.
     index(root);

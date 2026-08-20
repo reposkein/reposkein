@@ -10,23 +10,25 @@ use reposkein_lang_java::JavaExtractor;
 use reposkein_lang_python::PythonExtractor;
 use reposkein_lang_rust::RustExtractor;
 use reposkein_lang_ts::{JavaScriptExtractor, TypeScriptExtractor};
-use serde_json::{Map, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PRE_COMMIT: &str = r#"#!/bin/sh
 # reposkein-managed
 # RepoSkein: keep the local .reposkein graph in sync with the working tree.
-# Nothing is staged. nodes.jsonl / edges.jsonl are derived output and are
-# git-ignored; authored summaries land in .reposkein/summaries.jsonl, which you
-# stage yourself like any other edit.
+# This script stages nothing. nodes.jsonl / edges.jsonl are derived output and
+# are git-ignored. Authored summaries land in .reposkein/summaries/<xx>.jsonl,
+# which IS committed: `stage-summaries` prints a hint when those shards changed
+# and were left out of the commit, and stages them only if you opted in with
+# `[hooks] stage_summaries = true` in .reposkein/config.toml.
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
   echo "reposkein: indexer not found; skipping graph refresh (commit continues)" >&2
   exit 0
 fi
 "$BIN" index . >/dev/null 2>&1 || { echo "reposkein: index failed; skipping refresh" >&2; exit 0; }
+"$BIN" stage-summaries . || true
 exit 0
 "#;
 
@@ -136,6 +138,12 @@ enum Commands {
         /// Install git hooks + merge driver (currently the only init action).
         #[arg(long)]
         hooks: bool,
+    },
+    /// Report (or, when `[hooks] stage_summaries = true`, stage) committed
+    /// summary shards that changed but are not in the index. Run by pre-commit.
+    StageSummaries {
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
     /// Git merge driver for canonical JSONL: <base> <ours> <theirs>; result
     /// is written back to the <ours> path.
@@ -260,7 +268,52 @@ enabled = ["python", "typescript", "rust", "go", "java", "csharp"]
 [neo4j]
 uri = "neo4j://localhost:7687"
 # credentials come from env (NEO4J_USER / NEO4J_PASSWORD), never committed
+
+[hooks]
+# Stage `.reposkein/summaries/` from the pre-commit hook when it changed.
+# The shards are authored prose an agent wrote during the session; without
+# this you get a hint on stderr and stage them yourself. Set to false if you
+# prefer to review every summary before it enters a commit.
+stage_summaries = true
 "#;
+
+/// Reads a boolean key from a `[section]` of `.reposkein/config.toml`.
+///
+/// A deliberate 20-line scanner rather than a TOML dependency: the indexer
+/// reads exactly one setting, and its config is a file this binary writes.
+/// Absent file, absent section, or absent key all mean `None` — which is how
+/// an existing repo (whose config.toml predates the section, and which
+/// `write_reposkein_layout` never rewrites) keeps its current behaviour until
+/// someone opts in by hand.
+fn config_bool(out_dir: &Path, section: &str, key: &str) -> Option<bool> {
+    let text = std::fs::read_to_string(out_dir.join("config.toml")).ok()?;
+    let mut in_section = false;
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('#') {
+            continue;
+        }
+        if l.starts_with('[') {
+            in_section = l == format!("[{section}]");
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let Some((k, v)) = l.split_once('=') else {
+            continue;
+        };
+        if k.trim() != key {
+            continue;
+        }
+        return match v.split('#').next().unwrap_or("").trim() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
+    }
+    None
+}
 
 struct IndexRun {
     repo: String,
@@ -356,60 +409,74 @@ fn run_index(
     let out_dir = path.join(".reposkein");
     std::fs::create_dir_all(&out_dir).context("failed to create .reposkein/")?;
     let nodes_path = out_dir.join("nodes.jsonl");
-    let summaries_path = out_dir.join("summaries.jsonl");
 
     // Collect authored summaries from every source, newest last.
     //
     // Structure is rebuilt from source on every index, so nodes.jsonl and
     // edges.jsonl are recoverable at any time. Summaries are not: an agent
     // wrote them and nothing can regenerate them. They are therefore gathered
-    // separately and persisted to `.reposkein/summaries.jsonl`, the one file in
-    // .reposkein/ worth committing.
-    let mut authored: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    // separately and persisted to `.reposkein/summaries/<xx>.jsonl`, the shards
+    // that are the one part of .reposkein/ worth committing.
+    // ONE accumulator for every source, folded oldest provenance first. Each
+    // fold goes through `LoadedSummaries`, so displacement is always a decided
+    // outcome with the loser preserved — never a silent overwrite. Cross-source
+    // folds use `supersedes` (a newer source wins unless it is strictly older
+    // by `summary_at`); records within one source use `beats`.
+    let mut authored = reposkein_core::summaries::LoadedSummaries::default();
     // 1) Legacy: summaries inside a previously committed nodes.jsonl, so the
     //    first index after upgrading harvests them instead of dropping them.
-    //    Best-effort — a corrupt derived file must never abort an index.
-    //    Retained (not just absorbed) so the graph_delta diff below is free.
+    //    ONE-SHOT — see `legacy_nodes_harvest_needed` for why running this on
+    //    every index is actively harmful. Best-effort: a corrupt derived file
+    //    must never abort an index. `prev_nodes` is retained regardless (not
+    //    just absorbed) so the graph_delta diff below is free.
     let prev_nodes: Option<Vec<reposkein_core::model::Node>> = std::fs::read_to_string(&nodes_path)
         .ok()
         .and_then(|prev| reposkein_core::jsonl::read_nodes(&prev).ok());
-    if let Some(ref existing) = prev_nodes {
-        absorb_summaries(&mut authored, existing);
-    }
-    // 2) The committed summaries file: what teammates share.
-    if let Ok(text) = std::fs::read_to_string(&summaries_path) {
-        absorb_summaries(
-            &mut authored,
-            &reposkein_core::jsonl::read_sidecar_summaries(&text),
-        );
-    }
-    // 3) The live DB's summaries (PRD §9 Phase 3).
-    if let Some(db_nodes) = db_summary_nodes(&repo) {
-        absorb_summaries(&mut authored, &db_nodes);
-    }
-    // 4) The JSONL-mode sidecar. Atomically *claim* it (rename aside) BEFORE
-    //    reading: a write_semantic_summary landing during this window then
-    //    writes a FRESH sidecar that survives to the next index, instead of
-    //    being erased by a blind truncate (data loss).
-    let sidecar_path = out_dir.join("local").join("summaries.jsonl");
-    let claimed_path = out_dir.join("local").join("summaries.consuming.jsonl");
-    let claimed = std::fs::rename(&sidecar_path, &claimed_path).is_ok();
-    if claimed {
-        if let Ok(text) = std::fs::read_to_string(&claimed_path) {
-            absorb_summaries(
-                &mut authored,
-                &reposkein_core::jsonl::read_sidecar_summaries(&text),
-            );
+    if legacy_nodes_harvest_needed(&out_dir) {
+        if let Some(ref existing) = prev_nodes {
+            authored.absorb_nodes(existing);
         }
     }
-    let authored_nodes: Vec<reposkein_core::model::Node> = authored
-        .into_iter()
-        .map(|(id, props)| reposkein_core::model::Node {
-            id,
-            labels: Vec::new(),
-            props,
-        })
-        .collect();
+    // Claim every file that must be folded in and then removed, BEFORE reading
+    // any of it: renaming aside is atomic, so a write_semantic_summary landing
+    // during this window writes a FRESH sidecar that survives to the next index
+    // instead of being erased by a blind truncate (data loss). A run that dies
+    // mid-index leaves its claims in local/consuming/, and the next run picks
+    // them up — the claim is a hand-off, never a delete.
+    let claims = claim_summary_sources(&out_dir);
+    // 2) The committed shards: what teammates share. Tolerant of conflict
+    //    markers and duplicate ids, because a shard is a merged file.
+    let mut committed = reposkein_core::summaries::LoadedSummaries::default();
+    for (label, text) in read_summary_shards(&out_dir) {
+        committed.absorb(&label, &text);
+    }
+    // 3) The pre-sharding `.reposkein/summaries.jsonl`, claimed above. Read for
+    //    one release so a repo (or a teammate still on the old indexer) that
+    //    re-creates it loses nothing; the claim is what retires the file.
+    for p in &claims.legacy {
+        if let Ok(text) = std::fs::read_to_string(p) {
+            committed.absorb(&label_of(p), &text);
+        }
+    }
+    authored.absorb_source(committed);
+    // 4) The live DB's summaries (PRD §9 Phase 3).
+    if let Some(db_nodes) = db_summary_nodes(&repo) {
+        authored.absorb_node_source(&db_nodes);
+    }
+    // 5) The per-agent JSONL sidecars, claimed above. Newest source: these are
+    //    the writes made since the last index, by every agent on this machine.
+    let mut sidecars = reposkein_core::summaries::LoadedSummaries::default();
+    for p in &claims.sidecars {
+        if let Ok(text) = std::fs::read_to_string(p) {
+            sidecars.absorb(&label_of(p), &text);
+        }
+    }
+    authored.absorb_source(sidecars);
+    for w in &authored.warnings {
+        eprintln!("reposkein: {w}");
+    }
+    let conflicts = std::mem::take(&mut authored.conflicts);
+    let authored_nodes: Vec<reposkein_core::model::Node> = authored.nodes();
 
     // Derived output. Summaries are grafted in only where `summary_of_hash`
     // still matches the node, so a stale summary never reads as current.
@@ -433,17 +500,20 @@ fn run_index(
         .into_iter()
         .filter(|n| live.contains(n.id.as_str()))
         .collect();
-    let summaries = jsonl::summaries_to_jsonl(&surviving);
-    if summaries.is_empty() {
-        // Leave no empty file behind in repos that have no summaries at all.
-        let _ = std::fs::remove_file(&summaries_path);
-    } else {
-        std::fs::write(&summaries_path, summaries).context("failed to write summaries.jsonl")?;
+    write_summary_shards(&out_dir, &surviving).context("failed to write summary shards")?;
+    // Divergent records that lost the tiebreak are never discarded: they go to
+    // a git-ignored file a human can read, and doctor points at it.
+    record_summary_conflicts(&out_dir, &conflicts);
+    // Everything claimed is now persisted in the shards; release the claims.
+    for p in claims.legacy.iter().chain(claims.sidecars.iter()) {
+        let _ = std::fs::remove_file(p);
     }
-    if claimed {
-        // Now persisted in summaries.jsonl; drop the claim.
-        let _ = std::fs::remove_file(&claimed_path);
-    }
+    let _ = std::fs::remove_dir(out_dir.join("local").join(CONSUMING_DIR));
+    // The shards are written, so whatever nodes.jsonl was carrying is now in
+    // them. Close the one-shot harvest: from here on, steady-state indexing
+    // sources committed shards + per-agent sidecars only, and a branch switch
+    // cannot leak the other branch's prose back in.
+    mark_legacy_nodes_harvested(&out_dir);
 
     write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
 
@@ -509,22 +579,343 @@ fn is_reposkein_merge_attr(line: &str) -> bool {
         && l.contains("merge=")
 }
 
-/// Folds any nodes carrying summary props into `authored`, keyed by node id.
-/// Later calls win, so callers should feed sources oldest-first.
-fn absorb_summaries(
-    authored: &mut BTreeMap<String, Map<String, Value>>,
-    records: &[reposkein_core::model::Node],
-) {
-    for n in records {
-        let part = reposkein_core::merge::summary_part(&n.props);
-        if reposkein_core::merge::has_summary(&part) {
-            authored.insert(n.id.clone(), part);
-        }
+/// Pre-commit companion: notice when the authored summary shards changed and
+/// the commit does not carry them.
+///
+/// Summaries are the one thing in `.reposkein/` no re-index can recover, and an
+/// agent writes them mid-session — long after the developer last thought about
+/// `git add`. Silently staging them would put prose nobody read into a commit,
+/// so the default is a hint; `[hooks] stage_summaries = true` (the default for
+/// newly-initialized repos) opts into staging. Always exits 0: a commit must
+/// never fail because of this.
+fn stage_summaries(root: &Path) {
+    let out_dir = root.join(".reposkein");
+    let shard_dir = format!(".reposkein/{}", reposkein_core::summaries::SHARD_DIR);
+    // Porcelain over the shard directory only. `--untracked-files=all` so a
+    // brand-new shard (the common case: the repo's first summary) is seen.
+    let Some(status) = run_git(
+        root,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            &shard_dir,
+        ],
+    ) else {
+        return; // not a git repo, or git unavailable — nothing to hint about
+    };
+    // Column 2 is the worktree status: non-space means "changed and NOT staged"
+    // (`??` for untracked). A shard already fully staged reads as " M"/"A " with
+    // a space there, and needs no hint.
+    let dirty = status
+        .lines()
+        .filter(|l| l.len() > 2 && !l.starts_with("? ") && &l[1..2] != " ")
+        .count();
+    if dirty == 0 {
+        return;
     }
+    if config_bool(&out_dir, "hooks", "stage_summaries") == Some(true) {
+        if run_git(root, &["add", "--", &shard_dir]).is_some() {
+            eprintln!(
+                "reposkein: staged {dirty} changed summary shard(s) from {shard_dir}/ \
+                 ([hooks] stage_summaries)"
+            );
+        }
+        return;
+    }
+    eprintln!(
+        "reposkein: {dirty} authored summary shard(s) under {shard_dir}/ changed but are not \
+         staged.\n  Nothing can regenerate them — `git add {shard_dir}` to include them, or set \
+         `[hooks] stage_summaries = true` in .reposkein/config.toml to do it automatically."
+    );
 }
 
-/// Writes meta.json, .reposkein/.gitignore, default config.toml (if absent),
-/// and the git-ignored local/ dir.
+/// Staging directory (under `.reposkein/local/`) for files an index run has
+/// claimed but not yet folded into the shards.
+const CONSUMING_DIR: &str = "consuming";
+
+/// Marks that this checkout has already done the one-shot #35 harvest, so the
+/// next index must not repeat it. Lives under the git-ignored `local/`, which
+/// is exactly the scope we want: per working tree, surviving branch switches.
+const LEGACY_HARVEST_MARKER: &str = ".legacy-nodes-harvested";
+
+const LEGACY_HARVEST_MARKER_BODY: &str = "\
+# Written by `reposkein-indexer index`. Do not commit (local/ is git-ignored).
+#
+# This checkout has already harvested authored summaries out of a pre-#35
+# committed nodes.jsonl. Delete this file only to force that migration to run
+# again — and only if you know the checkout still holds an un-migrated
+# nodes.jsonl, because re-running the harvest resurrects summaries from
+# whatever branch was last indexed here.
+";
+
+/// True when this index run should harvest summaries out of `nodes.jsonl`.
+///
+/// This harvest exists for one thing: the #35 migration, where a repo indexed
+/// by an older RepoSkein carries its summaries INSIDE a then-committed
+/// nodes.jsonl. Running it on every index looks harmless and is not.
+///
+/// nodes.jsonl is git-ignored, so it survives `git checkout`. Harvest it every
+/// time and a summary written on branch A is read back on branch B and written
+/// into branch B's committed shards — so every branch on the machine slowly
+/// accumulates every summary ever written there, and each one shows up as a
+/// shard diff against every other branch. That is precisely the cross-branch
+/// churn the sharding exists to remove; the migration path was quietly
+/// recreating it.
+///
+/// So it is one-shot per working tree, and only on evidence that this really is
+/// the migration: either the pre-sharding `summaries.jsonl` is still present,
+/// or no shards exist yet (nothing has been migrated in this checkout). Once a
+/// run completes, `mark_legacy_nodes_harvested` closes it permanently — the
+/// marker is what carries the "already done" fact across a branch switch, since
+/// the shards themselves do not.
+fn legacy_nodes_harvest_needed(out_dir: &Path) -> bool {
+    if out_dir.join("local").join(LEGACY_HARVEST_MARKER).exists() {
+        return false;
+    }
+    out_dir
+        .join(reposkein_core::summaries::LEGACY_FILE)
+        .exists()
+        || !out_dir.join(reposkein_core::summaries::SHARD_DIR).exists()
+}
+
+/// Closes the one-shot harvest for this working tree. Best-effort: failing to
+/// write the marker costs a redundant harvest next run, never correctness.
+fn mark_legacy_nodes_harvested(out_dir: &Path) {
+    let local = out_dir.join("local");
+    let marker = local.join(LEGACY_HARVEST_MARKER);
+    if marker.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&local);
+    let _ = std::fs::write(&marker, LEGACY_HARVEST_MARKER_BODY);
+}
+
+/// Files one index run has claimed and must delete once the shards are written.
+#[derive(Default)]
+struct SummaryClaims {
+    /// The pre-sharding `.reposkein/summaries.jsonl` (plus leftovers from a run
+    /// that died before finishing).
+    legacy: Vec<PathBuf>,
+    /// Per-agent `.reposkein/local/summaries*.jsonl` sidecars.
+    sidecars: Vec<PathBuf>,
+}
+
+fn label_of(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| p.display().to_string())
+}
+
+/// Renames `src` into `dir` under `stem`, picking `stem.1`, `stem.2`, … when
+/// taken. Never overwrites: `rename` clobbers its destination on Unix, and the
+/// destination here may be a claim a crashed run has not been credited for yet.
+fn claim_into(dir: &Path, src: &Path, stem: &str) -> Option<PathBuf> {
+    if !src.exists() {
+        return None;
+    }
+    std::fs::create_dir_all(dir).ok()?;
+    for n in 0..1000 {
+        let name = if n == 0 {
+            format!("{stem}.jsonl")
+        } else {
+            format!("{stem}.{n}.jsonl")
+        };
+        let dest = dir.join(&name);
+        if dest.exists() {
+            continue;
+        }
+        if std::fs::rename(src, &dest).is_ok() {
+            return Some(dest);
+        }
+        return None;
+    }
+    None
+}
+
+/// Atomically claims every summary source that must be folded into the shards
+/// and then retired: the pre-sharding committed file and each per-agent
+/// sidecar. Leftovers from a run that died mid-index are picked up too, so a
+/// crash costs an index, never a summary.
+fn claim_summary_sources(out_dir: &Path) -> SummaryClaims {
+    let local = out_dir.join("local");
+    let consuming = local.join(CONSUMING_DIR);
+    let mut claims = SummaryClaims::default();
+
+    // Leftovers first: they were claimed by an earlier run that never finished.
+    if let Ok(entries) = std::fs::read_dir(&consuming) {
+        let mut left: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        left.sort();
+        for p in left {
+            if label_of(&p).starts_with("legacy") {
+                claims.legacy.push(p);
+            } else {
+                claims.sidecars.push(p);
+            }
+        }
+    }
+
+    if let Some(p) = claim_into(
+        &consuming,
+        &out_dir.join(reposkein_core::summaries::LEGACY_FILE),
+        "legacy",
+    ) {
+        claims.legacy.push(p);
+    }
+
+    // Every `local/summaries*.jsonl`: one file per agent (REPOSKEIN_AGENT), so
+    // two agents writing on the same machine no longer overwrite each other.
+    let mut sidecar_srcs: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&local) {
+        for e in entries.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("summaries") && name.ends_with(".jsonl") && e.path().is_file() {
+                sidecar_srcs.push(e.path());
+            }
+        }
+    }
+    sidecar_srcs.sort();
+    for src in sidecar_srcs {
+        let stem = label_of(&src)
+            .strip_suffix(".jsonl")
+            .unwrap_or("sidecar")
+            .to_string();
+        if let Some(p) = claim_into(&consuming, &src, &stem) {
+            claims.sidecars.push(p);
+        }
+    }
+    claims
+}
+
+/// Reads every committed shard under `.reposkein/summaries/`, sorted by file
+/// name so the fold order — and therefore any tiebreak — is stable.
+fn read_summary_shards(out_dir: &Path) -> Vec<(String, String)> {
+    let dir = out_dir.join(reposkein_core::summaries::SHARD_DIR);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| reposkein_core::summaries::is_shard_file_name(n))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|n| {
+            std::fs::read_to_string(dir.join(&n))
+                .ok()
+                .map(|t| (format!("summaries/{n}"), t))
+        })
+        .collect()
+}
+
+/// Writes `path` via a temp file in the same directory plus a rename, so a
+/// reader never observes a half-written shard.
+fn atomic_write(path: &Path, text: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let name = label_of(path);
+    let tmp = dir.join(format!(".{name}.tmp"));
+    std::fs::write(&tmp, text).with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("rename into {}", path.display()))?;
+    Ok(())
+}
+
+/// Persists the authored summaries as `.reposkein/summaries/<xx>.jsonl`.
+///
+/// Only shards with content are written; a shard that empties out is deleted,
+/// and an empty `summaries/` directory is removed, so a repo with no authored
+/// prose leaves no artefact behind. Unchanged shards are not rewritten: the
+/// pre-commit hook runs this on every commit, and touching a file git would
+/// report as modified is exactly the churn this whole design removes.
+fn write_summary_shards(out_dir: &Path, nodes: &[reposkein_core::model::Node]) -> Result<()> {
+    let dir = out_dir.join(reposkein_core::summaries::SHARD_DIR);
+    let shards = reposkein_core::summaries::summaries_to_shards(nodes);
+
+    let existing: Vec<String> = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| reposkein_core::summaries::is_shard_file_name(n))
+                .collect()
+        })
+        .unwrap_or_default();
+    for name in &existing {
+        if !shards.contains_key(name) {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+    }
+    if shards.is_empty() {
+        let _ = std::fs::remove_dir(&dir); // no-op unless it is now empty
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    for (name, text) in &shards {
+        let target = dir.join(name);
+        if std::fs::read_to_string(&target).ok().as_deref() == Some(text.as_str()) {
+            continue;
+        }
+        atomic_write(&target, text)?;
+    }
+    Ok(())
+}
+
+/// Appends divergence losers to the git-ignored `local/conflicts.jsonl`.
+/// Best-effort: failing to record a conflict must not fail an index.
+fn record_summary_conflicts(out_dir: &Path, losers: &[reposkein_core::summaries::SummaryRecord]) {
+    if losers.is_empty() {
+        return;
+    }
+    let local = out_dir.join("local");
+    let path = local.join(reposkein_core::summaries::CONFLICTS_FILE);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = reposkein_core::summaries::conflicts_to_jsonl(&existing, losers);
+    if text == existing {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&local);
+    let _ = std::fs::write(&path, &text);
+    eprintln!(
+        "reposkein: {} divergent summary record(s) preserved in .reposkein/local/{} \
+         (the winner is in the shards; `reposkein-mcp doctor` reports this)",
+        losers.len(),
+        reposkein_core::summaries::CONFLICTS_FILE
+    );
+}
+
+/// The `.reposkein/.gitignore` this indexer maintains.
+///
+/// `summaries/.*` covers the dot-prefixed temp file `atomic_write` renames
+/// from: a crash between write and rename must not leave a committable
+/// artefact behind.
+const REPOSKEIN_GITIGNORE: &str = "local/\nnodes.jsonl\nedges.jsonl\nsummaries/.*\n";
+
+/// The `.reposkein/.gitattributes` this indexer maintains.
+///
+/// Scoped to the shards, and honest about its reach: a tree-level
+/// `.gitattributes` is not consulted by a forge computing mergeability in a
+/// bare repo (`docs/migrations/2026-08-06-stop-committing-derived-graph.md`),
+/// so this only helps LOCAL merges and rebases. It is still worth having,
+/// because that is where a developer hits the conflict by hand — and union's
+/// failure mode (a duplicated line) is one the tolerant reader dedupes.
+const REPOSKEIN_GITATTRIBUTES: &str = "\
+# Local merges of the authored summary shards resolve by keeping both sides.
+# Duplicate or divergent records are harmless: the reader dedupes by id with a
+# deterministic tiebreak and preserves the loser in local/conflicts.jsonl, and
+# the next `index` rewrites the shard canonically.
+# NOTE: forges compute mergeability in a bare repo, where this file is never
+# consulted. Merge smoothness comes from the sharding, not from this line.
+summaries/*.jsonl merge=union
+";
+
+/// Writes meta.json, .reposkein/.gitignore, .reposkein/.gitattributes, the
+/// default config.toml (if absent), and the git-ignored local/ dir.
 fn write_reposkein_layout(out_dir: &Path, repo_id: &str) -> Result<()> {
     std::fs::write(
         out_dir.join("meta.json"),
@@ -538,12 +929,10 @@ fn write_reposkein_layout(out_dir: &Path, repo_id: &str) -> Result<()> {
     // compute mergeability in a bare repo, where tree-level .gitattributes is
     // never consulted, and where union *does* apply it resolves by keeping both
     // sides' lines, producing duplicate ids for any node both branches touched.
-    // So they stay out of git. Authored summaries live in summaries.jsonl, which
-    // is committed.
-    std::fs::write(
-        out_dir.join(".gitignore"),
-        "local/\nnodes.jsonl\nedges.jsonl\n",
-    )?;
+    // So they stay out of git. Authored summaries live in summaries/<xx>.jsonl,
+    // which is committed.
+    std::fs::write(out_dir.join(".gitignore"), REPOSKEIN_GITIGNORE)?;
+    std::fs::write(out_dir.join(".gitattributes"), REPOSKEIN_GITATTRIBUTES)?;
     std::fs::create_dir_all(out_dir.join("local"))?;
     let cfg = out_dir.join("config.toml");
     if !cfg.exists() {
@@ -940,7 +1329,22 @@ fn main() -> Result<()> {
                     .status();
             }
 
+            // The shards get their own declaration, but it lives INSIDE
+            // .reposkein/ (see REPOSKEIN_GITATTRIBUTES) rather than in the root
+            // file: it is ours to own, it never collides with a user rule, and
+            // an uninstall is `rm -r .reposkein`. Written here too so a repo
+            // that runs `init --hooks` without a fresh `index` still gets it.
+            let out_dir = path.join(".reposkein");
+            if out_dir.is_dir() {
+                std::fs::write(out_dir.join(".gitattributes"), REPOSKEIN_GITATTRIBUTES)
+                    .context("write .reposkein/.gitattributes")?;
+            }
+
             println!("installed reposkein git hooks in {}", path.display());
+            Ok(())
+        }
+        Commands::StageSummaries { path } => {
+            stage_summaries(&path);
             Ok(())
         }
         Commands::MergeJsonl {

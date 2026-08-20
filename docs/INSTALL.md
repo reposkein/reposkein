@@ -75,7 +75,7 @@ Templates in §6.
 
 ### Q5 — What in `.reposkein/` goes into git?
 
-Not a question to ask; `init` sets it up. **Commit** `meta.json`, `config.toml` and `summaries.jsonl` (the summaries your agents author, which nothing can regenerate). **Do not commit** `nodes.jsonl` / `edges.jsonl` — `.reposkein/.gitignore` already excludes them. They are a pure function of the working tree, so every clone rebuilds them in seconds, and committing them would make every branch that touches code conflict with every other one. `local/` is ignored too.
+Not a question to ask; `init` sets it up. **Commit** `meta.json`, `config.toml`, `.gitignore`, `.gitattributes` and `summaries/` (the summaries your agents author, which nothing can regenerate). **Do not commit** `nodes.jsonl` / `edges.jsonl` — `.reposkein/.gitignore` already excludes them. They are a pure function of the working tree, so every clone rebuilds them in seconds, and committing them would make every branch that touches code conflict with every other one. `local/` is ignored too. Summaries are sharded into `summaries/<xx>.jsonl` so two branches rarely write the same file — see §4.2.
 
 ### Q6 — Install the cross-agent navigation skills?
 
@@ -147,11 +147,11 @@ Verify:
 
 ```sh
 reposkein-mcp doctor .       # ✓ binary  ✓ indexed (N nodes)  ✓ ready
-git add .reposkein/meta.json .reposkein/config.toml .reposkein/.gitignore
+git add .reposkein/meta.json .reposkein/config.toml .reposkein/.gitignore .reposkein/.gitattributes
 git commit -m "add RepoSkein config"
 ```
 
-`nodes.jsonl` and `edges.jsonl` are deliberately absent from that `git add`: they are derived, git-ignored, and rebuilt on demand. `summaries.jsonl` appears once an agent writes its first summary; commit it then.
+`nodes.jsonl` and `edges.jsonl` are deliberately absent from that `git add`: they are derived, git-ignored, and rebuilt on demand. `.reposkein/summaries/` appears once an agent writes its first summary; commit it then (§4.2).
 
 ### 4.1 Multi-repo workspaces
 
@@ -159,20 +159,61 @@ Run §4 once **per git sub-repo**. Don't try to run it in the workspace root if 
 
 Federation is derived at query time: when an MCP server points at one repo and a sibling/nested repo also has `.reposkein/`, passing `federated: true` to `semantic_find` / `get_context_profile` / `impact` stitches them via `FEDERATES_TO` edges (load-time only — never committed).
 
-### 4.2 Merge behaviour for `.reposkein/*.jsonl`
+### 4.2 Merge behaviour for `.reposkein/`
 
-`init --hooks` writes these `.gitattributes` rules:
+There is no `.gitattributes` rule for `nodes.jsonl` / `edges.jsonl`, and `init --hooks` removes any an older RepoSkein installed. Those files are **not committed** — a merge driver has nothing left to resolve, and the one it used to declare never ran where it mattered.
+
+That is the load-bearing fact for everything below: **a forge computes mergeability in a bare repository, where a tree-level `.gitattributes` is never consulted.** Verified with `git merge-tree --write-tree` against a bare clone — `git check-attr merge` reports `union` in a worktree and `unspecified` in the bare repo. So `merge=union` does not save you on GitHub or GitLab, and neither does a custom driver. See `docs/migrations/2026-08-06-stop-committing-derived-graph.md`.
+
+#### What is committed
+
+| Path | Committed | Why |
+|---|---|---|
+| `.reposkein/summaries/<xx>.jsonl` | **yes** | Agent-authored prose. Nothing can regenerate it. |
+| `.reposkein/meta.json`, `config.toml` | yes | Small, hand-edited, stable. |
+| `.reposkein/.gitignore`, `.gitattributes` | yes | The rules themselves. |
+| `.reposkein/nodes.jsonl`, `edges.jsonl` | no | Derived; rebuilt from source in seconds. |
+| `.reposkein/local/` | no | Per-machine scratch (sidecars, conflicts, deltas). |
+
+#### How the summary shards avoid conflicts
+
+Merge smoothness here comes from **file granularity**, not from a merge strategy — the same answer the decision log uses.
+
+A summary for node `<id>` lands in `.reposkein/summaries/<xx>.jsonl`, where `<xx>` is the first two hex characters of `BLAKE3(<id>)`. That is up to 256 small files. Two branches summarising different code almost always write different files, so their commits touch disjoint paths and a forge has nothing to conflict on. (Hashing rather than slicing the id matters: `rs1:<repo>:func:…` ids share long prefixes, so a prefix-based shard would put a whole repo in one file.)
+
+Inside a shard, `index` writes canonical bytes: one record per line, `id` first then sorted keys, sorted by id, LF-terminated, written via a temp file and a rename. The same tree produces the same bytes on every machine — CI enforces it.
+
+Four properties keep the remaining collisions harmless:
+
+1. **`.reposkein/.gitattributes` declares `summaries/*.jsonl merge=union`.** This helps *local* merges and rebases only — which is exactly where a human hits the conflict by hand. It is scoped inside `.reposkein/`, so it never collides with your own rules.
+2. **Readers dedupe by node id.** A union merge that keeps both sides' lines just produces a duplicate, and both the indexer and the MCP server collapse it.
+3. **Divergence resolves deterministically, by one of two rules.** Between two records found in the *same* place — two lines of one merged shard, or two agents' sidecars — only content can decide: the newer `summary_at` wins, and ties break on raw-line byte order. When a whole *newer source* is folded onto an older one (your sidecars onto the committed shards), provenance is real, so the newer source wins unless it is strictly older by `summary_at`. That second rule is why re-summarising a node you already summarised today still takes — `summary_at` is day-precision, so it would otherwise tie — and why a months-old local record can never clobber a teammate's newer one. Every machine picks the same winner either way.
+4. **The loser is never destroyed.** It is appended to `.reposkein/local/conflicts.jsonl`, and `reposkein-mcp doctor` reports it so a human can re-write anything worth keeping.
+
+A shard left with literal `<<<<<<<` markers is also survivable: both readers skip marker lines with a warning, and the next `index` rewrites the file cleanly.
+
+#### Staging the shards
+
+The pre-commit hook stages nothing by default; it runs `reposkein-indexer stage-summaries`, which prints a hint when authored shards changed and were left out of the commit. Newly-initialized repos get `[hooks] stage_summaries = true` in `.reposkein/config.toml`, which stages them automatically instead. Existing repos keep hint-only behaviour until someone adds that section by hand — an upgrade must not start putting new content into people's commits.
+
+#### Upgrading an existing repo
+
+Run `reposkein-mcp index .` once. It folds `.reposkein/summaries.jsonl` into the shards and retires the file; commit the result (one deletion, N small additions). Both files are read during this release, so a teammate still on the old indexer loses nothing — their re-created `summaries.jsonl` is folded in on your next index. Then run `reposkein-indexer init --hooks .` to drop any stale `merge=` line from your root `.gitattributes`.
+
+A repo old enough to have summaries living inside a once-committed `nodes.jsonl` gets those harvested too, on the **first** index only. That harvest is deliberately one-shot per working tree, recorded by `.reposkein/local/.legacy-nodes-harvested`: `nodes.jsonl` is git-ignored, so it survives `git checkout`, and mining it for authored prose on every index would write branch A's summaries into branch B's shards — reintroducing exactly the cross-branch churn the sharding removes. After that first run, steady state reads committed shards and per-agent sidecars only. Delete the marker only if you know the checkout still holds an un-migrated `nodes.jsonl`.
+
+If your repo-root `.gitignore` has a blanket rule over `.reposkein/`, add a negation for the shards or they are silently never committed:
 
 ```
-.reposkein/nodes.jsonl merge=union
-.reposkein/edges.jsonl merge=union
+**/.reposkein/*
+!**/.reposkein/summaries/
 ```
 
-`union` is a **built-in** git strategy, so forges honour it. A custom merge driver only resolves where its binary and `git config` exist — a developer's machine. GitHub and GitLab merge server-side with neither, cannot resolve the driver name, and fall back to a plain text merge. Since the pre-commit hook rewrites both files on every commit, that made *every* long-lived pull request conflict on them.
+`reposkein-mcp doctor` checks for exactly this.
 
-Union never conflicts. The merged file is briefly unsorted and may repeat a record both branches touched; that is safe because readers parse line-wise and the next `index` (which the pre-commit hook runs) re-sorts and de-duplicates by id. Structural fields are regenerated from source; summaries survive via the content-hash rule.
+#### Bulk re-summarization
 
-**Upgrading an existing repo:** re-run `reposkein-indexer init --hooks .` once. It rewrites any legacy `merge=reposkein-jsonl` lines in place, leaving your other `.gitattributes` rules untouched. Until you do, that repo keeps conflicting on forge-side merges.
+A sweep that rewrites many summaries at once touches many shards at once, which is the one workload sharding does *not* smooth over. Run those through a single serialized job on `main` rather than from a branch — see `docs/policies/bulk-resummarization-sweeps.md`.
 
 ### 4.3 Neo4j load (only if §1-Q2 = Neo4j)
 
@@ -263,7 +304,7 @@ Write `<repo>/.mcp.json`:
 
 Drop any block whose feature the user didn't enable. `REPOSKEIN_REPO_PATH` is the only required key.
 
-> **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. What is shared from `.reposkein/` is `meta.json`, `config.toml` and `summaries.jsonl`.
+> **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. What is shared from `.reposkein/` is `meta.json`, `config.toml`, `.gitignore`, `.gitattributes`, `summaries/` and `decisions/` (§4.2).
 
 ### 6.2 OpenCode (+ omo)
 

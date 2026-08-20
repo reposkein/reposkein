@@ -1,0 +1,53 @@
+{
+  "id": "adr:2026-08-20-shard-committed-summaries-by-blake3-node-id-rust-indexer-is",
+  "alternatives": "Keep one committed summaries.jsonl and declare merge=union: does not work on a forge, which is where the conflicts were reported.\n\nA custom merge driver: worse — it resolves only where its binary and git config exist, never in a bare repo.\n\nOne file per summary, like the decision log: correct on merges but produces a file per summarised node, which is thousands of tiny files in a real repo and a slow directory read on every startup. Sharding buys the same merge property at a bounded file count.\n\nShard by a prefix of the node id: free to compute, but rs1: ids share long prefixes, so the distribution collapses.\n\nLet the MCP server write shards too, so summaries land without an index: rejected — a second serializer is a standing threat to the byte-identical invariant CI enforces.\n\nResolve divergence by keeping both records under synthesised ids: turns one node's summary into several and corrupts recall. Preserving the loser out-of-band keeps the graph clean and the prose recoverable.",
+  "anchors": [
+    {
+      "hash": "14a88d5cc4e1d301eaef4df5c8a9a39721b4418109bf0bb29850ae98a798df63",
+      "kind": "File",
+      "name": "summaries.rs",
+      "node_id": "rs1:e1e153794891:file:indexer/crates/core/src/summaries.rs",
+      "path": "indexer/crates/core/src/summaries.rs"
+    },
+    {
+      "hash": "a08b39196e0fb8e513fdd63d7828dac412f4d811ef5c2f2650a50f7d7cc71428",
+      "kind": "File",
+      "name": "main.rs",
+      "node_id": "rs1:e1e153794891:file:indexer/crates/cli/src/main.rs",
+      "path": "indexer/crates/cli/src/main.rs"
+    },
+    {
+      "hash": "72f62cb8824f022c04d9f227c68e16f423fc5df0c92578e604ef077652cf7c5e",
+      "kind": "File",
+      "name": "summaryShards.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/store/summaryShards.ts",
+      "path": "mcp/src/store/summaryShards.ts"
+    },
+    {
+      "hash": "213b9cfb560357aa13e83e005e6e8c35834c2e1f20f7a8f7f6794b8852fd9820",
+      "kind": "File",
+      "name": "sidecar.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/store/sidecar.ts",
+      "path": "mcp/src/store/sidecar.ts"
+    }
+  ],
+  "body_hash": "e4e255f974f1164b9d150cf69686be208a25a87c3fbdb037db2816998af6e8ab",
+  "consequences": "The pre-sharding .reposkein/summaries.jsonl is read for one release and retired by the first index after upgrading; that is one deletion and N small additions per repo. A teammate still on the old indexer who re-creates the file loses nothing.\n\nA repo whose root .gitignore has a blanket rule over .reposkein/ silently commits no summaries at all. reposkein-mcp doctor now checks for that, along with an unsplit legacy file, damaged shards, and preserved merge losers.\n\nThe one workload sharding does not smooth over is a bulk re-summarization sweep, which writes every shard at once and collides with everything. Worse, two concurrent sweeps lose work silently — last writer wins, and no merge ever happens for the tiebreak to resolve. Policy: sweeps run serialized on main (docs/policies/bulk-resummarization-sweeps.md).\n\nA repo with no authored summaries leaves no summaries/ directory behind, and an emptied shard is deleted rather than left as an empty file.\n\nThe harvest of summaries out of nodes.jsonl is one-shot per working tree, marked by .reposkein/local/.legacy-nodes-harvested. It exists only for the #35 migration. nodes.jsonl is git-ignored, so it survives git checkout; mining it for authored prose on every index reads a summary written on branch A back out on branch B and writes it into branch B's committed shards, so every branch on the machine accumulates every summary ever written there and each one diffs against every other branch. That is the cross-branch churn this decision exists to remove, so steady-state indexing sources committed shards and per-agent sidecars only.",
+  "context": "Authored summaries were committed as one file, .reposkein/summaries.jsonl. Every branch that taught the agent anything rewrote it, so the moment any pull request merged, every other one reported a conflict on it — the same failure measured for nodes.jsonl in docs/migrations/2026-08-06-stop-committing-derived-graph.md.\n\nA .gitattributes merge=union rule cannot fix this. Forges compute mergeability in a bare repository, where a tree-level .gitattributes is never consulted; git check-attr reports union in a worktree and unspecified in the bare repo. That was verified before, and it is why the derived graph stopped being committed at all.\n\nSummaries cannot take the same exit. Nothing regenerates them: an agent wrote the prose, and once lost it is gone. They must stay in git, so the conflict has to be solved rather than avoided.\n\nTwo further problems shared the same root. On one machine, several agents wrote through a single local/summaries.jsonl sidecar that is rewritten whole on every upsert, so the slower writer's prose vanished silently. And any second writer of the committed file would have had to match serde_json byte for byte to keep the CI determinism gate green.",
+  "decided_at": "2026-08-20",
+  "decided_by": "agent",
+  "decision": "Summaries are sharded: a summary for node <id> is written to .reposkein/summaries/<xx>.jsonl, where <xx> is the first two hex characters of BLAKE3(<id>). Up to 256 files, so two branches summarising different code write different files and their commits touch disjoint paths. Hashing rather than slicing the id is load-bearing: rs1:<repo>:func:... ids share long prefixes, so a prefix shard would put an entire repo in one file.\n\nThe Rust indexer is the SOLE writer of committed shards. The TypeScript MCP server only reads them; its writes go to a git-ignored sidecar the next index folds in. One serializer, one thing to hold to byte-identical output.\n\nSidecars are per agent: local/summaries-<agent>.jsonl, from a sanitised REPOSKEIN_AGENT. The indexer folds in every local/summaries*.jsonl, claiming each by rename through local/consuming/ so a crash costs an index, never prose.\n\nBoth readers are tolerant, because a shard is a merged file. Git conflict-marker lines are skipped with a warning, and identical duplicate lines from a union merge collapse silently. Divergent records for one node resolve by one of two rules, and the distinction matters. WITHIN one source (two lines of a merged shard, two agents' sidecars) there is no happens-before to appeal to, so only content decides: newer summary_at wins, ties break on raw-line UTF-8 byte order. ACROSS sources folded in a known order (the legacy harvest, then committed shards, then the database, then this machine's sidecars) provenance is real, and a newer source wins unless it is STRICTLY older by summary_at. That second rule exists because summary_at is day-precision: under content-only comparison a same-day rewrite ties and would be discarded by byte order, so the agent's work would not take — while a stale local record would still clobber a teammate's newer one. Every displacement, under either rule, preserves the loser in local/conflicts.jsonl; nothing is ever overwritten silently. Shared vectors in fixtures/summary-shard-vectors.json pin the within-source rule in both test suites so the two implementations cannot drift — including the astral/BMP case where UTF-8 byte order and a native UTF-16 string comparison disagree.\n\n.reposkein/.gitattributes declares summaries/*.jsonl merge=union, scoped inside .reposkein/ and honest about its reach: it helps local merges and rebases only, which is where a human hits the conflict by hand. Merge smoothness comes from the sharding.\n\nThe pre-commit hook runs `reposkein-indexer stage-summaries`, which hints when authored shards were left out of a commit and stages them when [hooks] stage_summaries = true. New repos default to true; existing repos keep hint-only until they opt in, because an upgrade must not start putting new content into people's commits.\n\nDecision ids salt the slug from the body on a same-day collision instead of taking an ordinal, for the same reason: two branches both see <slug>.1 free and both write that filename.",
+  "paths": [
+    ".reposkein/summaries/",
+    "indexer/crates/core/src/summaries.rs",
+    "mcp/src/store/summaryShards.ts",
+    "fixtures/summary-shard-vectors.json",
+    "docs/policies/bulk-resummarization-sweeps.md"
+  ],
+  "status": "accepted",
+  "supersedes": [],
+  "title": "Shard committed summaries by BLAKE3(node_id); Rust indexer is the sole writer",
+  "trigger": {
+    "kind": "manual"
+  }
+}

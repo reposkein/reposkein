@@ -12,6 +12,7 @@ pub mod merge;
 pub mod meta;
 pub mod model;
 pub mod resolve;
+pub mod summaries;
 pub mod walk;
 
 use anyhow::Result;

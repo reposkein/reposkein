@@ -1,7 +1,12 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import {
+  absorbSummaryLines,
+  emptyAccumulator,
+  type SummaryAccumulator,
+} from "./summaryShards.js";
 
-/** A persisted summary record (git-ignored .reposkein/local/summaries.jsonl). */
+/** A persisted summary record (git-ignored .reposkein/local/summaries-<agent>.jsonl). */
 export interface SidecarSummary {
   id: string;
   semantic_summary: string;
@@ -11,8 +16,51 @@ export interface SidecarSummary {
   summary_by: string;
 }
 
-export function sidecarPath(repoPath: string): string {
-  return join(repoPath, ".reposkein", "local", "summaries.jsonl");
+/** Directory holding every agent's sidecar. Git-ignored in full. */
+export function sidecarDir(repoPath: string): string {
+  return join(repoPath, ".reposkein", "local");
+}
+
+/** Filesystem-safe slug for the writing agent.
+ *
+ *  Untrusted input: REPOSKEIN_AGENT comes from whatever launched the server, so
+ *  it is reduced to `[a-z0-9._-]` and capped. A value that reduces to nothing
+ *  (or is absent) falls back to "agent", which is also the pre-multi-agent
+ *  name — so a single-agent setup keeps one stable file. */
+export function agentSlug(agent = process.env.REPOSKEIN_AGENT): string {
+  const slug = (agent ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 40)
+    .replace(/[-.]+$/, "");
+  return slug === "" ? "agent" : slug;
+}
+
+/** THIS process's sidecar: one file per agent.
+ *
+ *  A single shared `local/summaries.jsonl` meant two agents running against the
+ *  same checkout silently overwrote each other — `upsertSidecar` rewrites the
+ *  whole file, so the slower writer's prose vanished with no error anywhere.
+ *  One file per writer removes the shared mutable state; the indexer folds
+ *  every `local/summaries*.jsonl` into the committed shards. */
+export function sidecarPath(repoPath: string, agent?: string): string {
+  return join(sidecarDir(repoPath), `summaries-${agentSlug(agent)}.jsonl`);
+}
+
+/** Every agent's sidecar in this repo, sorted, so reads are deterministic and
+ *  independent of directory order. Includes the pre-split
+ *  `local/summaries.jsonl` an older client may still be writing. */
+export function sidecarPaths(repoPath: string): string[] {
+  const dir = sidecarDir(repoPath);
+  try {
+    return readdirSync(dir)
+      .filter((f) => f.startsWith("summaries") && f.endsWith(".jsonl"))
+      .sort()
+      .map((f) => join(dir, f));
+  } catch {
+    return [];
+  }
 }
 
 /** Reads the sidecar into a map keyed by node id. Missing file → empty map.
@@ -47,8 +95,52 @@ export function readSidecar(path: string): Map<string, SidecarSummary> {
   return map;
 }
 
+/** Every agent's sidecar records, folded through the SAME rules the Rust
+ *  indexer applies — `beats` within the sidecar set, losers preserved — so the
+ *  server serves exactly the record the next `index` is going to write.
+ *
+ *  This used to be a plain last-file-wins merge, which disagreed with the
+ *  indexer whenever two agents summarised the same node, and dropped the loser
+ *  with no trace. Callers should hand `conflicts` to `recordSummaryConflicts`. */
+export function loadAllSidecars(repoPath: string): SummaryAccumulator {
+  const acc = emptyAccumulator();
+  for (const p of sidecarPaths(repoPath)) {
+    let text: string;
+    try {
+      text = readFileSync(p, "utf8");
+    } catch {
+      continue;
+    }
+    absorbSummaryLines(acc, `local/${basename(p)}`, text);
+  }
+  return acc;
+}
+
+/** Convenience view of `loadAllSidecars` for callers that only want the
+ *  winning record per node id. Divergence losers are dropped on the floor
+ *  here, so prefer `loadAllSidecars` anywhere they can be recorded. */
+export function readAllSidecars(repoPath: string): Map<string, SidecarSummary> {
+  const merged = new Map<string, SidecarSummary>();
+  for (const [id, rec] of loadAllSidecars(repoPath).summaries) {
+    const s = (k: string): string =>
+      typeof rec.props[k] === "string" ? (rec.props[k] as string) : "";
+    merged.set(id, {
+      id,
+      semantic_summary: s("semantic_summary"),
+      summary_of_hash: s("summary_of_hash"),
+      summary_model: s("summary_model"),
+      summary_at: s("summary_at"),
+      summary_by: s("summary_by"),
+    });
+  }
+  return merged;
+}
+
 /** Upserts one record and rewrites the sidecar sorted by id (deterministic, no
- *  duplicate lines). Creates the local/ dir if needed. Best-effort. */
+ *  duplicate lines). Creates the local/ dir if needed. Best-effort.
+ *
+ *  Rewriting the whole file is safe only because `path` belongs to one agent:
+ *  see `sidecarPath`. */
 export function upsertSidecar(path: string, rec: SidecarSummary): void {
   const map = readSidecar(path);
   map.set(rec.id, rec);

@@ -80,6 +80,34 @@ describe("decisions store", () => {
     expect(mintDecisionId("2026-08-20", "Use X", taken)).toBe("adr:2026-08-20-use-x.2");
   });
 
+  it("salts the slug from content when a salt source is given", () => {
+    // An ordinal is the wrong escape for the case that matters: two branches
+    // recording a same-day same-title decision both see `.1` free, both mint
+    // it, and both write the SAME filename with different bodies — the merge
+    // conflict file-per-decision exists to prevent. A content-derived salt
+    // gives them different files.
+    const taken = new Set(["adr:2026-08-20-use-x"]);
+    const a = mintDecisionId("2026-08-20", "Use X", taken, "because of reason A");
+    const b = mintDecisionId("2026-08-20", "Use X", taken, "because of reason B");
+    expect(a).toMatch(/^adr:2026-08-20-use-x-[0-9a-f]{6}$/);
+    expect(b).toMatch(/^adr:2026-08-20-use-x-[0-9a-f]{6}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it("gives the same body the same salted id (recording twice is one decision)", () => {
+    const taken = new Set(["adr:2026-08-20-use-x"]);
+    expect(mintDecisionId("2026-08-20", "Use X", taken, "same body")).toBe(
+      mintDecisionId("2026-08-20", "Use X", taken, "same body")
+    );
+  });
+
+  it("falls back to an ordinal when even the salted id is taken", () => {
+    const taken = new Set(["adr:2026-08-20-use-x"]);
+    const salted = mintDecisionId("2026-08-20", "Use X", taken, "body");
+    taken.add(salted);
+    expect(mintDecisionId("2026-08-20", "Use X", taken, "body")).toBe(`${salted}.1`);
+  });
+
   it("writes one canonical file per decision and round-trips it", () => {
     const rec = record();
     writeDecision(root, rec);

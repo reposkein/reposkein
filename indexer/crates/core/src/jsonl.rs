@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 /// Serializes one object: `lead` keys first (in the given order, if present),
 /// then all other keys in sorted order. No spaces, no trailing comma.
-fn canonical_object(obj: &Map<String, Value>, lead: &[&str]) -> String {
+pub(crate) fn canonical_object(obj: &Map<String, Value>, lead: &[&str]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for &k in lead {
         if let Some(v) = obj.get(k) {
@@ -215,15 +215,29 @@ pub fn summaries_to_jsonl(nodes: &[Node]) -> String {
     sorted.dedup_by(|a, b| a.id == b.id);
     let mut out = String::new();
     for n in sorted {
-        let mut obj = crate::merge::summary_part(&n.props);
-        if !crate::merge::has_summary(&obj) {
-            continue;
+        if let Some(line) = summary_line(&n.id, &n.props) {
+            out.push_str(&line);
+            out.push('\n');
         }
-        obj.insert("id".to_string(), Value::String(n.id.clone()));
-        out.push_str(&canonical_object(&obj, &["id"]));
-        out.push('\n');
     }
     out
+}
+
+/// The canonical one-line form of a single authored summary record: `id`
+/// first, then the summary fields in sorted key order, no trailing newline.
+///
+/// Returns None when `props` carries no summary — callers skip those rather
+/// than emitting an id-only line. This is THE serialization for both the
+/// legacy `.reposkein/summaries.jsonl` and the sharded
+/// `.reposkein/summaries/<xx>.jsonl`, so the two forms are byte-compatible
+/// line for line and a migration never rewrites prose.
+pub fn summary_line(id: &str, props: &Map<String, Value>) -> Option<String> {
+    let mut obj = crate::merge::summary_part(props);
+    if !crate::merge::has_summary(&obj) {
+        return None;
+    }
+    obj.insert("id".to_string(), Value::String(id.to_string()));
+    Some(canonical_object(&obj, &["id"]))
 }
 
 /// Parses a summaries file into Nodes carrying only `id` + summary props

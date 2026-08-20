@@ -173,3 +173,58 @@ fn init_leaves_a_foreign_gitattributes_byte_identical() {
         "init must not touch a .gitattributes it has no lines in"
     );
 }
+
+#[test]
+fn init_declares_union_for_the_summary_shards_inside_reposkein() {
+    // The shards ARE committed, so a local merge of two branches that both
+    // wrote summaries wants a resolution. Union is the right one here (the
+    // reader dedupes duplicates and preserves divergence losers), and the
+    // declaration lives inside .reposkein/ so it never collides with a user
+    // rule and `rm -r .reposkein` is a complete uninstall.
+    let dir = git_repo();
+    let root = dir.path();
+    fs::create_dir_all(root.join(".reposkein")).unwrap();
+
+    run_init(root);
+
+    let attrs = fs::read_to_string(root.join(".reposkein/.gitattributes")).unwrap();
+    assert!(
+        attrs
+            .lines()
+            .any(|l| l.trim() == "summaries/*.jsonl merge=union"),
+        "expected a union declaration scoped to the shards: {attrs}"
+    );
+    assert!(
+        !attrs.contains("nodes.jsonl") && !attrs.contains("edges.jsonl"),
+        "the derived graph is not committed and must not be declared: {attrs}"
+    );
+    assert!(
+        !root.join(".gitattributes").exists(),
+        "still nothing in the user's root .gitattributes"
+    );
+}
+
+#[test]
+fn init_without_a_reposkein_dir_writes_no_attributes_file() {
+    // `init --hooks` in a repo that was never indexed should not conjure a
+    // .reposkein/ directory as a side effect.
+    let dir = git_repo();
+    let root = dir.path();
+
+    run_init(root);
+
+    assert!(!root.join(".reposkein").exists());
+}
+
+#[test]
+fn pre_commit_hook_runs_the_summary_stage_check() {
+    let dir = git_repo();
+    let root = dir.path();
+    run_init(root);
+
+    let body = fs::read_to_string(root.join(".git/hooks/pre-commit")).unwrap();
+    assert!(
+        body.contains("stage-summaries"),
+        "the hook must notice authored shards left out of the commit:\n{body}"
+    );
+}

@@ -1,0 +1,437 @@
+{
+  "$comment": [
+    "Shared test vectors for the sharded summary store. Asserted by BOTH suites:",
+    "indexer/crates/cli/tests/summary_vectors.rs and mcp/test/summaryShards.test.ts.",
+    "",
+    "The point is that the Rust indexer (sole writer) and the TypeScript MCP",
+    "server (reader) resolve a merged shard to the SAME winner. If they disagree,",
+    "the server serves prose the next index is about to overwrite. Both sides read",
+    "these exact lines and must agree line for line, so a change to either",
+    "implementation that drifts from the other fails here first.",
+    "",
+    "There are TWO resolution rules and both are pinned here:",
+    "  dedupe     — records found WITHIN one source, resolved by content alone",
+    "  supersedes — folding a whole newer-provenance source onto an older one",
+    "They differ on an equal summary_at, deliberately. See each section's `rule`.",
+    "",
+    "shard_keys are Rust-only: they exist so the committed layout cannot change",
+    "silently, but TypeScript never computes a shard key — it enumerates shard",
+    "files with readdir, which is why no BLAKE3 implementation is needed there."
+  ],
+  "shard_key": {
+    "algorithm": "first 2 lowercase hex chars of BLAKE3(node_id utf-8)",
+    "vectors": [
+      { "node_id": "rs1:abcdef012345:func:src/app.py#handler@0", "shard": "3f" },
+      { "node_id": "rs1:abcdef012345:class:src/models.py#User@0", "shard": "34" },
+      { "node_id": "rs1:abcdef012345:file:README.md", "shard": "04" },
+      { "node_id": "rs1:r:func:m.py#f@0", "shard": "64" },
+      { "node_id": "", "shard": "af" }
+    ]
+  },
+  "dedupe": {
+    "rule": [
+      "Records claiming the same id are reduced to one winner:",
+      "1. greater summary_at wins (missing summary_at counts as the empty string)",
+      "2. tie -> the byte-lexicographically smaller RAW SOURCE LINE wins",
+      "Byte order over the raw line (never a re-serialization) is what lets two",
+      "languages agree without sharing a serializer.",
+      "Identical duplicate lines collapse silently and are NOT conflicts.",
+      "Every non-winning DIVERGENT record is preserved as a conflict, never dropped.",
+      "Lines starting with a git conflict marker are skipped with a warning."
+    ],
+    "cases": [
+      {
+        "name": "single record passes through",
+        "lines": ["{\"id\":\"a\",\"semantic_summary\":\"only\"}"],
+        "winners": { "a": "{\"id\":\"a\",\"semantic_summary\":\"only\"}" },
+        "conflicts": [],
+        "skipped": 0
+      },
+      {
+        "name": "union merge duplicated an unchanged line",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"same\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"same\"}"
+        ],
+        "winners": { "a": "{\"id\":\"a\",\"semantic_summary\":\"same\"}" },
+        "conflicts": [],
+        "skipped": 0
+      },
+      {
+        "name": "newer summary_at wins regardless of file order",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "name": "newer summary_at wins with the file order reversed",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"newer\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"older\",\"summary_at\":\"2026-08-19T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "name": "equal timestamps fall back to raw-line byte order",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zebra\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"apple\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"apple\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zebra\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "name": "a record with no summary_at loses to one that has it",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"undated\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"dated\",\"summary_at\":\"2020-01-01T00:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"dated\",\"summary_at\":\"2020-01-01T00:00:00Z\"}"
+        },
+        "conflicts": ["{\"id\":\"a\",\"semantic_summary\":\"undated\"}"],
+        "skipped": 0
+      },
+      {
+        "name": "unresolved merge markers are skipped and both sides survive",
+        "lines": [
+          "<<<<<<< HEAD",
+          "{\"id\":\"a\",\"semantic_summary\":\"ours\"}",
+          "=======",
+          "{\"id\":\"b\",\"semantic_summary\":\"theirs\"}",
+          ">>>>>>> feature/other"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"ours\"}",
+          "b": "{\"id\":\"b\",\"semantic_summary\":\"theirs\"}"
+        },
+        "conflicts": [],
+        "skipped": 3
+      },
+      {
+        "name": "diff3 markers are skipped too",
+        "lines": [
+          "<<<<<<< ours",
+          "{\"id\":\"a\",\"semantic_summary\":\"ours\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "||||||| base",
+          "{\"id\":\"a\",\"semantic_summary\":\"base\",\"summary_at\":\"2026-08-01T10:00:00Z\"}",
+          "=======",
+          "{\"id\":\"a\",\"semantic_summary\":\"theirs\",\"summary_at\":\"2026-08-21T10:00:00Z\"}",
+          ">>>>>>> theirs"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"theirs\",\"summary_at\":\"2026-08-21T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"base\",\"summary_at\":\"2026-08-01T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"ours\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 4
+      },
+      {
+        "name": "malformed and id-less lines are dropped, valid ones are not",
+        "lines": [
+          "not json at all",
+          "{\"semantic_summary\":\"no id\"}",
+          "",
+          "{\"id\":\"a\",\"semantic_summary\":\"kept\"}"
+        ],
+        "winners": { "a": "{\"id\":\"a\",\"semantic_summary\":\"kept\"}" },
+        "conflicts": [],
+        "skipped": 2
+      },
+      {
+        "$comment": [
+          "These lines hold LITERAL UTF-8 characters, not \\u escape text, and",
+          "that is the point: the tiebreak compares the bytes of the line as it",
+          "sits in the shard. Writing the characters as escaped \\\\u sequences",
+          "would leave the escape TEXT in the line, so the comparison would run",
+          "over ASCII 'u','d','f' and pass for entirely the wrong reason. If you",
+          "need an escape here, use a single backslash so it resolves when the",
+          "fixture itself is parsed — never a doubled one."
+        ],
+        "name": "unicode prose round-trips and compares by utf-8 bytes",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"café ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"Ω omega\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"café ☕\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"Ω omega\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "The case that motivated comparing encoded bytes rather than a",
+          "language's native string `<`. U+FFFD encodes as EF BF BD; U+10000 as",
+          "F0 90 80 80, but in UTF-16 it is the surrogate pair D800 DC00.",
+          "UTF-8 byte order puts U+FFFD first (EF < F0); JavaScript's `<`, which",
+          "compares UTF-16 code units, puts the astral character first",
+          "(D800 < FFFD). The two orders DISAGREE, so this vector fails on any",
+          "implementation that reaches for the native comparison — which is",
+          "exactly the drift it exists to catch."
+        ],
+        "name": "utf-8 byte order breaks the tie, not utf-16 code-unit order",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"𐀀 astral\",\"summary_at\":\"2026-08-20T10:00:00Z\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"� replacement\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"� replacement\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"𐀀 astral\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "A summary field that is PRESENT but says nothing is not a summary.",
+          "Rust once tested this with contains_key and TypeScript with",
+          "typeof === 'string', so a null-valued line was a record on one side",
+          "and malformed on the other. With a late summary_at it then WON the",
+          "tiebreak in Rust and evicted real prose into conflicts.jsonl, while",
+          "the server went on serving the prose. Both sides now require a",
+          "NON-EMPTY STRING, and this vector is what holds them to it."
+        ],
+        "name": "null, non-string and empty summaries are rejected, not ranked",
+        "lines": [
+          "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}",
+          "{\"id\":\"a\",\"semantic_summary\":null,\"summary_at\":\"2099-01-01\"}",
+          "{\"id\":\"a\",\"semantic_summary\":123,\"summary_at\":\"2099-01-02\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"\",\"summary_at\":\"2099-01-03\"}",
+          "{\"id\":\"a\",\"semantic_summary\":[\"not\",\"prose\"],\"summary_at\":\"2099-01-04\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 4
+      },
+      {
+        "name": "a purpose_summary alone is enough, but only as non-empty prose",
+        "lines": [
+          "{\"id\":\"a\",\"purpose_summary\":\"why it exists\",\"summary_at\":\"2026-01-01\"}",
+          "{\"id\":\"b\",\"purpose_summary\":null,\"summary_at\":\"2099-01-01\"}",
+          "{\"id\":\"c\",\"purpose_summary\":\"\",\"summary_at\":\"2099-01-01\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"purpose_summary\":\"why it exists\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 2
+      }
+    ]
+  },
+  "supersedes": {
+    "$comment": [
+      "Cross-source folds — the OTHER resolution rule, and the one where a",
+      "silent loss actually happened: an unconditional last-source-wins insert",
+      "let a stale local sidecar overwrite a teammate's newer committed summary",
+      "with nothing recorded anywhere.",
+      "",
+      "Each case folds `older_source` first, then `newer_source` on top, the way",
+      "the indexer folds legacy harvest -> committed shards -> database -> this",
+      "machine's sidecars. Lines within one source resolve by `beats` (see the",
+      "dedupe section); the fold BETWEEN them uses the rule below."
+    ],
+    "rule": [
+      "A record from the newer source displaces the incumbent unless it is",
+      "STRICTLY OLDER by summary_at:  candidate.summary_at >= incumbent.summary_at.",
+      "",
+      "This deliberately differs from `beats` on an equal summary_at, and the",
+      "difference is load-bearing. summary_at is DAY-PRECISION (PRD §6.2.5 keeps",
+      "wall-clock time out of committed bytes), so an agent re-summarising a node",
+      "that was already summarised today produces a tie. Breaking that tie by",
+      "byte order — what `beats` does — would discard the rewrite: the agent's",
+      "work would silently not take. Provenance settles what the data cannot.",
+      "",
+      "Determinism is unaffected: the same shards plus the same sidecars resolve",
+      "identically on any machine. Provenance is an input, not a clock.",
+      "",
+      "Byte-identical records dedupe silently and are never conflicts.",
+      "Every displaced record is preserved, under either rule."
+    ],
+    "cases": [
+      {
+        "name": "a newer source with a newer summary_at displaces, and the loser is recorded",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"committed older\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"fresh local\",\"summary_at\":\"2026-09-01\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"fresh local\",\"summary_at\":\"2026-09-01\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"committed older\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "THE REGRESSION. A teammate's summary arrives in a committed shard; this",
+          "machine still holds a months-old sidecar for the same node. Folding the",
+          "sidecar last must NOT overwrite the newer record, and the record that",
+          "loses must still be written down."
+        ],
+        "name": "a newer source that is strictly older by summary_at does not displace",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"teammate newer\",\"summary_at\":\"2026-09-01\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"stale local\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"teammate newer\",\"summary_at\":\"2026-09-01\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"stale local\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "An equal summary_at goes to the NEWER SOURCE, not to byte order. The",
+          "prose is chosen so the two rules visibly disagree: 'aaa old' sorts",
+          "first, so `beats` would keep it and drop the rewrite. Same-day",
+          "re-summarisation is the common case, not a corner one."
+        ],
+        "name": "an equal summary_at goes to the newer source, not to byte order",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "The boundary, stated as a test: the SAME two records, same day, both in",
+          "ONE source. There is no provenance to appeal to, so byte order decides",
+          "and 'aaa old' wins — the opposite outcome to the case above. If an",
+          "implementation ever collapses the two rules into one, exactly one of",
+          "these two cases fails."
+        ],
+        "name": "the same tie inside one source still goes to byte order",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "A line with an id and a late timestamp but no prose is not a summary.",
+          "Admitting it would let it WIN on summary_at and evict real authored",
+          "text — a record with nothing in it must never displace one."
+        ],
+        "name": "an id-only line in the newer source cannot evict authored prose",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "newer_source": ["{\"id\":\"a\",\"summary_at\":\"2099-01-01\"}"],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 1
+      },
+      {
+        "$comment": [
+          "The same rejection, for a field that is present but empty of prose.",
+          "This is the shape the reviewer reproduced live: a null-valued summary",
+          "with a late timestamp, arriving from the newer source, evicting real",
+          "prose into conflicts.jsonl on the Rust side while the TypeScript",
+          "reader skipped it — so the server and the indexer disagreed about",
+          "what the node's summary was."
+        ],
+        "name": "a null-valued summary in the newer source cannot evict authored prose",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":null,\"summary_at\":\"2099-01-01\"}",
+          "{\"id\":\"a\",\"semantic_summary\":42,\"summary_at\":\"2099-01-02\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"\",\"summary_at\":\"2099-01-03\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 3
+      },
+      {
+        "$comment": [
+          "A re-index sees its own output in the shards and the same record in a",
+          "sidecar it has not consumed yet. Reporting that as divergence would",
+          "train people to ignore conflicts.jsonl."
+        ],
+        "name": "a byte-identical record from both sources is not a conflict",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"same\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"same\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"same\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [],
+        "skipped": 0
+      },
+      {
+        "name": "records for different ids from both sources all survive",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"from the shard\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"b\",\"semantic_summary\":\"from the sidecar\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"from the shard\",\"summary_at\":\"2026-08-21\"}",
+          "b": "{\"id\":\"b\",\"semantic_summary\":\"from the sidecar\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [],
+        "skipped": 0
+      }
+    ]
+  }
+}

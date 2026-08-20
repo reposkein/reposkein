@@ -38,8 +38,24 @@ pub fn summary_part(props: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
+/// True for a value that is actually authored prose: a non-empty string.
+///
+/// `null`, a number, or `""` in a summary field are all "the field is present
+/// but says nothing". Accepting them was a live data-loss bug: a line like
+/// `{"id":"a","semantic_summary":null,"summary_at":"2099-01-01"}` counted as a
+/// summary, so its late timestamp WON the tiebreak and evicted real prose into
+/// conflicts.jsonl. A record with nothing in it must never displace one.
+fn is_prose(v: Option<&Value>) -> bool {
+    matches!(v, Some(Value::String(s)) if !s.is_empty())
+}
+
+/// Whether these props carry an authored summary worth keeping.
+///
+/// Deliberately identical to the TypeScript `hasSummary`: the two languages
+/// read the same committed shards, so a record one accepts and the other
+/// rejects is a divergence in what gets served versus what gets written.
 pub fn has_summary(s: &Map<String, Value>) -> bool {
-    s.contains_key("semantic_summary") || s.contains_key("purpose_summary")
+    is_prose(s.get("semantic_summary")) || is_prose(s.get("purpose_summary"))
 }
 
 fn node_map(nodes: &[Node]) -> BTreeMap<&str, &Node> {

@@ -1,17 +1,30 @@
 docs/prd.md
 
-# Generated indexer output — kept out of git during M0 until the schema and
-# merge driver stabilize (PRD §3, §6; revisit in the M3 plan). Applies at any
+# Generated indexer output stays out of git: nodes.jsonl / edges.jsonl are a
+# pure function of the working tree, so committing them buys nothing a re-index
+# cannot rebuild while making every branch that touches code conflict (see
+# docs/migrations/2026-08-06-stop-committing-derived-graph.md). Applies at any
 # depth (the root repo federates indexer/ and mcp/ as nested repos).
-# Authored decision records are the exception: nothing can regenerate
-# rationale, and file-per-decision is merge-safe by construction.
+# Everything AUTHORED is the exception: nothing can regenerate rationale or
+# prose, so it is un-ignored below.
 **/.reposkein/*
 !**/.reposkein/decisions/
 # ...but never half-written temp files a crashed writer left behind.
 **/.reposkein/decisions/.*
 # Authored summaries are committed too (per ADR 2026-08-07: derived stays
-# out, authored goes in).
+# out, authored goes in). Sharded into summaries/<xx>.jsonl since 2026-08-20 so
+# two branches summarising different code never write the same file; the
+# pre-sharding single file stays un-ignored while repos migrate off it.
+!**/.reposkein/summaries/
+**/.reposkein/summaries/.*
 !**/.reposkein/summaries.jsonl
+# The config RepoSkein itself runs on: repo identity, settings, and the rules
+# that keep the derived graph out of git. Small, rarely edited, and needed by
+# every clone — including our own, which is the point of dogfooding them.
+!**/.reposkein/meta.json
+!**/.reposkein/config.toml
+!**/.reposkein/.gitignore
+!**/.reposkein/.gitattributes
 
 # Local-only working docs (plans, skill scratch) — never commit.
 docs/superpowers/

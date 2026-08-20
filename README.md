@@ -127,7 +127,7 @@ You ask in plain language; the bundled **`reposkein-graph-rag`** skill drives th
 2. **Understand it** — `get_context_profile` returns the node's callers + callees as ready-to-read prose (`hops: 2` widens, `federated: true` spans nested repos).
 3. **Before you change it** — `impact` lists transitive callers (what could break) split from the tests that cover it (what to run). → *"what breaks if I change `charge()`?"*
 4. **What moves with it** — `get_temporal_context` surfaces files that historically change together, plus churn and ownership. → *"what usually changes with the auth config?"*
-5. **Record what you learned** — `write_semantic_summary` attaches a 1–3 sentence note to the node, landing in `.reposkein/summaries.jsonl` for you to commit for the next agent/teammate.
+5. **Record what you learned** — `write_semantic_summary` attaches a 1–3 sentence note to the node, landing in `.reposkein/summaries/<xx>.jsonl` for you to commit for the next agent/teammate.
 6. **After editing** — `reindex_file` refreshes the graph for the changed file.
 
 <details>
@@ -183,7 +183,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
         │ reads
         ▼
  .reposkein/           ← nodes.jsonl + edges.jsonl: derived, git-ignored, rebuilt on demand
-                       summaries.jsonl: what your agents authored — commit this
+                       summaries/<xx>.jsonl: what your agents authored — commit this
         ▲ writes
         │
  reposkein-indexer    Tree-sitter parse → stable IDs → canonical JSONL
@@ -192,7 +192,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
 
 - **Structure is static.** The skeleton comes only from parsing — identical code produces a byte-identical graph (a CI-tested invariant), independent of who runs it.
 - **Meaning is just-in-time.** Summaries are written as the agent visits nodes; they're content-hash-stamped (so they flag stale when code changes) and committed to git.
-- **Derived stays out of git.** `nodes.jsonl` and `edges.jsonl` are a pure function of your working tree, so committing them buys nothing a re-index cannot rebuild while making every branch that touches code conflict with every other. Only `summaries.jsonl`, `meta.json` and `config.toml` are committed.
+- **Derived stays out of git.** `nodes.jsonl` and `edges.jsonl` are a pure function of your working tree, so committing them buys nothing a re-index cannot rebuild while making every branch that touches code conflict with every other. Only `summaries/`, `meta.json` and `config.toml` are committed — and the summaries are sharded by a hash of the node id, so two branches summarising different code write different files and never meet in a merge.
 - **Local-first.** The JSONL on disk is the source of truth; the optional [Neo4j backend](#optional-neo4j-backend) is a reconstructable projection most users never need.
 
 ### Cross-repo federation
