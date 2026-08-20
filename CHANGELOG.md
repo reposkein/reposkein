@@ -6,6 +6,48 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+### Added
+
+- **Architecture Decision Records: the graph now remembers *why*.** Agents record
+  significant design decisions with the new `record_decision` MCP tool, anchored to
+  the graph nodes and paths they govern; recall them with `list_decisions` /
+  `get_decision`, ratify or retire them with `set_decision_status`, and re-stamp a
+  still-correct decision after code changes with `reaffirm_decision`. Records land
+  as `proposed` (a human ratifies), bodies are immutable (`body_hash`-checked), and
+  nothing is ever machine-deleted — a decision about deleted code is still history.
+  (#42)
+
+  - **Storage that survives teams.** One committed JSON file per decision at
+    `.reposkein/decisions/<date>-<slug>.json` — parallel branches appending records
+    never merge-conflict on forges (the lesson from #35). Ids are portable
+    `adr:<date>-<slug>` (no repo_id, so forks and no-remote clones resolve them);
+    anchors keep full `rs1:` node ids, matched tolerantly by suffix, with
+    content-hash recovery when anchored code is renamed.
+  - **Decisions surface where agents already look.** `get_context_profile` returns
+    `target.decisions` plus `decisions_needing_review` for accepted decisions whose
+    code drifted; `impact` returns `governing_decisions` over the target and its
+    impacted callers; `semantic_find` ranks decisions in the corpus, so "why don't
+    we X?" queries answer from recorded rationale (kind: `"Decision"` filters to it).
+  - **Mechanical drift detection.** The indexer diffs the previous graph against the
+    fresh one (`graph_delta` in `--json` stats — content-hash based, so line shifts
+    and summary edits never fire it) and persists the delta to
+    `.reposkein/local/last_delta.json`; hook-driven indexes discard stdout, and
+    post-merge is exactly when teammate changes invalidate decisions, so the next
+    `reindex_file` / `init_cpg_skeleton` call surfaces `decisions_affected` — the
+    skill instructs the agent to conform, supersede, or reaffirm.
+  - **Interop + hygiene.** `reposkein-mcp adr export` renders the log to
+    `docs/adr/NNNN-slug.md` (Nygard sections; a derived view — JSON stays the system
+    of record) and `adr import` brings an existing markdown ADR log in, idempotently.
+    `reposkein-mcp doctor` validates the log: parse failures, duplicate ids,
+    body-hash tampering, dangling/cyclic supersession, and a ~100-active-record
+    budget warning.
+  - The `reposkein-graph-rag` skill gains when-to-record guidance (significance
+    test + anti-triggers) and the rule: check `list_decisions` before modifying
+    governed code — never silently violate a decision. RepoSkein's own repo ships
+    three seeded decisions recorded through these tools.
+
 ## [0.2.7] - 2026-08-07
 
 ### Changed
