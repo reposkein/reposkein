@@ -166,6 +166,57 @@ describe("JsonlGraphStore summary overlay", () => {
     expect(await summaryOf(store, FN)).toBeNull();
   });
 
+  it("sees another agent's sidecar write on an already-open store", async () => {
+    // Two agents, one checkout, one live server each. Agent B writes; agent A's
+    // store must see it on its next access. The freshness key used to cover
+    // only nodes/edges and the shards, so B's write was invisible for the life
+    // of A's process — while the overlay's own comment promised the opposite.
+    const storeA = new JsonlGraphStore(root, REPO);
+    expect(await summaryOf(storeA, FN)).toBeNull();
+
+    sidecar("agent-b", line(FN, "written by agent B", "hrun", "2026-08-21"));
+
+    expect(await summaryOf(storeA, FN)).toBe("written by agent B");
+  });
+
+  it("sees another agent OVERWRITING a summary this store already served", async () => {
+    sidecar("agent-b", line(FN, "B's first take", "hrun", "2026-08-21"));
+    const storeA = new JsonlGraphStore(root, REPO);
+    expect(await summaryOf(storeA, FN)).toBe("B's first take");
+
+    sidecar("agent-b", line(FN, "B's revision", "hrun", "2026-08-22"));
+
+    expect(await summaryOf(storeA, FN)).toBe("B's revision");
+  });
+
+  it("sees a sidecar that was removed (consumed by an index)", async () => {
+    sidecar("agent-b", line(FN, "pending", "hrun", "2026-08-21"));
+    const storeA = new JsonlGraphStore(root, REPO);
+    expect(await summaryOf(storeA, FN)).toBe("pending");
+
+    // `index` claims the sidecar by rename and folds it into a shard.
+    rmSync(sidecarPath(root, "agent-b"));
+    shard("00.jsonl", line(FN, "pending", "hrun", "2026-08-21"));
+
+    expect(await summaryOf(storeA, FN)).toBe("pending");
+  });
+
+  it("does not serve a null-valued summary, and does not let it evict prose", async () => {
+    // A field that is present but says nothing is not a summary. Rust once
+    // tested this with contains_key and TS with typeof === "string", so a
+    // null-valued line with a late timestamp won the tiebreak on one side and
+    // was skipped on the other.
+    shard(
+      "00.jsonl",
+      line(FN, "real prose", "hrun", "2026-01-01"),
+      `{"id":"${FN}","semantic_summary":null,"summary_at":"2099-01-01","summary_of_hash":"hrun"}`
+    );
+    const store = new JsonlGraphStore(root, REPO);
+    expect(await summaryOf(store, FN)).toBe("real prose");
+    // Rejected as malformed, not ranked — so it is not a "conflict" either.
+    expect(existsSync(conflictsPath(root))).toBe(false);
+  });
+
   it("survives a shard left with conflict markers", async () => {
     mkdirSync(summariesDir(root), { recursive: true });
     writeFileSync(

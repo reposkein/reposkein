@@ -187,7 +187,7 @@ Four properties keep the remaining collisions harmless:
 
 1. **`.reposkein/.gitattributes` declares `summaries/*.jsonl merge=union`.** This helps *local* merges and rebases only — which is exactly where a human hits the conflict by hand. It is scoped inside `.reposkein/`, so it never collides with your own rules.
 2. **Readers dedupe by node id.** A union merge that keeps both sides' lines just produces a duplicate, and both the indexer and the MCP server collapse it.
-3. **Divergence resolves deterministically.** When two branches wrote *different* summaries for the same node, the newer `summary_at` wins; ties break on raw-line byte order. Every machine picks the same winner.
+3. **Divergence resolves deterministically, by one of two rules.** Between two records found in the *same* place — two lines of one merged shard, or two agents' sidecars — only content can decide: the newer `summary_at` wins, and ties break on raw-line byte order. When a whole *newer source* is folded onto an older one (your sidecars onto the committed shards), provenance is real, so the newer source wins unless it is strictly older by `summary_at`. That second rule is why re-summarising a node you already summarised today still takes — `summary_at` is day-precision, so it would otherwise tie — and why a months-old local record can never clobber a teammate's newer one. Every machine picks the same winner either way.
 4. **The loser is never destroyed.** It is appended to `.reposkein/local/conflicts.jsonl`, and `reposkein-mcp doctor` reports it so a human can re-write anything worth keeping.
 
 A shard left with literal `<<<<<<<` markers is also survivable: both readers skip marker lines with a warning, and the next `index` rewrites the file cleanly.

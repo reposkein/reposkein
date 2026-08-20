@@ -16,7 +16,7 @@ import {
   type ParsedNode,
   type RepoSource,
 } from "./jsonlGraph.js";
-import { loadAllSidecars, upsertSidecar, sidecarPath } from "./sidecar.js";
+import { loadAllSidecars, sidecarPaths, sidecarPath, upsertSidecar } from "./sidecar.js";
 import {
   absorbSummarySource,
   emptyAccumulator,
@@ -155,11 +155,13 @@ export class JsonlGraphStore implements GraphStore {
 
   /** Reloads the graph when anything it reads has changed on disk.
    *
-   *  The key covers the derived JSONL AND the committed summary shards. Keying
-   *  on nodes/edges alone made a `git pull` that brought in only a teammate's
-   *  shards invisible for the life of the process — the shards are committed
-   *  and the derived graph is not, so that is the ordinary case, and the code
-   *  claimed to handle it. Stat calls only, O(number of shards). */
+   *  The key covers the derived JSONL, the committed summary shards, AND every
+   *  agent's sidecar. Keying on nodes/edges alone made a `git pull` that
+   *  brought in only a teammate's shards invisible for the life of the process
+   *  — the shards are committed and the derived graph is not, so that is the
+   *  ordinary case. Leaving the sidecars out did the same to a second agent
+   *  working the same checkout, which the overlay explicitly promises to
+   *  surface. Stat calls only, O(shards + sidecars). */
   private freshnessKey(): string {
     let m = 0;
     try {
@@ -168,7 +170,7 @@ export class JsonlGraphStore implements GraphStore {
     } catch {
       m = 0;
     }
-    return `${m}|${summaryShardsStamp(this.repoPath)}`;
+    return `${m}|${summaryShardsStamp(this.repoPath, sidecarPaths)}`;
   }
 
   private ensureFresh(): void {
