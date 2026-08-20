@@ -71,7 +71,7 @@ const HELP_TEXT = `reposkein-mcp — deterministic code-graph MCP server
 
 Usage:
   reposkein-mcp                 start the MCP server (stdio transport)
-  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph)
+  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph); --no-index skips the initial index, --ci also writes a GitHub Pages publish workflow (see docs/HOSTING.md)
   reposkein-mcp index [path]    (re)build the committed graph
   reposkein-mcp doctor [path]   health check (indexer binary, index, repo id)
   reposkein-mcp adr <sub> ...   decision-log utilities

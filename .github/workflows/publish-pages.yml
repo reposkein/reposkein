@@ -44,12 +44,10 @@ on:
         type: boolean
         default: true
 
-# EXPECTED_SCHEMA_VERSION mirrors indexer/crates/core/src/meta.rs SCHEMA_VERSION
-# (currently 1). Bump both together — this is the compatibility gate between
-# the released indexer binary this workflow downloads and the graph shape
-# `reposkein-mcp view --export` expects to read.
+# Opt node20-declaring actions into the Node 24 runtime ahead of GitHub's
+# forced migration (matches ci.yml / release.yml / embed-server.yml).
 env:
-  EXPECTED_SCHEMA_VERSION: "1"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -132,23 +130,39 @@ jobs:
               exit 1 ;;
           esac
 
-      - name: Index the repo
-        run: '"${REPOSKEIN_INDEXER_BIN}" index "${REPO_PATH}"'
-
-      - name: Assert meta.json schema_version compatibility
+      # Checked BEFORE indexing, against the repo's COMMITTED meta.json (`index`
+      # unconditionally rewrites meta.json's schema_version to match whichever
+      # binary runs it, so checking after indexing would be tautological — this
+      # binary always agrees with what it just wrote). `--schema-version` prints
+      # reposkein_core::meta::SCHEMA_VERSION straight from the binary — no
+      # hand-maintained constant here to drift from meta.rs across the
+      # repo/language boundary.
+      - name: Assert indexer <-> meta.json schema_version compatibility
         run: |
           set -euo pipefail
           META="${REPO_PATH}/.reposkein/meta.json"
           if [ ! -f "${META}" ]; then
-            echo "::error::no ${META} after indexing — has \`reposkein-mcp init\` been run for this repo (committed .reposkein/)?" >&2
+            echo "::error::no ${META} — has \`reposkein-mcp init\` been run for this repo and meta.json committed (see docs/INSTALL.md §4)?" >&2
             exit 1
           fi
-          SCHEMA="$(node -p "require('${GITHUB_WORKSPACE}/${META}').schema_version")"
-          if [ "${SCHEMA}" != "${EXPECTED_SCHEMA_VERSION}" ]; then
-            echo "::error::meta.json schema_version (${SCHEMA}) != this workflow's expected schema_version (${EXPECTED_SCHEMA_VERSION}) — the indexer binary and publish-pages.yml have drifted; bump EXPECTED_SCHEMA_VERSION (after confirming compatibility) before publishing" >&2
+          META_SCHEMA="$(node -p "require('${GITHUB_WORKSPACE}/${META}').schema_version")"
+          set +e
+          BIN_SCHEMA="$("${REPOSKEIN_INDEXER_BIN}" --schema-version 2>&1)"
+          BIN_STATUS=$?
+          set -e
+          if [ "${BIN_STATUS}" -ne 0 ]; then
+            echo "::error::indexer release too old for this workflow (no --schema-version support: ${BIN_SCHEMA}) — pin an older workflow ref or upgrade the reposkein release" >&2
             exit 1
           fi
-          echo "OK: meta.json schema_version=${SCHEMA} matches expected ${EXPECTED_SCHEMA_VERSION}"
+          BIN_SCHEMA="$(echo "${BIN_SCHEMA}" | tr -d '[:space:]')"
+          if [ "${BIN_SCHEMA}" != "${META_SCHEMA}" ]; then
+            echo "::error::indexer --schema-version (${BIN_SCHEMA}) != ${META}'s schema_version (${META_SCHEMA}) — refusing to publish a graph the release binary and the committed repo disagree about" >&2
+            exit 1
+          fi
+          echo "OK: indexer schema_version=${BIN_SCHEMA} matches ${META}"
+
+      - name: Index the repo
+        run: '"${REPOSKEIN_INDEXER_BIN}" index "${REPO_PATH}"'
 
       - name: Export the static constellation
         env:

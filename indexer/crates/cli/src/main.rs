@@ -51,8 +51,16 @@ exit 0
     about = "RepoSkein native indexer"
 )]
 struct Cli {
+    /// Print the graph schema version (reposkein_core::meta::SCHEMA_VERSION)
+    /// and exit 0, without indexing. Lets a caller (e.g. a CI publish
+    /// workflow) assert this binary is compatible with a repo's committed
+    /// .reposkein/meta.json without depending on the release/package version
+    /// number, which can drift from the schema in either direction.
+    #[arg(long)]
+    schema_version: bool,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -1084,7 +1092,16 @@ fn federation_repo_ids(path: &Path, repo_id: &str, seen: &mut std::collections::
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
+    if cli.schema_version {
+        println!("{}", reposkein_core::meta::SCHEMA_VERSION);
+        return Ok(());
+    }
+    let Some(command) = cli.command else {
+        anyhow::bail!(
+            "missing subcommand (run with --help for usage, or --schema-version to print the schema version)"
+        );
+    };
+    match command {
         Commands::Index {
             path,
             repo_id,

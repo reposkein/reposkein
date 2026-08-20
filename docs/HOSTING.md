@@ -58,7 +58,9 @@ still succeeds (it produces the artifact); only the deploy job fails.
   (no runtime fetch — still self-contained).
 - Optionally, size-capped per-node source slices (`with-source: true` input)
   for the DetailPanel's read-only source peek. Off by default — it adds
-  bytes to the export proportional to your repo's symbol count.
+  bytes to the export proportional to your repo's symbol count. Covers the
+  **root repo only** — nodes from a federated child repo (§ above) render
+  without a baked source peek.
 
 ### Freshness monitoring
 
