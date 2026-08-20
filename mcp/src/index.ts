@@ -34,7 +34,8 @@ import { makeCache } from "./store/repoContextCache.js";
 import { ensureGraph } from "./indexer/ensureGraph.js";
 import { ensureIndexerBinary, packageVersion } from "./indexer/fetchBinary.js";
 import { spawnIndexer } from "./indexer/runIndexer.js";
-import { SessionLogger, argsShapeOf, extractTouchedIds, resolveSessionId, resultByteSize } from "./store/sessionLog.js";
+import { SessionLogger, resolveSessionId } from "./store/sessionLog.js";
+import { createToolLogger } from "./store/instrumentTool.js";
 
 /** Selects the store backend.
  *  REPOSKEIN_STORE = "jsonl" | "neo4j" | "auto" (default "auto").
@@ -190,6 +191,19 @@ export async function main(): Promise<void> {
     envRepoPath: process.env.REPOSKEIN_REPO_PATH,
   });
 
+  // REP-20 session usage stats: one instrumentation point for every tool
+  // call, wrapping the handler passed to `server.registerTool` below (each
+  // call site does `withLog("tool_name", async (args) => {...})` — logging
+  // logic itself lives only in instrumentTool.ts/sessionLog.ts, never in a
+  // handler body). Session id = this process's lifetime (start-timestamp +
+  // pid), overridable via REPOSKEIN_SESSION_ID for reproducible tests/tooling.
+  // `cachedResolve` (used by `resolveActiveRepo` below, and by the two
+  // handlers that gate on repoPath alone) memoizes `session.resolve()` per
+  // call, so the handler's own resolution and the logger's are the same
+  // filesystem walk, not two — see instrumentTool.ts for why and how.
+  const sessionLogger = new SessionLogger(resolveSessionId(process.env));
+  const { withLog, cachedResolve } = createToolLogger(session, sessionLogger);
+
   // Per-repoPath {repoId, store} cache. Constructing a JsonlGraphStore is
   // cheap (it lazily loads/re-parses its graph per call, keyed by file
   // mtime) but re-running resolveRepoId/ensureGraph/buildStore on every tool
@@ -226,9 +240,11 @@ export async function main(): Promise<void> {
     | { ok: false; message: string };
   /** Resolves the session's current repo for a repo-scoped tool call.
    *  Re-evaluated on every call (not once at startup) so `select_repo`
-   *  actually takes effect for calls made after it. */
+   *  actually takes effect for calls made after it. Uses `cachedResolve`
+   *  (not `session.resolve()` directly) so this and the REP-20 logging
+   *  wrapper share one filesystem walk per call. */
   async function resolveActiveRepo(): Promise<ActiveRepo> {
-    const resolution = session.resolve();
+    const resolution = cachedResolve();
     if (!resolution.repoPath) return { ok: false, message: repoRequiredMessage(resolution) };
     const ctx = await getRepoContext(resolution.repoPath);
     // Distinct from repoRequiredMessage: a repo path WAS resolved here — the
@@ -240,57 +256,6 @@ export async function main(): Promise<void> {
   const errResult = (message: string): ToolResult => ({ content: [{ type: "text", text: message }], isError: true });
 
   const server = new McpServer({ name: "@reposkein/mcp", version: "0.0.0" });
-
-  // REP-20 session usage stats: one instrumentation point for every tool
-  // call, wrapping the handler passed to `server.registerTool` below (each
-  // call site does `withLog("tool_name", async (args) => {...})` — logging
-  // logic itself lives only here, in sessionLog.ts, and in logToolCall).
-  // Session id = this process's lifetime (start-timestamp+pid), overridable
-  // via REPOSKEIN_SESSION_ID for reproducible tests/tooling.
-  const sessionLogger = new SessionLogger(resolveSessionId(process.env));
-
-  /** Logs one completed tool call under the ACTIVE repo's
-   *  `.reposkein/local/sessions/<session-id>.jsonl` — resolved fresh here
-   *  (not cached) so a `select_repo` mid-connection, or a call that itself
-   *  changes the selection (select_repo), lands under the right repo. Per
-   *  the multi-repo/workspace-mode contract: a call with no resolved repo
-   *  (ambiguous workspace, nothing found yet) is simply not logged. Never
-   *  throws — a logging failure must never fail or slow a tool call. */
-  function logToolCall(name: string, args: unknown, result: ToolResult | undefined, threw: boolean): void {
-    try {
-      const resolution = session.resolve();
-      if (!resolution.repoPath) return;
-      const nodeIds = extractTouchedIds(result);
-      sessionLogger.log(resolution.repoPath, {
-        tool: name,
-        argsShape: argsShapeOf(args),
-        resultBytes: resultByteSize(result),
-        ...(nodeIds.length ? { nodeIds } : {}),
-        ok: !threw && result?.isError !== true,
-      });
-    } catch {
-      // instrumentation must never affect the tool call
-    }
-  }
-
-  /** Wraps a tool handler with the logging above. `Args`/result type are
-   *  inferred from the handler passed in, so this adds no typing burden at
-   *  each `server.registerTool` call site. */
-  function withLog<Args>(name: string, cb: (args: Args) => Promise<ToolResult>): (args: Args) => Promise<ToolResult> {
-    return async (args: Args): Promise<ToolResult> => {
-      let result: ToolResult | undefined;
-      let threw = false;
-      try {
-        result = await cb(args);
-        return result;
-      } catch (err) {
-        threw = true;
-        throw err;
-      } finally {
-        logToolCall(name, args, result, threw);
-      }
-    };
-  }
 
   server.registerTool(
     "list_repos",
@@ -347,7 +312,7 @@ export async function main(): Promise<void> {
       // read_cypher tolerates an unresolved repo (falls back to whatever
       // buildStore(undefined, undefined) picks — Neo4j if configured, else
       // UnconfiguredStore — matching its pre-existing, non-gated behavior).
-      const resolution = session.resolve();
+      const resolution = cachedResolve();
       const ctx = resolution.repoPath
         ? await getRepoContext(resolution.repoPath)
         : { repoId: undefined, store: buildStore(undefined, undefined) };
@@ -458,7 +423,7 @@ export async function main(): Promise<void> {
     },
     withLog("get_temporal_context", async (args) => {
       // Gated on repoPath only (not repoId/store) — it reads from .git directly.
-      const resolution = session.resolve();
+      const resolution = cachedResolve();
       if (!resolution.repoPath) return errResult(repoRequiredMessage(resolution));
       return makeTemporalContext(resolution.repoPath)(args);
     })

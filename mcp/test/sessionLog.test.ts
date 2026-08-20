@@ -155,6 +155,13 @@ describe("SessionLogger", () => {
     expect(logger.getSessionId()).toBe("sess-x");
   });
 
+  it("logAt() stamps the caller-supplied ts instead of computing one — the deferred-write path", () => {
+    const logger = new SessionLogger("sess-1");
+    logger.logAt("2020-01-01T00:00:00.000Z", dir, { tool: "impact", argsShape: [], resultBytes: 1, ok: true });
+    const rec = JSON.parse(readFileSync(sessionLogPath(dir, "sess-1"), "utf8").trim());
+    expect(rec.ts).toBe("2020-01-01T00:00:00.000Z");
+  });
+
   it("log() never throws even if the underlying write fails", () => {
     const readonlyRoot = join(dir, "readonly");
     mkdirSync(readonlyRoot);
@@ -186,6 +193,14 @@ describe("resultByteSize", () => {
   });
   it("falls back to the full envelope size when there's no text content", () => {
     const result = { content: [], isError: false };
+    expect(resultByteSize(result)).toBe(Buffer.byteLength(JSON.stringify(result), "utf8"));
+  });
+  it("returns 0 (not the envelope fallback) when text blocks exist but are all empty strings", () => {
+    const result = { content: [{ type: "text", text: "" }, { type: "text", text: "" }], isError: false };
+    expect(resultByteSize(result)).toBe(0);
+  });
+  it("ignores non-text blocks when computing the fallback trigger (no text block at all -> fallback)", () => {
+    const result = { content: [{ type: "image" as const }] };
     expect(resultByteSize(result)).toBe(Buffer.byteLength(JSON.stringify(result), "utf8"));
   });
   it("returns 0 for undefined", () => {

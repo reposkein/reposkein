@@ -185,17 +185,22 @@ export function extractTouchedIds(result: ToolResultLike | undefined): string[] 
 
 /** Byte size of the text an agent would actually read from a tool result
  *  (sum of `content[].text`), the basis for "context tokens saved". Falls
- *  back to the full JSON envelope size if there's no text content. */
+ *  back to the full JSON envelope size only when there's no text content AT
+ *  ALL (no `content` array, or no block of type "text") — a result whose
+ *  text blocks exist but are empty strings correctly reports 0, it does not
+ *  fall back to stringifying the envelope. */
 export function resultByteSize(result: ToolResultLike | undefined): number {
   if (!result) return 0;
   const blocks = result.content ?? [];
   let bytes = 0;
+  let hasTextBlock = false;
   for (const block of blocks) {
     if (block.type === "text" && typeof block.text === "string") {
+      hasTextBlock = true;
       bytes += Buffer.byteLength(block.text, "utf8");
     }
   }
-  return bytes > 0 ? bytes : Buffer.byteLength(JSON.stringify(result), "utf8");
+  return hasTextBlock ? bytes : Buffer.byteLength(JSON.stringify(result), "utf8");
 }
 
 /** Argument KEY NAMES only, sorted, never values. */
@@ -206,8 +211,9 @@ export function argsShapeOf(args: unknown): string[] {
 
 /** The single per-process instrumentation sink: one instance is created in
  *  `main()` and shared by the tool-dispatch wrapper for every registered
- *  tool (see `withLog` in index.ts) — the one place tool calls get logged,
- *  so individual tool handlers never contain logging code.
+ *  tool (see `createToolLogger`/`withLog` in instrumentTool.ts) — the one
+ *  place tool calls get logged, so individual tool handlers never contain
+ *  logging code.
  *
  *  Retention is enforced lazily, per repo, the first time this process logs
  *  a call for that repo — equivalent to "prune on server start" for the
@@ -228,12 +234,22 @@ export class SessionLogger {
   }
 
   log(repoPath: string, entry: Omit<SessionLogRecord, "ts">): void {
+    this.logAt(new Date().toISOString(), repoPath, entry);
+  }
+
+  /** Same as `log`, but with `ts` supplied by the caller instead of stamped
+   *  here — for the deferred-write path (see `instrumentTool.ts`), where the
+   *  call's completion time is captured synchronously on the hot path and
+   *  the actual write happens later (setImmediate); using that captured
+   *  `ts` keeps the record's timestamp accurate to when the call finished,
+   *  not to whenever the deferred write got scheduled. */
+  logAt(ts: string, repoPath: string, entry: Omit<SessionLogRecord, "ts">): void {
     try {
       if (!this.prunedRepos.has(repoPath)) {
         this.prunedRepos.add(repoPath);
         pruneSessions(repoPath, this.retention);
       }
-      appendSessionLog(repoPath, this.sessionId, { ts: new Date().toISOString(), ...entry });
+      appendSessionLog(repoPath, this.sessionId, { ts, ...entry });
     } catch {
       // never fail/slow the tool call — see appendSessionLog's own try/catch too
     }
