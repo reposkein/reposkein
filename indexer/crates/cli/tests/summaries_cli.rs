@@ -330,6 +330,10 @@ fn summaries_in_a_legacy_committed_nodes_jsonl_are_harvested() {
         lines.push(serde_json::to_string(&v).unwrap());
     }
     fs::write(&nodes_path, lines.join("\n") + "\n").unwrap();
+    // Complete the pre-upgrade picture: an old indexer wrote no local/ dir and
+    // no shards, so neither exists yet. (Without this the run above has already
+    // closed the one-shot harvest, and we would be testing the steady state.)
+    fs::remove_dir_all(root.join(".reposkein/local")).unwrap();
 
     index(root);
 
@@ -337,6 +341,93 @@ fn summaries_in_a_legacy_committed_nodes_jsonl_are_harvested() {
     assert!(
         s.contains("legacy prose"),
         "a summary living only in nodes.jsonl must be migrated: {s}"
+    );
+}
+
+#[test]
+fn the_nodes_jsonl_harvest_is_one_shot_per_checkout() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    seed(root);
+    index(root);
+
+    let marker = root.join(".reposkein/local/.legacy-nodes-harvested");
+    assert!(
+        marker.exists(),
+        "the first index must close the migration so later runs skip it"
+    );
+
+    // Now plant a summary in nodes.jsonl the way an old indexer would have.
+    // The migration is already done for this checkout, so it must be ignored:
+    // nodes.jsonl is derived and git-ignored, and treating it as an authored
+    // source forever is what leaks prose between branches.
+    let nodes_path = root.join(".reposkein/nodes.jsonl");
+    let text = fs::read_to_string(&nodes_path).unwrap();
+    let patched: Vec<String> = text
+        .lines()
+        .map(|line| {
+            let mut v: serde_json::Value = serde_json::from_str(line).unwrap();
+            if v["id"] == FUNC_ID {
+                let hash = v["content_hash"].as_str().unwrap().to_string();
+                v["semantic_summary"] = serde_json::json!("should not be harvested");
+                v["summary_of_hash"] = serde_json::json!(hash);
+            }
+            serde_json::to_string(&v).unwrap()
+        })
+        .collect();
+    fs::write(&nodes_path, patched.join("\n") + "\n").unwrap();
+
+    index(root);
+
+    assert!(
+        summaries(root).is_none(),
+        "a post-migration index must not mine nodes.jsonl for authored prose"
+    );
+}
+
+/// The regression this gate exists for.
+///
+/// nodes.jsonl is git-ignored, so it survives `git checkout`. When the harvest
+/// ran on every index, a summary written on branch A was read back out of that
+/// surviving file on branch B and written into BRANCH B's committed shards — so
+/// every branch on the machine accumulated every summary ever written there,
+/// and each one showed up as a shard diff against every other branch. That is
+/// exactly the cross-branch churn the sharding exists to remove.
+#[test]
+fn a_summary_written_on_one_branch_does_not_leak_into_another_via_nodes_jsonl() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    seed(root);
+    index(root);
+    let hash = content_hash(root, FUNC_ID);
+
+    // Branch A: an agent writes a summary and it lands in a committed shard.
+    write_sidecar(root, FUNC_ID, "branch A prose", &hash);
+    index(root);
+    let a_shards = shard_names(root);
+    assert!(
+        summaries(root).unwrap().contains("branch A prose"),
+        "branch A should have committed its summary"
+    );
+
+    // Switch to branch B. `git checkout` removes branch A's COMMITTED shards
+    // (branch B never had them) and leaves the git-ignored nodes.jsonl —
+    // which still carries branch A's grafted summary — exactly in place.
+    fs::remove_dir_all(root.join(".reposkein/summaries")).unwrap();
+    assert!(
+        fs::read_to_string(root.join(".reposkein/nodes.jsonl"))
+            .unwrap()
+            .contains("branch A prose"),
+        "precondition: the ignored graph still holds branch A's prose"
+    );
+
+    index(root);
+
+    assert!(
+        summaries(root).is_none(),
+        "branch B committed no summaries, so it must produce no shards; got {:?} \
+         (branch A had {a_shards:?})",
+        shard_names(root)
     );
 }
 

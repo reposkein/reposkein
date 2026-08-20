@@ -33,14 +33,12 @@ idx() { "$BIN" index --repo-id r --name d . >/dev/null 2>&1; }
 commit() { git -c core.hooksPath=/dev/null commit -qm "$1"; }
 merge() { git -c core.hooksPath=/dev/null merge --no-edit -q "$1"; }
 
-# Switching branches the way a SECOND DEVELOPER would see it. nodes.jsonl is
-# git-ignored, so it survives a checkout, and `index` harvests summaries out of
-# it — which would carry the other branch's prose across and make this repro
-# lie about what each branch actually committed.
-fresh_checkout() {
-  git checkout -q "$@"
-  rm -f .reposkein/nodes.jsonl .reposkein/edges.jsonl
-}
+# Switching branches with NOTHING cleaned up in between — which is the point.
+# nodes.jsonl is git-ignored, so it survives the checkout still carrying the
+# other branch's grafted summary. If `index` ever mines it for authored prose
+# again, branch-b's commit picks up branch-a's summary and the first assertion
+# below fails.
+switch() { git checkout -q "$@"; }
 
 git init -q .
 git config user.email repro@example.com
@@ -76,23 +74,26 @@ echo "== two branches summarise DIFFERENT nodes =="
 # The case that should be invisible: different node ids hash to different
 # shards, so the two commits touch disjoint paths and there is nothing to
 # resolve. This is where all the merge smoothness actually comes from.
-fresh_checkout -b branch-a
+switch -b branch-a
 summarise a 'rs1:r:func:m.py#f@0' 'A: returns one' "$FH" '2026-08-20T10:00:00Z'
 commit "summarise f"
 SHARD_A=$(shard_holding 'A: returns one')
 
-fresh_checkout "$MAIN"
-fresh_checkout -b branch-b
+switch "$MAIN"
+switch -b branch-b
 summarise b 'rs1:r:func:m.py#g@0' 'B: returns two' "$GH" '2026-08-20T11:00:00Z'
 commit "summarise g"
 SHARD_B=$(shard_holding 'B: returns two')
 
 [ -n "$SHARD_A" ] && [ -n "$SHARD_B" ] || fail "a branch committed no shard at all"
 [ "$SHARD_A" != "$SHARD_B" ] || fail "both branches wrote $SHARD_A — the shard spread is broken"
+if grep -qr 'A: returns one' .reposkein/summaries/; then
+  fail "branch-a's summary leaked into branch-b through the git-ignored nodes.jsonl"
+fi
 echo "   branch-a wrote $SHARD_A"
-echo "   branch-b wrote $SHARD_B"
+echo "   branch-b wrote $SHARD_B (and did NOT pick up branch-a's summary)"
 
-git checkout -q branch-a
+switch branch-a
 merge branch-b || fail "unrelated summaries conflicted"
 grep -qr 'A: returns one' .reposkein/summaries/ || fail "branch-a's prose lost in the merge"
 grep -qr 'B: returns two' .reposkein/summaries/ || fail "branch-b's prose lost in the merge"
@@ -105,12 +106,12 @@ echo "== two branches summarise the SAME node =="
 # content. What must hold: the index never fails, the shard comes out canonical
 # and marker-free, the winner is the same on every machine, and the loser is
 # preserved somewhere a human can read it.
-git checkout -qb branch-c
+switch -b branch-c
 summarise c 'rs1:r:func:m.py#f@0' 'C: the constant one' "$FH" '2026-08-21T09:00:00Z'
 commit "resummarise f (C)"
 
-git checkout -q branch-a
-git checkout -qb branch-d
+switch branch-a
+switch -b branch-d
 summarise d 'rs1:r:func:m.py#f@0' 'D: the identity of one' "$FH" '2026-08-22T09:00:00Z'
 commit "resummarise f (D)"
 
@@ -125,7 +126,9 @@ idx
 echo "   shard after index:"
 sed 's/^/     /' .reposkein/summaries/*.jsonl | cut -c1-96
 
-grep -qr '<<<<<<<\|>>>>>>>' .reposkein/summaries/ && fail "conflict markers survived the index"
+if grep -qr '<<<<<<<\|>>>>>>>' .reposkein/summaries/; then
+  fail "conflict markers survived the index"
+fi
 [ "$(cat .reposkein/summaries/*.jsonl | grep -c 'm.py#f@0')" = "1" ] \
   || fail "the node ended up on more than one line"
 grep -qr 'D: the identity of one' .reposkein/summaries/ \

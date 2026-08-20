@@ -200,6 +200,8 @@ The pre-commit hook stages nothing by default; it runs `reposkein-indexer stage-
 
 Run `reposkein-mcp index .` once. It folds `.reposkein/summaries.jsonl` into the shards and retires the file; commit the result (one deletion, N small additions). Both files are read during this release, so a teammate still on the old indexer loses nothing — their re-created `summaries.jsonl` is folded in on your next index. Then run `reposkein-indexer init --hooks .` to drop any stale `merge=` line from your root `.gitattributes`.
 
+A repo old enough to have summaries living inside a once-committed `nodes.jsonl` gets those harvested too, on the **first** index only. That harvest is deliberately one-shot per working tree, recorded by `.reposkein/local/.legacy-nodes-harvested`: `nodes.jsonl` is git-ignored, so it survives `git checkout`, and mining it for authored prose on every index would write branch A's summaries into branch B's shards — reintroducing exactly the cross-branch churn the sharding removes. After that first run, steady state reads committed shards and per-agent sidecars only. Delete the marker only if you know the checkout still holds an un-migrated `nodes.jsonl`.
+
 If your repo-root `.gitignore` has a blanket rule over `.reposkein/`, add a negation for the shards or they are silently never committed:
 
 ```

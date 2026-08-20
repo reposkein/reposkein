@@ -422,13 +422,17 @@ fn run_index(
     let mut conflicts: Vec<reposkein_core::summaries::SummaryRecord> = Vec::new();
     // 1) Legacy: summaries inside a previously committed nodes.jsonl, so the
     //    first index after upgrading harvests them instead of dropping them.
-    //    Best-effort — a corrupt derived file must never abort an index.
-    //    Retained (not just absorbed) so the graph_delta diff below is free.
+    //    ONE-SHOT — see `legacy_nodes_harvest_needed` for why running this on
+    //    every index is actively harmful. Best-effort: a corrupt derived file
+    //    must never abort an index. `prev_nodes` is retained regardless (not
+    //    just absorbed) so the graph_delta diff below is free.
     let prev_nodes: Option<Vec<reposkein_core::model::Node>> = std::fs::read_to_string(&nodes_path)
         .ok()
         .and_then(|prev| reposkein_core::jsonl::read_nodes(&prev).ok());
-    if let Some(ref existing) = prev_nodes {
-        absorb_summaries(&mut authored, existing);
+    if legacy_nodes_harvest_needed(&out_dir) {
+        if let Some(ref existing) = prev_nodes {
+            absorb_summaries(&mut authored, existing);
+        }
     }
     // Claim every file that must be folded in and then removed, BEFORE reading
     // any of it: renaming aside is atomic, so a write_semantic_summary landing
@@ -510,6 +514,11 @@ fn run_index(
         let _ = std::fs::remove_file(p);
     }
     let _ = std::fs::remove_dir(out_dir.join("local").join(CONSUMING_DIR));
+    // The shards are written, so whatever nodes.jsonl was carrying is now in
+    // them. Close the one-shot harvest: from here on, steady-state indexing
+    // sources committed shards + per-agent sidecars only, and a branch switch
+    // cannot leak the other branch's prose back in.
+    mark_legacy_nodes_harvested(&out_dir);
 
     write_reposkein_layout(&out_dir, &repo).context("failed to write .reposkein layout")?;
 
@@ -644,6 +653,63 @@ fn stage_summaries(root: &Path) {
 /// Staging directory (under `.reposkein/local/`) for files an index run has
 /// claimed but not yet folded into the shards.
 const CONSUMING_DIR: &str = "consuming";
+
+/// Marks that this checkout has already done the one-shot #35 harvest, so the
+/// next index must not repeat it. Lives under the git-ignored `local/`, which
+/// is exactly the scope we want: per working tree, surviving branch switches.
+const LEGACY_HARVEST_MARKER: &str = ".legacy-nodes-harvested";
+
+const LEGACY_HARVEST_MARKER_BODY: &str = "\
+# Written by `reposkein-indexer index`. Do not commit (local/ is git-ignored).
+#
+# This checkout has already harvested authored summaries out of a pre-#35
+# committed nodes.jsonl. Delete this file only to force that migration to run
+# again — and only if you know the checkout still holds an un-migrated
+# nodes.jsonl, because re-running the harvest resurrects summaries from
+# whatever branch was last indexed here.
+";
+
+/// True when this index run should harvest summaries out of `nodes.jsonl`.
+///
+/// This harvest exists for one thing: the #35 migration, where a repo indexed
+/// by an older RepoSkein carries its summaries INSIDE a then-committed
+/// nodes.jsonl. Running it on every index looks harmless and is not.
+///
+/// nodes.jsonl is git-ignored, so it survives `git checkout`. Harvest it every
+/// time and a summary written on branch A is read back on branch B and written
+/// into branch B's committed shards — so every branch on the machine slowly
+/// accumulates every summary ever written there, and each one shows up as a
+/// shard diff against every other branch. That is precisely the cross-branch
+/// churn the sharding exists to remove; the migration path was quietly
+/// recreating it.
+///
+/// So it is one-shot per working tree, and only on evidence that this really is
+/// the migration: either the pre-sharding `summaries.jsonl` is still present,
+/// or no shards exist yet (nothing has been migrated in this checkout). Once a
+/// run completes, `mark_legacy_nodes_harvested` closes it permanently — the
+/// marker is what carries the "already done" fact across a branch switch, since
+/// the shards themselves do not.
+fn legacy_nodes_harvest_needed(out_dir: &Path) -> bool {
+    if out_dir.join("local").join(LEGACY_HARVEST_MARKER).exists() {
+        return false;
+    }
+    out_dir
+        .join(reposkein_core::summaries::LEGACY_FILE)
+        .exists()
+        || !out_dir.join(reposkein_core::summaries::SHARD_DIR).exists()
+}
+
+/// Closes the one-shot harvest for this working tree. Best-effort: failing to
+/// write the marker costs a redundant harvest next run, never correctness.
+fn mark_legacy_nodes_harvested(out_dir: &Path) {
+    let local = out_dir.join("local");
+    let marker = local.join(LEGACY_HARVEST_MARKER);
+    if marker.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&local);
+    let _ = std::fs::write(&marker, LEGACY_HARVEST_MARKER_BODY);
+}
 
 /// Files one index run has claimed and must delete once the shards are written.
 #[derive(Default)]
