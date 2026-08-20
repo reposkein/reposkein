@@ -1,5 +1,11 @@
 import { neutralizeSummary } from "../guard/summaryValidation.js";
-import { loadDecisions, type DecisionRecord, type DecisionStatus } from "../store/decisions.js";
+import {
+  loadDecisions,
+  nodeIdRepo,
+  nodeIdSuffix,
+  type DecisionRecord,
+  type DecisionStatus,
+} from "../store/decisions.js";
 import type { TargetRow } from "./types.js";
 
 /** A decision surfaced on a profile/impact target: enough to know it exists
@@ -34,24 +40,32 @@ const GOVERNING_ORDER: Partial<Record<DecisionStatus, number>> = {
   deprecated: 2,
 };
 
-/** `:<kind>:<rest>` — the id part that survives repo_id drift across forks. */
-function idSuffix(nodeId: string): string | null {
-  const m = /^rs1:[^:]+(:.+)$/.exec(nodeId);
-  return m ? m[1]! : null;
-}
-
 function directAnchor(rec: DecisionRecord, targetId: string) {
-  const targetSuffix = idSuffix(targetId);
+  const targetSuffix = nodeIdSuffix(targetId);
   return rec.anchors.find(
-    (a) => a.node_id === targetId || (targetSuffix !== null && idSuffix(a.node_id) === targetSuffix)
+    (a) =>
+      a.node_id === targetId || (targetSuffix !== null && nodeIdSuffix(a.node_id) === targetSuffix)
   );
 }
 
-function coversPath(rec: DecisionRecord, filePath: string): boolean {
+/** Path governance for one node. Anchor paths match only within the anchored
+ *  node's own repo; authored `paths` are ROOT-relative and never cross into
+ *  nested child repos (child file_paths are child-relative — same-looking
+ *  strings, different coordinate system; anchor child code directly instead).
+ *  `rootRepoId` undefined → unscoped (single-repo callers/tests). */
+function coversPath(
+  rec: DecisionRecord,
+  filePath: string,
+  nodeRepo: string | null,
+  rootRepoId?: string
+): boolean {
   if (filePath === "") return false;
   for (const a of rec.anchors) {
-    if (a.path === filePath) return true;
+    if (a.path === filePath && (nodeRepo === null || nodeIdRepo(a.node_id) === nodeRepo)) {
+      return true;
+    }
   }
+  if (rootRepoId !== undefined && nodeRepo !== null && nodeRepo !== rootRepoId) return false;
   for (const p of rec.paths) {
     if (p === filePath) return true;
     if (p.endsWith("/") && filePath.startsWith(p)) return true;
@@ -61,7 +75,11 @@ function coversPath(rec: DecisionRecord, filePath: string): boolean {
 
 /** Pure filesystem + target-row computation (no store round-trips): which
  *  decisions govern this node, and which of them the node has drifted under. */
-export function governingDecisionsFor(repoPath: string, target: TargetRow): TargetGovernance {
+export function governingDecisionsFor(
+  repoPath: string,
+  target: TargetRow,
+  rootRepoId?: string
+): TargetGovernance {
   const { decisions } = loadDecisions(repoPath);
   const matched: GoverningDecision[] = [];
   const needing_review: string[] = [];
@@ -83,7 +101,9 @@ export function governingDecisionsFor(repoPath: string, target: TargetRow): Targ
           needing_review.push(rec.id);
         }
       }
-    } else if (coversPath(rec, target.file_path)) {
+    } else if (
+      coversPath(rec, target.file_path, target.repo_id || nodeIdRepo(target.id), rootRepoId)
+    ) {
       entry = {
         id: rec.id,
         title: neutralizeSummary(rec.title) ?? "",
@@ -108,7 +128,8 @@ export function governingDecisionsFor(repoPath: string, target: TargetRow): Targ
  *  governs (the target plus impacted rows). */
 export function governingDecisionsForNodes(
   repoPath: string,
-  nodes: { node_id: string; file_path: string; content_hash?: string | null }[]
+  nodes: { node_id: string; file_path: string; content_hash?: string | null }[],
+  rootRepoId?: string
 ): { id: string; title: string; status: DecisionStatus; governs: string[] }[] {
   const { decisions } = loadDecisions(repoPath);
   const out: { id: string; title: string; status: DecisionStatus; governs: string[] }[] = [];
@@ -116,20 +137,10 @@ export function governingDecisionsForNodes(
     if (GOVERNING_ORDER[rec.status] === undefined) continue;
     const governs: string[] = [];
     for (const n of nodes) {
-      const row: TargetRow = {
-        id: n.node_id,
-        repo_id: "",
-        name: "",
-        qualified_name: "",
-        file_path: n.file_path,
-        start_line: 0,
-        end_line: 0,
-        semantic_summary: null,
-        summary_of_hash: null,
-        content_hash: n.content_hash ?? null,
-        labels: [],
-      };
-      if (directAnchor(rec, row.id) || coversPath(rec, row.file_path)) {
+      if (
+        directAnchor(rec, n.node_id) ||
+        coversPath(rec, n.file_path, nodeIdRepo(n.node_id), rootRepoId)
+      ) {
         governs.push(n.node_id);
       }
     }

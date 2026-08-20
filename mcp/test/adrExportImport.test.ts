@@ -123,6 +123,56 @@ describe("adr import", () => {
     }
   });
 
+  it("re-import is idempotent: existing base ids are skipped, not duplicated", () => {
+    seed("adr:2026-08-01-first");
+    const out = join(dir, "docs", "adr");
+    exportAdrMarkdown(dir, out);
+    const dir2 = mkdtempSync(join(tmpdir(), "rs-adr4-"));
+    try {
+      const first = importAdrMarkdown(dir2, out, { fallbackDate: "2026-08-20" });
+      expect(first.imported).toBe(1);
+      const second = importAdrMarkdown(dir2, out, { fallbackDate: "2026-08-20" });
+      expect(second.imported).toBe(0);
+      expect(second.existing).toBe(1);
+      expect(loadDecisions(dir2).decisions).toHaveLength(1);
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it("re-export removes stale generated files when ordinals shift", () => {
+    seed("adr:2026-08-10-mid");
+    seed("adr:2026-08-20-late");
+    const out = join(dir, "docs", "adr");
+    exportAdrMarkdown(dir, out);
+    // A hand-written (non-generated) doc must survive the cleanup.
+    writeFileSync(join(out, "handwritten.md"), "# My notes\n");
+    seed("adr:2026-08-01-early"); // sorts first → every ordinal shifts
+    exportAdrMarkdown(dir, out);
+    expect(readdirSync(out).sort()).toEqual([
+      "0001-2026-08-01-early.md",
+      "0002-2026-08-10-mid.md",
+      "0003-2026-08-20-late.md",
+      "handwritten.md",
+    ]);
+  });
+
+  it("prose containing markdown headings cannot corrupt the export/import round trip", () => {
+    seed("adr:2026-08-01-tricky", {
+      context: "We compared options.\n## Status\nrejected",
+    });
+    const out = join(dir, "docs", "adr");
+    exportAdrMarkdown(dir, out);
+    const dir2 = mkdtempSync(join(tmpdir(), "rs-adr5-"));
+    try {
+      importAdrMarkdown(dir2, out, { fallbackDate: "2026-08-20" });
+      const rec = loadDecisions(dir2).decisions[0]!;
+      expect(rec.status).toBe("accepted"); // the injected heading must not win
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
+
   it("skips documents it cannot parse and reports them", () => {
     const src = join(dir, "docs", "adr");
     const dir2 = mkdtempSync(join(tmpdir(), "rs-adr3-"));

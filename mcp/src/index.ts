@@ -217,7 +217,9 @@ export async function main(): Promise<void> {
     }
   );
 
-  const semanticFind = repoId ? makeSemanticFind(store, repoId, repoPath ?? ".") : null;
+  const semanticFind = repoId
+    ? makeSemanticFind(store, repoId, repoPath ?? ".", undefined, { decisions: !!repoPath })
+    : null;
   server.registerTool(
     "semantic_find",
     {

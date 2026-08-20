@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 /// Ids are capped per list so a bulk change can't bloat stats output; counts
 /// stay exact and `truncated` says when the lists are partial.
-pub const DELTA_ID_CAP: usize = 50;
+pub const DELTA_ID_CAP: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DeltaCounts {
@@ -224,12 +224,13 @@ mod tests {
 
     #[test]
     fn caps_id_lists_and_keeps_exact_counts() {
-        let next: Vec<Node> = (0..60)
+        let total = DELTA_ID_CAP + 10;
+        let next: Vec<Node> = (0..total)
             .map(|i| node(&format!("rs1:r:func:a#n{i:03}@0"), Some("h"), &[]))
             .collect();
         let d = compute_graph_delta(&[], &next);
         assert_eq!(d.added.len(), DELTA_ID_CAP);
-        assert_eq!(d.counts.added, 60);
+        assert_eq!(d.counts.added, total);
         assert!(d.truncated);
     }
 

@@ -107,6 +107,16 @@ describe("list_decisions", () => {
     expect((byText.decisions as { id: string }[]).map((d) => d.id)).toEqual(["adr:2026-08-10-api-shape"]);
   });
 
+  it("anchor filter tolerates repo_id drift (suffix match, like every other surface)", async () => {
+    seed(root, "adr:2026-08-13-fork", {
+      anchors: [{ node_id: "rs1:forkrepo:func:svc.py#Svc.run@1", path: "svc.py", name: "Svc.run", kind: "Function", hash: "h1" }],
+    });
+    const store = fakeStore({ getNode: async () => null });
+    const list = makeListDecisions(store, REPO_ID, root);
+    const out = parse(await list({ anchor: NODE_ID }));
+    expect((out.decisions as { id: string }[]).map((d) => d.id)).toEqual(["adr:2026-08-13-fork"]);
+  });
+
   it("neutralizes prose on the read path", async () => {
     seed(root, "adr:2026-08-12-hostile", { title: "Evil ```fence``` [link](http://x) title" });
     const store = fakeStore({ getNode: async () => null });

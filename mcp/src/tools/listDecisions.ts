@@ -4,6 +4,7 @@ import { neutralizeSummary } from "../guard/summaryValidation.js";
 import {
   anchorRepoIds,
   loadDecisions,
+  nodeIdSuffix,
   resolveAnchorStates,
   type DecisionRecord,
   type DecisionStatus,
@@ -41,7 +42,12 @@ export function governsPath(rec: DecisionRecord, filePath: string): boolean {
 
 function matchesAnchor(rec: DecisionRecord, anchor: string): boolean {
   if (anchor.startsWith("rs1:")) {
-    return rec.anchors.some((a) => a.node_id === anchor);
+    // Suffix-tolerant, like every other decision surface — anchors recorded
+    // in a fork/clone carry a different repo_id for the same node.
+    const suffix = nodeIdSuffix(anchor);
+    return rec.anchors.some(
+      (a) => a.node_id === anchor || (suffix !== null && nodeIdSuffix(a.node_id) === suffix)
+    );
   }
   return governsPath(rec, anchor);
 }

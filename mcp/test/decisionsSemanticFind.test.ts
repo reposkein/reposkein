@@ -81,4 +81,12 @@ describe("semantic_find over decisions", () => {
     const out = parse(await find({ query: "charge" }));
     expect(out.results[0]!.node_id).toBe(FN.id);
   });
+
+  it("excludes decisions when the caller disables them (no real repoPath configured)", async () => {
+    seed(root, "adr:2026-08-10-idempotency");
+    const store = fakeStore({ searchCorpus: async () => [FN] });
+    const find = makeSemanticFind(store, REPO_ID, root, null, { decisions: false });
+    const out = parse(await find({ query: "idempotency charge" }));
+    expect(out.results.every((r) => r.kind !== "Decision")).toBe(true);
+  });
 });

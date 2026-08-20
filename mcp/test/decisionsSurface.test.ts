@@ -88,6 +88,24 @@ describe("governingDecisionsFor", () => {
     expect(g2.decisions.map((d) => [d.id, d.via])).toEqual([["adr:2026-08-04-file", "contains"]]);
   });
 
+  it("path governance never crosses into nested child repos (different coordinate system)", () => {
+    seed(root, "adr:2026-08-03-dir", { paths: ["src/"] });
+    // A child repo's node whose child-relative file_path collides with the prefix.
+    const childTarget = target({
+      id: "rs1:childrepo:func:src/svc.py#Svc.run@1",
+      repo_id: "childrepo",
+      file_path: "src/svc.py",
+    });
+    const g = governingDecisionsFor(root, childTarget, REPO_ID);
+    expect(g.decisions).toEqual([]);
+    // Direct anchors still govern child-repo nodes (that is the supported way).
+    seed(root, "adr:2026-08-06-anchored", {
+      anchors: [anchorFor("rs1:childrepo:func:src/svc.py#Svc.run@1", "h1", "src/svc.py")],
+    });
+    const g2 = governingDecisionsFor(root, childTarget, REPO_ID);
+    expect(g2.decisions.map((d) => d.id)).toEqual(["adr:2026-08-06-anchored"]);
+  });
+
   it("excludes rejected and superseded decisions and caps at 5, proposed after accepted", () => {
     seed(root, "adr:2026-08-01-rejected", { status: "rejected", paths: ["svc.py"] });
     seed(root, "adr:2026-08-02-superseded", { status: "superseded", paths: ["svc.py"] });

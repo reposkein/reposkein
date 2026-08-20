@@ -1,9 +1,10 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   computeBodyHash,
+  decisionBaseId,
   loadDecisions,
-  mintDecisionId,
+  takenDecisionIds,
   writeDecision,
   type DecisionRecord,
   type DecisionStatus,
@@ -28,6 +29,19 @@ const STATUSES: readonly DecisionStatus[] = [
   "superseded",
 ];
 
+const GENERATED_MARKER = "<!-- reposkein:";
+
+/** Escapes line-leading '#' in prose so recorded text can never masquerade as
+ *  a section heading — the write guard allows newlines, and an injected
+ *  "## Status" would otherwise flip fields on re-import. parseAdrMarkdown
+ *  unescapes symmetrically. */
+function escapeProse(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => (l.startsWith("#") ? `\\${l}` : l))
+    .join("\n");
+}
+
 /** Nygard-style markdown for one record. `n` is the export ordinal. */
 export function renderAdrMarkdown(rec: DecisionRecord, n: number): string {
   const lines: string[] = [];
@@ -35,10 +49,10 @@ export function renderAdrMarkdown(rec: DecisionRecord, n: number): string {
   lines.push(`Date: ${rec.decided_at}`, "");
   lines.push("## Status", "");
   lines.push(rec.status + (rec.superseded_by ? ` (superseded by ${rec.superseded_by})` : ""), "");
-  lines.push("## Context", "", rec.context, "");
-  lines.push("## Decision", "", rec.decision, "");
-  if (rec.consequences) lines.push("## Consequences", "", rec.consequences, "");
-  if (rec.alternatives) lines.push("## Alternatives", "", rec.alternatives, "");
+  lines.push("## Context", "", escapeProse(rec.context), "");
+  lines.push("## Decision", "", escapeProse(rec.decision), "");
+  if (rec.consequences) lines.push("## Consequences", "", escapeProse(rec.consequences), "");
+  if (rec.alternatives) lines.push("## Alternatives", "", escapeProse(rec.alternatives), "");
   const governs = [
     ...rec.anchors.map((a) => `- ${a.path || a.node_id} (${a.kind || "node"})`),
     ...rec.paths.map((p) => `- ${p}`),
@@ -52,10 +66,23 @@ export function renderAdrMarkdown(rec: DecisionRecord, n: number): string {
 }
 
 /** Renders every decision to outDir, numbered by sorted id (deterministic:
- *  same log → same files, byte for byte). Returns the file count. */
+ *  same log → same files, byte for byte). Previously GENERATED files (marker
+ *  comment) are removed first so an ordinal shift never leaves stale
+ *  duplicates; hand-written documents in the same dir are untouched.
+ *  Returns the file count. */
 export function exportAdrMarkdown(repoPath: string, outDir: string): number {
   const { decisions } = loadDecisions(repoPath);
   mkdirSync(outDir, { recursive: true });
+  for (const f of readdirSync(outDir)) {
+    if (!f.endsWith(".md")) continue;
+    try {
+      if (readFileSync(join(outDir, f), "utf8").includes(GENERATED_MARKER)) {
+        rmSync(join(outDir, f));
+      }
+    } catch {
+      // unreadable → leave it alone
+    }
+  }
   let n = 0;
   for (const rec of decisions) {
     n++;
@@ -93,8 +120,15 @@ export function parseAdrMarkdown(text: string): ParsedAdrDoc | null {
     }
     const h2 = /^##\s+(.+)$/.exec(line);
     if (h2) {
-      current = [];
-      sections.set(h2[1]!.trim().toLowerCase(), current);
+      const name = h2[1]!.trim().toLowerCase();
+      // First heading wins: a duplicate later section (e.g. injected into
+      // prose) must not replace the real one.
+      if (sections.has(name)) {
+        current = null;
+      } else {
+        current = [];
+        sections.set(name, current);
+      }
       continue;
     }
     const dateLine = /^Date:\s*(\d{4}-\d{2}-\d{2})\s*$/.exec(line);
@@ -103,7 +137,8 @@ export function parseAdrMarkdown(text: string): ParsedAdrDoc | null {
       continue;
     }
     if (current !== null && line.trim() !== "" && !line.startsWith("<!--")) {
-      current.push(line.trim());
+      // Unescape the export-side heading escape.
+      current.push(line.trim().replace(/^\\#/, "#"));
     }
   }
   const section = (name: string): string | undefined => {
@@ -131,11 +166,15 @@ export function parseAdrMarkdown(text: string): ParsedAdrDoc | null {
 export interface ImportResult {
   imported: number;
   skipped: string[];
+  /** Documents whose (date, title) id already exists — left untouched, which
+   *  is what makes re-import idempotent. */
+  existing: number;
 }
 
-/** Imports every .md in srcDir as a decision record. Existing ids are left
- *  untouched (idempotent re-import); unparseable documents are skipped and
- *  reported, never fatal. */
+/** Imports every .md in srcDir as a decision record. A document whose
+ *  (date, title) base id already exists is counted as `existing` and left
+ *  untouched — re-import is idempotent, never duplicating; unparseable
+ *  documents are skipped and reported, never fatal. */
 export function importAdrMarkdown(
   repoPath: string,
   srcDir: string,
@@ -145,11 +184,11 @@ export function importAdrMarkdown(
   try {
     files = readdirSync(srcDir).filter((f) => f.endsWith(".md"));
   } catch {
-    return { imported: 0, skipped: [] };
+    return { imported: 0, skipped: [], existing: 0 };
   }
-  const { decisions } = loadDecisions(repoPath);
-  const taken = new Set(decisions.map((d) => d.id));
+  const taken = takenDecisionIds(repoPath);
   let imported = 0;
+  let existing = 0;
   const skipped: string[] = [];
   for (const f of files.sort()) {
     let doc: ParsedAdrDoc | null = null;
@@ -163,7 +202,11 @@ export function importAdrMarkdown(
       continue;
     }
     const date = doc.date ?? opts.fallbackDate;
-    const id = mintDecisionId(date, doc.title, taken);
+    const id = decisionBaseId(date, doc.title);
+    if (taken.has(id)) {
+      existing++;
+      continue;
+    }
     taken.add(id);
     const rec: DecisionRecord = {
       id,
@@ -185,7 +228,7 @@ export function importAdrMarkdown(
     writeDecision(repoPath, rec);
     imported++;
   }
-  return { imported, skipped };
+  return { imported, skipped, existing };
 }
 
 /** Entry point for `reposkein-mcp adr <export|import> [path] [dir]`. */
@@ -202,6 +245,7 @@ export function runAdr(sub: string | undefined, repoPath: string, dir?: string):
     const r = importAdrMarkdown(repoPath, src, { fallbackDate: today });
     console.error(
       `imported ${r.imported} decision${r.imported === 1 ? "" : "s"} from ${src}` +
+        (r.existing ? `; ${r.existing} already present` : "") +
         (r.skipped.length ? `; skipped: ${r.skipped.join(", ")}` : "")
     );
     return 0;

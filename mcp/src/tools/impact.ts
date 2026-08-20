@@ -80,10 +80,14 @@ export function makeImpact(store: GraphStore, repoId: string, repoPath?: string)
       );
 
       if (repoPath) {
-        const gov = governingDecisionsForNodes(repoPath, [
-          { node_id: target.id, file_path: target.file_path, content_hash: target.content_hash },
-          ...result.impacted.map((r) => ({ node_id: r.node_id, file_path: r.file_path })),
-        ]);
+        const gov = governingDecisionsForNodes(
+          repoPath,
+          [
+            { node_id: target.id, file_path: target.file_path, content_hash: target.content_hash },
+            ...result.impacted.map((r) => ({ node_id: r.node_id, file_path: r.file_path })),
+          ],
+          repoId
+        );
         if (gov.length > 0) {
           return {
             content: [{ type: "text", text: JSON.stringify({ ...result, governing_decisions: gov }) }],

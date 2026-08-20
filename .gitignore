@@ -7,6 +7,11 @@ docs/prd.md
 # rationale, and file-per-decision is merge-safe by construction.
 **/.reposkein/*
 !**/.reposkein/decisions/
+# ...but never half-written temp files a crashed writer left behind.
+**/.reposkein/decisions/.*
+# Authored summaries are committed too (per ADR 2026-08-07: derived stays
+# out, authored goes in).
+!**/.reposkein/summaries.jsonl
 
 # Local-only working docs (plans, skill scratch) — never commit.
 docs/superpowers/

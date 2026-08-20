@@ -108,14 +108,33 @@ function slugify(title: string): string {
   return slug || "decision";
 }
 
+/** The ordinal-free id a (date, title) pair maps to. */
+export function decisionBaseId(date: string, title: string): string {
+  return `adr:${date}-${slugify(title)}`;
+}
+
 /** Mints `adr:<date>-<slug>`, appending `.1`, `.2`, … while taken. */
 export function mintDecisionId(date: string, title: string, taken: ReadonlySet<string>): string {
-  const base = `adr:${date}-${slugify(title)}`;
+  const base = decisionBaseId(date, title);
   if (!taken.has(base)) return base;
   for (let i = 1; ; i++) {
     const candidate = `${base}.${i}`;
     if (!taken.has(candidate)) return candidate;
   }
+}
+
+/** Every id that must not be minted again: parsed record ids PLUS ids implied
+ *  by existing filenames. The filename side matters when a file is damaged
+ *  (conflict markers): its record doesn't parse, but minting its id anyway
+ *  would let writeDecision rename over the hand-recoverable file — violating
+ *  "records are never machine-deleted". */
+export function takenDecisionIds(repoPath: string): Set<string> {
+  const taken = new Set<string>();
+  for (const { file, record } of loadDecisionFiles(repoPath)) {
+    if (record) taken.add(record.id);
+    taken.add(`adr:${file.replace(/\.json$/, "")}`);
+  }
+  return taken;
 }
 
 /** SHA-256 over the immutable body. Excludes status/superseded_by (lifecycle)
@@ -299,11 +318,21 @@ export async function anchorRepoIds(store: GraphStore, repoId: string): Promise<
   }
 }
 
-/** The portion of a node id that survives repo_id drift: `:<kind>:<rest>`. */
-function idSuffix(nodeId: string): string | null {
+/** The portion of a node id that survives repo_id drift: `:<kind>:<rest>`.
+ *  Shared by every decision surface — anchor resolution, profile governance,
+ *  list filtering, and drift cross-referencing must agree on tolerance. */
+export function nodeIdSuffix(nodeId: string): string | null {
   const m = /^rs1:[^:]+(:.+)$/.exec(nodeId);
   return m ? m[1]! : null;
 }
+
+/** The repo_id embedded in an rs1: node id, or null. */
+export function nodeIdRepo(nodeId: string): string | null {
+  const m = /^rs1:([^:]+):.+$/.exec(nodeId);
+  return m ? m[1]! : null;
+}
+
+const idSuffix = nodeIdSuffix;
 
 /** Resolves each anchor against the live graph:
  *  - current:  node id live (exact or repo_id-suffix match), hash unchanged

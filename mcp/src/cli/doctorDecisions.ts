@@ -19,22 +19,20 @@ const warn = (id: string, label: string, ok: boolean, detail: string, fix?: stri
 });
 
 function findCycle(records: Map<string, DecisionRecord>): string[] | null {
-  // Follow supersedes edges; any id reachable from itself is a cycle.
+  // DFS along supersedes edges, tracking the actual path so the report names
+  // exactly the cycle's members — not everything reachable along the way.
   for (const start of records.keys()) {
-    const seen = new Set<string>();
-    let frontier = [start];
-    while (frontier.length > 0) {
-      const next: string[] = [];
-      for (const id of frontier) {
-        for (const target of records.get(id)?.supersedes ?? []) {
-          if (target === start) return [start, ...seen, target];
-          if (!seen.has(target)) {
-            seen.add(target);
-            next.push(target);
-          }
+    const stack: { id: string; path: string[] }[] = [{ id: start, path: [start] }];
+    const visited = new Set<string>();
+    while (stack.length > 0) {
+      const { id, path } = stack.pop()!;
+      for (const target of records.get(id)?.supersedes ?? []) {
+        if (target === start) return [...path, target];
+        if (!visited.has(target)) {
+          visited.add(target);
+          stack.push({ id: target, path: [...path, target] });
         }
       }
-      frontier = next;
     }
   }
   return null;

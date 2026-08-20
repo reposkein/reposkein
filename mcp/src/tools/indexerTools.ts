@@ -65,20 +65,31 @@ function defaultRun(repoId: string, indexPath: string, opts?: RunOpts): Promise<
 
 /** Combines this run's delta with the pending one hook-driven indexes parked
  *  (their stdout is discarded — post-merge drift would otherwise vanish), and
- *  cross-references the decision log. Returns {} when there is no drift. */
-function driftFields(runDelta: GraphDeltaJson | undefined): {
+ *  cross-references the decision log. `root` MUST be the repo that was
+ *  actually indexed: consulting the env repo's decisions (or consuming its
+ *  pending delta) while indexing some other path would cross the streams.
+ *  Returns {} when there is no drift. */
+function driftFields(
+  root: string,
+  repoId: string,
+  runDelta: GraphDeltaJson | undefined
+): {
   graph_delta?: GraphDeltaJson;
   decisions_affected?: DecisionAffected[];
+  decisions_check_incomplete?: boolean;
 } {
-  const root = repoPath();
   const pending = readPendingDelta(root);
   let delta = runDelta ?? null;
   if (pending) delta = delta ? mergeDeltas(delta, pending) : pending;
   if (!delta) return {};
-  const affected = decisionsAffectedBy(root, delta);
+  const affected = decisionsAffectedBy(root, delta, repoId);
   return {
     graph_delta: delta,
     ...(affected.length > 0 ? { decisions_affected: affected } : {}),
+    // A truncated delta dropped ids past the cap, so an empty/short
+    // decisions_affected is NOT proof of no drift — say so instead of
+    // reading as "checked everything".
+    ...(delta.truncated ? { decisions_check_incomplete: true } : {}),
   };
 }
 
@@ -111,7 +122,7 @@ export function makeInitCpgSkeleton(repoId: string, deps?: Partial<IndexerDeps>)
           files: r.files,
           duration_ms: Date.now() - start,
           warnings: r.warnings,
-          ...driftFields(r.graph_delta),
+          ...driftFields(indexPath, repoId, r.graph_delta),
         }),
       }],
     };
@@ -146,7 +157,7 @@ export function makeReindexFile(repoId: string, deps?: Partial<IndexerDeps>) {
           duration_ms: Date.now() - start,
           loaded: shouldLoadNeo4j(),
           warnings: r.warnings,
-          ...driftFields(r.graph_delta),
+          ...driftFields(indexPath, repoId, r.graph_delta),
         }),
       }],
     };

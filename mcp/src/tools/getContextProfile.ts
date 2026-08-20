@@ -47,7 +47,7 @@ export function makeGetContextProfile(store: GraphStore, repoId: string, repoPat
       }
       const profile = await assembleProfile(store, repoIds, resolved.target, hops);
       if (repoPath) {
-        const gov = governingDecisionsFor(repoPath, resolved.target);
+        const gov = governingDecisionsFor(repoPath, resolved.target, repoId);
         if (gov.decisions.length > 0) profile.target.decisions = gov.decisions;
         if (gov.needing_review.length > 0) profile.decisions_needing_review = gov.needing_review;
       }

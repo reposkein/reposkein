@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { decisionsDir } from "../src/store/decisions.js";
+import { pendingDeltaPath } from "../src/indexer/decisionsAffected.js";
 import { fakeStore } from "./fakeStore.js";
 import type { TargetRow } from "../src/profile/types.js";
 import { loadDecisions, writeDecision, computeBodyHash, type DecisionRecord } from "../src/store/decisions.js";
@@ -125,6 +127,55 @@ describe("record_decision", () => {
     const res = await record({ ...baseArgs, supersedes: ["adr:2026-01-01-nope"] });
     expect(res.isError).toBe(true);
     expect(loadDecisions(root).decisions).toHaveLength(0);
+  });
+
+  it("never renames over a damaged decision file whose id it cannot parse", async () => {
+    mkdirSync(decisionsDir(root), { recursive: true });
+    const damaged = join(decisionsDir(root), "2026-08-20-use-x-for-y.json");
+    writeFileSync(damaged, "<<<<<<< HEAD\n{}\n");
+    const store = fakeStore({});
+    const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
+    const res = await record({ ...baseArgs });
+    const out = parse(res);
+    expect(out.decision_id).toBe("adr:2026-08-20-use-x-for-y.1");
+    expect(readFileSync(damaged, "utf8")).toContain("<<<<<<<"); // untouched
+  });
+
+  it("clears its own anchors from the pending drift delta (no self-flagging)", async () => {
+    const store = fakeStore({ getNode: async (_r, id) => (id === NODE_ID ? liveNode("h1") : null) });
+    mkdirSync(join(root, ".reposkein", "local"), { recursive: true });
+    writeFileSync(
+      pendingDeltaPath(root),
+      JSON.stringify({
+        added: [],
+        removed: [],
+        modified: [NODE_ID, "rs1:abc123:func:other.py#o@0"],
+        counts: { added: 0, removed: 0, modified: 2 },
+        truncated: false,
+      })
+    );
+    const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
+    await record({ ...baseArgs, anchor_node_ids: [NODE_ID] });
+    const pending = JSON.parse(readFileSync(pendingDeltaPath(root), "utf8"));
+    expect(pending.modified).toEqual(["rs1:abc123:func:other.py#o@0"]);
+  });
+
+  it("deletes the pending delta when its own anchors were the only drift", async () => {
+    const store = fakeStore({ getNode: async (_r, id) => (id === NODE_ID ? liveNode("h1") : null) });
+    mkdirSync(join(root, ".reposkein", "local"), { recursive: true });
+    writeFileSync(
+      pendingDeltaPath(root),
+      JSON.stringify({
+        added: [],
+        removed: [],
+        modified: [NODE_ID],
+        counts: { added: 0, removed: 0, modified: 1 },
+        truncated: false,
+      })
+    );
+    const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
+    await record({ ...baseArgs, anchor_node_ids: [NODE_ID] });
+    expect(existsSync(pendingDeltaPath(root))).toBe(false);
   });
 
   it("resolves anchors in federated child repos", async () => {

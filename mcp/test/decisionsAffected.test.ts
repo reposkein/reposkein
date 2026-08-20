@@ -65,7 +65,7 @@ describe("decisionsAffectedBy", () => {
     const affected = decisionsAffectedBy(root, delta({
       modified: [`rs1:${REPO_ID}:func:src/x.ts#f@0`],
       removed: [`rs1:${REPO_ID}:func:src/y.ts#g@0`],
-    }));
+    }), REPO_ID);
     expect(affected).toEqual([
       { decision_id: "adr:2026-08-01-a", title: "Title adr:2026-08-01-a", why: "anchor_modified" },
       { decision_id: "adr:2026-08-02-b", title: "Title adr:2026-08-02-b", why: "anchor_removed" },
@@ -76,10 +76,27 @@ describe("decisionsAffectedBy", () => {
     seed(root, "adr:2026-08-01-dir", { paths: ["src/store/"] });
     const affected = decisionsAffectedBy(root, delta({
       modified: [`rs1:${REPO_ID}:file:src/store/decisions.ts`],
-    }));
+    }), REPO_ID);
     expect(affected).toEqual([
       { decision_id: "adr:2026-08-01-dir", title: "Title adr:2026-08-01-dir", why: "governed_path_changed" },
     ]);
+  });
+
+  it("path governance is scoped to the root repo (nested-repo paths are a different coordinate system)", () => {
+    seed(root, "adr:2026-08-01-dir", { paths: ["src/store/"] });
+    // A nested child repo's file node has the same-looking relative path.
+    const childOnly = decisionsAffectedBy(
+      root,
+      delta({ modified: ["rs1:childrepo:file:src/store/x.ts"] }),
+      REPO_ID
+    );
+    expect(childOnly).toEqual([]);
+    const rootHit = decisionsAffectedBy(
+      root,
+      delta({ modified: [`rs1:${REPO_ID}:file:src/store/x.ts`] }),
+      REPO_ID
+    );
+    expect(rootHit.map((a) => a.decision_id)).toEqual(["adr:2026-08-01-dir"]);
   });
 
   it("ignores decisions that are not accepted or proposed", () => {
@@ -88,7 +105,7 @@ describe("decisionsAffectedBy", () => {
       anchors: [anchor(`rs1:${REPO_ID}:func:src/x.ts#f@0`)],
     });
     expect(
-      decisionsAffectedBy(root, delta({ modified: [`rs1:${REPO_ID}:func:src/x.ts#f@0`] }))
+      decisionsAffectedBy(root, delta({ modified: [`rs1:${REPO_ID}:func:src/x.ts#f@0`] }), REPO_ID)
     ).toEqual([]);
   });
 });
@@ -164,6 +181,46 @@ describe("reindex_file surfaces decisions_affected", () => {
       "adr:2026-08-02-b",
     ]);
     expect(existsSync(pendingDeltaPath(root))).toBe(false);
+  });
+
+  it("marks the cross-reference incomplete when the delta was truncated", async () => {
+    seed(root, "adr:2026-08-01-a", { anchors: [anchor(`rs1:${REPO_ID}:func:src/x.ts#f@0`)] });
+    const reindex = makeReindexFile(REPO_ID, {
+      run: async () => ({
+        ok: true,
+        nodes: 1,
+        edges: 0,
+        files: 1,
+        warnings: [],
+        graph_delta: delta({
+          modified: [`rs1:${REPO_ID}:func:src/other.ts#o@0`],
+          counts: { added: 0, removed: 0, modified: 120 },
+          truncated: true,
+        }),
+      }),
+    });
+    const out = JSON.parse((await reindex({ path: "src/x.ts" })).content[0]!.text) as Record<string, any>;
+    expect(out.decisions_check_incomplete).toBe(true);
+  });
+
+  it("init_cpg_skeleton indexing a different path leaves the env repo's pending delta alone", async () => {
+    const { makeInitCpgSkeleton } = await import("../src/tools/indexerTools.js");
+    mkdirSync(join(root, ".reposkein", "local"), { recursive: true });
+    writeFileSync(
+      pendingDeltaPath(root),
+      JSON.stringify(delta({ modified: ["rs1:abc123:func:src/x.ts#f@0"], counts: { added: 0, removed: 0, modified: 1 } }))
+    );
+    const other = mkdtempSync(join(tmpdir(), "rs-other-"));
+    try {
+      const init = makeInitCpgSkeleton(REPO_ID, {
+        run: async () => ({ ok: true, nodes: 1, edges: 0, files: 1, warnings: [] }),
+      });
+      const out = JSON.parse((await init({ path: other })).content[0]!.text) as Record<string, any>;
+      expect(out.decisions_affected).toBeUndefined();
+      expect(existsSync(pendingDeltaPath(root))).toBe(true); // NOT consumed
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it("omits the fields when there is no drift", async () => {

@@ -94,9 +94,16 @@ describe("doctor decision checks", () => {
   it("flags a supersession cycle and malformed files", () => {
     seedDecision("adr:2026-08-01-a", { supersedes: ["adr:2026-08-02-b"], status: "superseded", superseded_by: "adr:2026-08-02-b" });
     seedDecision("adr:2026-08-02-b", { supersedes: ["adr:2026-08-01-a"] });
-    writeFileSync(join(decisionsDir(dir), "2026-08-03-broken.json"), "<<<<<<< HEAD\n{}\n");
+    // A decision merely reachable from the cycle members must not be reported
+    // as part of the cycle.
+    seedDecision("adr:2026-08-03-bystander", { status: "superseded" });
+    writeFileSync(join(decisionsDir(dir), "2026-08-04-broken.json"), "<<<<<<< HEAD\n{}\n");
     const checks = decisionChecks(dir);
-    expect(checks.find((c) => c.id === "decisions_cycles")!.ok).toBe(false);
+    const cycles = checks.find((c) => c.id === "decisions_cycles")!;
+    expect(cycles.ok).toBe(false);
+    expect(cycles.detail).toContain("adr:2026-08-01-a");
+    expect(cycles.detail).toContain("adr:2026-08-02-b");
+    expect(cycles.detail).not.toContain("bystander");
     expect(checks.find((c) => c.id === "decisions_parse")!.ok).toBe(false);
   });
 

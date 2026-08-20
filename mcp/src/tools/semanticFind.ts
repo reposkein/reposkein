@@ -19,7 +19,7 @@
 
 import type { CorpusNode, GraphStore } from "../store/GraphStore.js";
 import { federationIds } from "../store/federation.js";
-import { loadDecisions, type DecisionStatus } from "../store/decisions.js";
+import { loadDecisions, type DecisionRecord, type DecisionStatus } from "../store/decisions.js";
 import { rankCorpus } from "../search/bm25f.js";
 import type { ToolResult } from "./readCypher.js";
 import type { EmbeddingProvider } from "../embed/provider.js";
@@ -47,8 +47,7 @@ const DECISION_SUMMARY_DISPLAY = 240;
  *  shaped for exactly this. All statuses are included (history is the point);
  *  rows carry `status` so superseded rationale is recognizable. Bodies are
  *  immutable, so the embedding cache never re-embeds a decision. */
-function decisionCorpus(repoPath: string, repoId: string): CorpusNode[] {
-  const { decisions } = loadDecisions(repoPath);
+function decisionCorpus(decisions: DecisionRecord[], repoId: string): CorpusNode[] {
   return decisions.map((d) => ({
     id: d.id,
     kind: "Decision",
@@ -69,13 +68,20 @@ function decisionCorpus(repoPath: string, repoId: string): CorpusNode[] {
  * @param repoPath      File system path to the repo root (for the embedding cache).
  * @param providerOverride  Inject a provider directly (for tests — avoids env/network).
  *                          Pass null to force pure-lexical. Pass undefined to use env config.
+ * @param opts.decisions    Include the decision log in the corpus (default true).
+ *                          Callers without a REAL configured repoPath must pass
+ *                          false — repoPath falls back to "." for the embed
+ *                          cache, and reading <cwd>/.reposkein/decisions/ would
+ *                          inject another project's decision log.
  */
 export function makeSemanticFind(
   store: GraphStore,
   repoId: string,
   repoPath = ".",
   providerOverride?: EmbeddingProvider | null,
+  opts: { decisions?: boolean } = {},
 ) {
+  const includeDecisions = opts.decisions ?? true;
   return async (args: SemanticFindArgs): Promise<ToolResult> => {
     const { query, kind, federated } = args;
     const limit = Math.min(Math.max(1, args.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
@@ -93,14 +99,13 @@ export function makeSemanticFind(
       // Fetch the corpus from the store (both backends return nodes sorted by id)
       let corpus = await store.searchCorpus(repoIds);
 
-      // Decision records join the corpus as pseudo-nodes (repoPath-gated,
-      // like every decision surface).
+      // Decision records join the corpus as pseudo-nodes (gated like every
+      // decision surface — see opts.decisions).
       const decisionStatusById = new Map<string, DecisionStatus>();
-      if (repoPath) {
-        corpus = [...corpus, ...decisionCorpus(repoPath, repoId)];
-        for (const d of loadDecisions(repoPath).decisions) {
-          decisionStatusById.set(d.id, d.status);
-        }
+      if (includeDecisions) {
+        const { decisions } = loadDecisions(repoPath);
+        corpus = [...corpus, ...decisionCorpus(decisions, repoId)];
+        for (const d of decisions) decisionStatusById.set(d.id, d.status);
       }
 
       // Apply optional kind filter before ranking (design §4)

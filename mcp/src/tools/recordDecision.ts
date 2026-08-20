@@ -6,11 +6,13 @@ import {
   computeBodyHash,
   loadDecisions,
   mintDecisionId,
+  takenDecisionIds,
   writeDecision,
   type DecisionAnchor,
   type DecisionRecord,
   type DecisionTriggerKind,
 } from "../store/decisions.js";
+import { removeFromPendingDelta } from "../indexer/decisionsAffected.js";
 
 export interface RecordDecisionArgs {
   title: string;
@@ -118,7 +120,9 @@ export function makeRecordDecision(
       }
 
       const date = today();
-      const id = mintDecisionId(date, prose.value.title, new Set(byId.keys()));
+      // Filename-aware taken set: a damaged file's id must not be re-minted,
+      // or writeDecision would rename over the hand-recoverable record.
+      const id = mintDecisionId(date, prose.value.title, takenDecisionIds(repoPath));
       const trigger: { kind: DecisionTriggerKind } = { kind: "manual" };
       const rec: DecisionRecord = {
         id,
@@ -146,6 +150,13 @@ export function makeRecordDecision(
         const flipped: DecisionRecord = { ...target, status: "superseded", superseded_by: id };
         writeDecision(repoPath, flipped);
       }
+
+      // The refresh above (or the agent's own pre-record edit + hook index)
+      // parked a drift delta that includes the very nodes this decision was
+      // just stamped against. Subtract them so the next reindex doesn't flag
+      // the freshly recorded decision as drifted; unrelated pending drift is
+      // preserved.
+      removeFromPendingDelta(repoPath, anchors.map((a) => a.node_id));
 
       return ok({
         ok: true,

@@ -3,9 +3,7 @@
  *  per-field caps. Decisions are rationale, not instructions — this bounds the
  *  prompt-injection surface of a file that arrives via git pull. */
 
-const CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
-const CODE_FENCE = /```/;
-const MD_LINK = /\[[^\]]*\]\([^)]*\)/;
+import { CODE_FENCE, CONTROL_CHARS, MD_LINK } from "./summaryValidation.js";
 
 export const DECISION_FIELD_CAPS = {
   title: 120,
