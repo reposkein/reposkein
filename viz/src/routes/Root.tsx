@@ -23,6 +23,8 @@ import { TourController } from "../panels/TourController";
 import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
 import { revealChainFor } from "../data/clientModel";
+import { resolveNodeFallback } from "../data/nodeFallback";
+import { badgeInfo } from "../data/badge";
 import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
 
 export function Root() {
@@ -98,12 +100,24 @@ function View() {
   }, [store]);
 
   // On mount (or when model becomes ready), if there's a nodeId in the URL,
-  // expand ancestors + select + fly to it.
+  // expand ancestors + select + fly to it. An id that no longer exists (the
+  // repo moved on since the link was shared/baked) tries a suffix-based
+  // fallback (survives a repo_id change) before giving up and showing a
+  // dismissible "not found" notice instead of silently doing nothing.
+  const [nodeNotice, setNodeNotice] = useState<string | null>(null);
   useEffect(() => {
     if (!store.model || !nodeFromUrl) return;
     const model = store.model;
-    const id = nodeFromUrl;
-    if (!model.records.has(id)) return; // unknown id, ignore
+    let id = nodeFromUrl;
+    if (!model.records.has(id)) {
+      const fallback = resolveNodeFallback(id, model.records.keys());
+      if (!fallback) {
+        setNodeNotice(nodeFromUrl);
+        return;
+      }
+      id = fallback;
+    }
+    setNodeNotice(null);
     for (const ak of revealChainFor(model, id)) {
       if (!store.expanded.has(ak)) store.toggleExpand(ak);
     }
@@ -191,6 +205,9 @@ function View() {
       </Canvas>
 
       <HeaderBar />
+      {nodeNotice && (
+        <NodeMovedNotice nodeId={nodeNotice} onDismiss={() => setNodeNotice(null)} />
+      )}
       {store.status.kind === "ready" && store.model && <Breadcrumb />}
       {store.status.kind === "ready" && <DetailPanel />}
       {store.status.kind === "ready" && <LensSwitcher />}
@@ -265,6 +282,7 @@ function HeaderBar() {
           {store.model.repoId} · {counts?.nodes ?? 0} nodes · {counts?.edges ?? 0} edges
         </div>
       )}
+      {store.model && <StalenessBadge />}
       {store.model && store.edgeStats.total > 0 && (
         <div
           style={{ fontSize: 11, opacity: 0.6, marginTop: 1 }}
@@ -281,6 +299,103 @@ function HeaderBar() {
         keys: / search · f frame all · ←→ / Tab hop neighbor
       </div>
       {store.model && <SearchPanel />}
+    </div>
+  );
+}
+
+/** "graph @ <short-sha> · <relative age>" — shown when the loaded model carries
+ *  bake-time/server-start provenance (static export: baked by `runExport`;
+ *  server mode: resolved once from git at server start). Age is recomputed
+ *  every render (cheap: Date.now() + arithmetic) so it stays fresh across a
+ *  long-lived tab without a timer. Links to the commit when a repoUrl was
+ *  resolvable; otherwise renders as plain (unlinked) text. Matches the
+ *  existing inline-style HeaderBar rows — no new visual system introduced. */
+function StalenessBadge() {
+  const store = useStore();
+  const info = badgeInfo(store.model?.repoMeta ?? null);
+  if (!info) return null;
+  const text = (
+    <span
+      style={{ color: "rgba(200,210,235,0.85)" }}
+      title={store.model?.repoMeta?.builtAt ? `baked ${store.model.repoMeta.builtAt}` : undefined}
+    >
+      {info.label}
+    </span>
+  );
+  return (
+    <div style={{ fontSize: 11, opacity: 0.75, marginTop: 1 }}>
+      {info.href ? (
+        <a
+          href={info.href}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "inherit", textDecoration: "none" }}
+        >
+          {text}
+        </a>
+      ) : (
+        text
+      )}
+    </div>
+  );
+}
+
+/** Dismissible notice shown when a `?node=<id>` deep link doesn't resolve to
+ *  any node currently in the loaded graph (and the suffix-based fallback in
+ *  data/nodeFallback.ts found nothing either) — a shared/baked link can
+ *  outlive the node it pointed at. Replaces silently ignoring the param. */
+function NodeMovedNotice({ nodeId, onDismiss }: { nodeId: string; onDismiss: () => void }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 12,
+        right: 12,
+        maxWidth: 320,
+        fontSize: 12,
+        padding: "8px 12px",
+        borderRadius: 8,
+        background: "rgba(8,11,22,0.9)",
+        border: `1px solid ${BRAND.amber}66`,
+        color: BRAND.cream,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8,
+      }}
+    >
+      <span style={{ flex: 1 }}>
+        Node not found — it may have been renamed or removed.
+        <span
+          style={{
+            display: "block",
+            opacity: 0.6,
+            fontSize: 11,
+            marginTop: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={nodeId}
+        >
+          {nodeId}
+        </span>
+      </span>
+      <button
+        onClick={onDismiss}
+        title="Dismiss"
+        style={{
+          background: "transparent",
+          border: "none",
+          color: BRAND.cream,
+          opacity: 0.7,
+          cursor: "pointer",
+          fontSize: 13,
+          lineHeight: 1,
+          padding: 0,
+        }}
+      >
+        ✕
+      </button>
     </div>
   );
 }

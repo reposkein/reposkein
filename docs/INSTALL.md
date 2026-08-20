@@ -446,3 +446,17 @@ npx skills add reposkein/reposkein --all
 When the user wants to hand this off without copying the whole document, they can paste **just this prompt** plus a link to this file:
 
 > Install RepoSkein in this workspace. Read `docs/INSTALL.md` (or `https://github.com/reposkein/reposkein/blob/main/docs/INSTALL.md`), walk me through the question tree in §1, then execute §2 onward. If anything fails, troubleshoot via §9 — don't silently skip steps. Confirm with `reposkein-mcp doctor .` per repo and a `semantic_find` smoke test before claiming done.
+
+---
+
+## 11. Host a shareable link (optional)
+
+Want a durable link to the constellation viewer (for a README, a PR, or a
+teammate without RepoSkein installed) instead of `reposkein-mcp view`'s local
+server? `reposkein-mcp view --export` produces a self-contained static site
+(no server, works from `file://`). `reposkein-mcp init --ci` writes a GitHub
+Actions workflow that publishes it to GitHub Pages on every push.
+
+**Read [`docs/HOSTING.md`](./HOSTING.md) before enabling this** — it covers
+GitHub Pages' public-by-default visibility and internal-host alternatives.
+

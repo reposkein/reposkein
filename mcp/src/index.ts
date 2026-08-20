@@ -71,7 +71,7 @@ const HELP_TEXT = `reposkein-mcp — deterministic code-graph MCP server
 
 Usage:
   reposkein-mcp                 start the MCP server (stdio transport)
-  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph)
+  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph); --no-index skips the initial index, --ci also writes a GitHub Pages publish workflow (see docs/HOSTING.md)
   reposkein-mcp index [path]    (re)build the committed graph
   reposkein-mcp doctor [path]   health check (indexer binary, index, repo id)
   reposkein-mcp adr <sub> ...   decision-log utilities
@@ -570,8 +570,9 @@ if (invokedAsBin()) {
   } else if (sub === "init") {
     const rest = process.argv.slice(3);
     const noIndex = rest.includes("--no-index");
+    const ci = rest.includes("--ci");
     const path = rest.find((a) => !a.startsWith("-")) ?? ".";
-    runInit(path, { index: !noIndex })
+    runInit(path, { index: !noIndex, ci })
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
   } else if (sub === "index") {
@@ -601,14 +602,14 @@ if (invokedAsBin()) {
     const dir = positional[1];
     process.exit(runAdr(adrSub, path, dir));
   } else if (sub === "view") {
-    const { repoPath, opts, exportDir } = parseViewArgs(process.argv.slice(3));
+    const { repoPath, opts, exportDir, exportOpts } = parseViewArgs(process.argv.slice(3));
     const resolvedViewRepoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
     if (!resolvedViewRepoId) {
       console.error(`reposkein view: could not resolve repo id (no meta.json / REPOSKEIN_REPO_ID); falling back to placeholder "repo"`);
     }
     const vRepoId = resolvedViewRepoId ?? "repo";
     const run = exportDir
-      ? runExport(repoPath, vRepoId, exportDir)
+      ? runExport(repoPath, vRepoId, exportDir, exportOpts)
       : runView(repoPath, vRepoId, opts);
     run
       .then((code) => process.exit(code))
