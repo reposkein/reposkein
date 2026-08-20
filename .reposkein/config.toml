@@ -1,0 +1,16 @@
+# RepoSkein configuration (committed; no secrets).
+schema_version = 1
+
+[languages]
+enabled = ["python", "typescript", "rust", "go", "java", "csharp"]
+
+[neo4j]
+uri = "neo4j://localhost:7687"
+# credentials come from env (NEO4J_USER / NEO4J_PASSWORD), never committed
+
+[hooks]
+# Stage `.reposkein/summaries/` from the pre-commit hook when it changed.
+# The shards are authored prose an agent wrote during the session; without
+# this you get a hint on stderr and stage them yourself. Set to false if you
+# prefer to review every summary before it enters a commit.
+stage_summaries = true

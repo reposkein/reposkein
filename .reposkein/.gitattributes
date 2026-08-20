@@ -1,0 +1,7 @@
+# Local merges of the authored summary shards resolve by keeping both sides.
+# Duplicate or divergent records are harmless: the reader dedupes by id with a
+# deterministic tiebreak and preserves the loser in local/conflicts.jsonl, and
+# the next `index` rewrites the shard canonically.
+# NOTE: forges compute mergeability in a bare repo, where this file is never
+# consulted. Merge smoothness comes from the sharding, not from this line.
+summaries/*.jsonl merge=union
