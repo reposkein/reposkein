@@ -9,6 +9,11 @@
     "these exact lines and must agree line for line, so a change to either",
     "implementation that drifts from the other fails here first.",
     "",
+    "There are TWO resolution rules and both are pinned here:",
+    "  dedupe     — records found WITHIN one source, resolved by content alone",
+    "  supersedes — folding a whole newer-provenance source onto an older one",
+    "They differ on an equal summary_at, deliberately. See each section's `rule`.",
+    "",
     "shard_keys are Rust-only: they exist so the committed layout cannot change",
     "silently, but TypeScript never computes a shard key — it enumerates shard",
     "files with readdir, which is why no BLAKE3 implementation is needed there."
@@ -196,6 +201,171 @@
         "conflicts": [
           "{\"id\":\"a\",\"semantic_summary\":\"𐀀 astral\",\"summary_at\":\"2026-08-20T10:00:00Z\"}"
         ],
+        "skipped": 0
+      }
+    ]
+  },
+  "supersedes": {
+    "$comment": [
+      "Cross-source folds — the OTHER resolution rule, and the one where a",
+      "silent loss actually happened: an unconditional last-source-wins insert",
+      "let a stale local sidecar overwrite a teammate's newer committed summary",
+      "with nothing recorded anywhere.",
+      "",
+      "Each case folds `older_source` first, then `newer_source` on top, the way",
+      "the indexer folds legacy harvest -> committed shards -> database -> this",
+      "machine's sidecars. Lines within one source resolve by `beats` (see the",
+      "dedupe section); the fold BETWEEN them uses the rule below."
+    ],
+    "rule": [
+      "A record from the newer source displaces the incumbent unless it is",
+      "STRICTLY OLDER by summary_at:  candidate.summary_at >= incumbent.summary_at.",
+      "",
+      "This deliberately differs from `beats` on an equal summary_at, and the",
+      "difference is load-bearing. summary_at is DAY-PRECISION (PRD §6.2.5 keeps",
+      "wall-clock time out of committed bytes), so an agent re-summarising a node",
+      "that was already summarised today produces a tie. Breaking that tie by",
+      "byte order — what `beats` does — would discard the rewrite: the agent's",
+      "work would silently not take. Provenance settles what the data cannot.",
+      "",
+      "Determinism is unaffected: the same shards plus the same sidecars resolve",
+      "identically on any machine. Provenance is an input, not a clock.",
+      "",
+      "Byte-identical records dedupe silently and are never conflicts.",
+      "Every displaced record is preserved, under either rule."
+    ],
+    "cases": [
+      {
+        "name": "a newer source with a newer summary_at displaces, and the loser is recorded",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"committed older\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"fresh local\",\"summary_at\":\"2026-09-01\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"fresh local\",\"summary_at\":\"2026-09-01\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"committed older\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "THE REGRESSION. A teammate's summary arrives in a committed shard; this",
+          "machine still holds a months-old sidecar for the same node. Folding the",
+          "sidecar last must NOT overwrite the newer record, and the record that",
+          "loses must still be written down."
+        ],
+        "name": "a newer source that is strictly older by summary_at does not displace",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"teammate newer\",\"summary_at\":\"2026-09-01\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"stale local\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"teammate newer\",\"summary_at\":\"2026-09-01\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"stale local\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "An equal summary_at goes to the NEWER SOURCE, not to byte order. The",
+          "prose is chosen so the two rules visibly disagree: 'aaa old' sorts",
+          "first, so `beats` would keep it and drop the rewrite. Same-day",
+          "re-summarisation is the common case, not a corner one."
+        ],
+        "name": "an equal summary_at goes to the newer source, not to byte order",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "The boundary, stated as a test: the SAME two records, same day, both in",
+          "ONE source. There is no provenance to appeal to, so byte order decides",
+          "and 'aaa old' wins — the opposite outcome to the case above. If an",
+          "implementation ever collapses the two rules into one, exactly one of",
+          "these two cases fails."
+        ],
+        "name": "the same tie inside one source still goes to byte order",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}",
+          "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"aaa old\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [
+          "{\"id\":\"a\",\"semantic_summary\":\"zzz new\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "skipped": 0
+      },
+      {
+        "$comment": [
+          "A line with an id and a late timestamp but no prose is not a summary.",
+          "Admitting it would let it WIN on summary_at and evict real authored",
+          "text — a record with nothing in it must never displace one."
+        ],
+        "name": "an id-only line in the newer source cannot evict authored prose",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        ],
+        "newer_source": ["{\"id\":\"a\",\"summary_at\":\"2099-01-01\"}"],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"real prose\",\"summary_at\":\"2026-01-01\"}"
+        },
+        "conflicts": [],
+        "skipped": 1
+      },
+      {
+        "$comment": [
+          "A re-index sees its own output in the shards and the same record in a",
+          "sidecar it has not consumed yet. Reporting that as divergence would",
+          "train people to ignore conflicts.jsonl."
+        ],
+        "name": "a byte-identical record from both sources is not a conflict",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"same\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"same\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"same\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [],
+        "skipped": 0
+      },
+      {
+        "name": "records for different ids from both sources all survive",
+        "older_source": [
+          "{\"id\":\"a\",\"semantic_summary\":\"from the shard\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "newer_source": [
+          "{\"id\":\"b\",\"semantic_summary\":\"from the sidecar\",\"summary_at\":\"2026-08-21\"}"
+        ],
+        "winners": {
+          "a": "{\"id\":\"a\",\"semantic_summary\":\"from the shard\",\"summary_at\":\"2026-08-21\"}",
+          "b": "{\"id\":\"b\",\"semantic_summary\":\"from the sidecar\",\"summary_at\":\"2026-08-21\"}"
+        },
+        "conflicts": [],
         "skipped": 0
       }
     ]

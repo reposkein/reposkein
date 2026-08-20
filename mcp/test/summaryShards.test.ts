@@ -5,14 +5,17 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   absorbSummaryLines,
+  absorbSummarySource,
   beats,
   conflictsPath,
   countRecordedConflicts,
+  emptyAccumulator,
   isConflictMarker,
   isShardFileName,
   loadSummaryShards,
   recordSummaryConflicts,
   summariesDir,
+  type SummaryAccumulator,
   type SummaryShardRecord,
 } from "../src/store/summaryShards.js";
 
@@ -36,45 +39,101 @@ interface DedupeCase {
   skipped: number;
 }
 
-function loadFixture(): { dedupe: { cases: DedupeCase[] } } {
-  return JSON.parse(readFileSync(FIXTURE, "utf8")) as { dedupe: { cases: DedupeCase[] } };
+interface SupersedesCase {
+  name: string;
+  older_source: string[];
+  newer_source: string[];
+  winners: Record<string, string>;
+  conflicts: string[];
+  skipped: number;
 }
 
-function fold(lines: string[]) {
-  const acc = {
-    summaries: new Map<string, SummaryShardRecord>(),
-    conflicts: [] as SummaryShardRecord[],
-    warnings: [] as string[],
+function loadFixture(): {
+  dedupe: { cases: DedupeCase[] };
+  supersedes: { cases: SupersedesCase[] };
+} {
+  return JSON.parse(readFileSync(FIXTURE, "utf8")) as {
+    dedupe: { cases: DedupeCase[] };
+    supersedes: { cases: SupersedesCase[] };
   };
+}
+
+/** One source: lines folded together by the within-source rule. */
+function fold(lines: string[]): SummaryAccumulator {
+  const acc = emptyAccumulator();
   absorbSummaryLines(acc, "fixture", lines.map((l) => `${l}\n`).join(""));
   return acc;
 }
 
-describe("summary shard vectors (cross-language contract)", () => {
-  const { dedupe } = loadFixture();
+/** Winners plus sorted conflicts, ready to compare against a fixture case.
+ *  Conflict ORDER is an implementation detail; membership is the contract, so
+ *  both suites compare sorted. */
+function outcome(acc: SummaryAccumulator) {
+  return {
+    winners: Object.fromEntries([...acc.summaries].map(([id, r]) => [id, r.line])),
+    conflicts: acc.conflicts.map((r) => r.line).sort(),
+  };
+}
 
-  it("has cases", () => {
+function expectedOutcome(c: { winners: Record<string, string>; conflicts: string[] }) {
+  return { winners: c.winners, conflicts: [...c.conflicts].sort() };
+}
+
+function skippedCount(acc: SummaryAccumulator): number {
+  return acc.warnings.reduce((n, w) => {
+    const m = /(\d+)/.exec(w);
+    return n + (m ? Number(m[1]) : 0);
+  }, 0);
+}
+
+describe("summary shard vectors (cross-language contract)", () => {
+  const { dedupe, supersedes: cross } = loadFixture();
+
+  it("has cases for both rules", () => {
     expect(dedupe.cases.length).toBeGreaterThan(0);
+    expect(cross.cases.length).toBeGreaterThan(0);
   });
 
-  for (const c of dedupe.cases) {
-    it(`resolves: ${c.name}`, () => {
-      const acc = fold(c.lines);
+  describe("within one source (beats)", () => {
+    for (const c of dedupe.cases) {
+      it(`resolves: ${c.name}`, () => {
+        const acc = fold(c.lines);
+        expect(outcome(acc)).toEqual(expectedOutcome(c));
+        expect(skippedCount(acc)).toBe(c.skipped);
+      });
+    }
+  });
 
-      const gotWinners = Object.fromEntries([...acc.summaries].map(([id, r]) => [id, r.line]));
-      expect(gotWinners).toEqual(c.winners);
+  /** The cross-source rule, pinned here exactly as `beats` is.
+   *
+   *  This is where the silent loss lived: an unconditional last-source-wins
+   *  merge let a stale local sidecar overwrite a teammate's newer committed
+   *  summary with nothing recorded anywhere. It needs the same single shared
+   *  artifact, or the two implementations can drift on the rule that matters
+   *  most. */
+  describe("across sources (supersedes)", () => {
+    for (const c of cross.cases) {
+      it(`resolves: ${c.name}`, () => {
+        const acc = fold(c.older_source);
+        absorbSummarySource(acc, fold(c.newer_source));
+        expect(outcome(acc)).toEqual(expectedOutcome(c));
+        expect(skippedCount(acc)).toBe(c.skipped);
+      });
+    }
 
-      // Conflict ORDER is an implementation detail; membership is the contract,
-      // so both suites compare sorted.
-      expect(acc.conflicts.map((r) => r.line).sort()).toEqual([...c.conflicts].sort());
-
-      const skipped = acc.warnings.reduce((n, w) => {
-        const m = /(\d+)/.exec(w);
-        return n + (m ? Number(m[1]) : 0);
-      }, 0);
-      expect(skipped).toBe(c.skipped);
+    it("pins the two rules to disagree on an equal timestamp", () => {
+      // Otherwise pinning both proves nothing. Guards against a future
+      // "simplification" that collapses them into one.
+      const find = (needle: string) => {
+        const c = cross.cases.find((x) => x.name.includes(needle));
+        expect(c, `fixture must carry the ${needle} case`).toBeDefined();
+        return c!;
+      };
+      expect(find("equal summary_at").winners.a).not.toBe(
+        find("inside one source").winners.a
+      );
     });
-  }
+  });
 });
 
 describe("summary shard reader", () => {
