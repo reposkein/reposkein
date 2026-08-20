@@ -30,15 +30,17 @@ If both pass, skip to step 4 (verify the server). Otherwise continue.
 ```bash
 npx -y @reposkein/mcp init .       # fetches the indexer, installs git hooks + the navigation skill
 reposkein-indexer index .          # builds .reposkein/ (or ask the agent to call init_cpg_skeleton)
-git add .reposkein/meta.json .reposkein/config.toml .reposkein/.gitignore
+git add .reposkein/meta.json .reposkein/config.toml .reposkein/.gitignore .reposkein/.gitattributes
 git commit -m "chore: add RepoSkein config"
 ```
 
 `nodes.jsonl` and `edges.jsonl` stay out of git: they are derived from the working
 tree, so every clone rebuilds them in seconds (the MCP server does it on startup
 when they are missing), and committing them would conflict on every branch that
-touches code. `summaries.jsonl` appears once an agent writes its first summary —
-commit that one, since nothing can regenerate it. The same goes for
+touches code. `.reposkein/summaries/` appears once an agent writes its first
+summary — commit that directory, since nothing can regenerate it. Summaries are
+sharded into `<xx>.jsonl` by a hash of the node id, so two branches summarising
+different code write different files and never conflict. The same goes for
 `.reposkein/decisions/` (Architecture Decision Records written via
 `record_decision`): commit the whole directory — one file per decision, so
 parallel branches never conflict on it.
@@ -62,7 +64,7 @@ differently. Add the RepoSkein server with `REPOSKEIN_REPO_PATH` set to this rep
 > paths and a local backend password, so they are per-machine and must not be
 > committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you wrote
 > them by hand, add them yourself. From `.reposkein/`, what gets committed is
-> `meta.json`, `config.toml`, `summaries.jsonl`, and `decisions/`.
+> `meta.json`, `config.toml`, `.gitignore`, `.gitattributes`, `summaries/`, and `decisions/`.
 
 Then **restart / reload the agent** so it picks up the new server.
 
