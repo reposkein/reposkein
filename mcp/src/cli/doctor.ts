@@ -3,7 +3,38 @@ import { join } from "node:path";
 import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
 import { resolveRepoId } from "../store/repoId.js";
+import { resolveRepoPath } from "../store/resolveRepoPath.js";
 import { decisionChecks } from "./doctorDecisions.js";
+
+export interface DoctorPathResolution {
+  path: string;
+  /** Set when walk-down found 2+ candidate repos and neither an explicit
+   *  path nor REPOSKEIN_REPO_PATH picked one — `path` falls back to `cwd`
+   *  in this case so the caller can still print a real (failing) report. */
+  error?: string;
+}
+
+/** Resolves the repo path for `reposkein-mcp doctor [path]`: explicit arg >
+ *  REPOSKEIN_REPO_PATH > walk-up (nearest ancestor with .reposkein/) >
+ *  walk-down (workspace mode). Verifies doctor works from a subdirectory
+ *  cwd — the common case of running it somewhere other than the repo root. */
+export function resolveDoctorRepoPath(
+  explicitPath: string | undefined,
+  cwd: string,
+  envRepoPath: string | undefined
+): DoctorPathResolution {
+  const resolution = resolveRepoPath({ cwd, envRepoPath, explicit: explicitPath });
+  if (resolution.repoPath) return { path: resolution.repoPath };
+  if (resolution.candidates && resolution.candidates.length > 0) {
+    return {
+      path: cwd,
+      error:
+        `multiple RepoSkein repos found under ${cwd}: ${resolution.candidates.join(", ")}. ` +
+        "Pass one explicitly: `reposkein-mcp doctor <path>` (or set REPOSKEIN_REPO_PATH).",
+    };
+  }
+  return { path: cwd };
+}
 
 export interface Check {
   id: string;

@@ -94,9 +94,27 @@ npx skills add reposkein/reposkein --all
 
 ## Configuration
 
+### Repo resolution (zero-config)
+
+`REPOSKEIN_REPO_PATH` is optional — the server resolves the target repo from
+the process's working directory, in this order:
+
+1. `REPOSKEIN_REPO_PATH`, if set.
+2. **Walk up:** the nearest ancestor of the cwd containing `.reposkein/`.
+3. **Walk down** (workspace mode, only tried when no ancestor has one): scans
+   the cwd's children and grandchildren (skipping `node_modules`, `.git`,
+   `target`, `dist`, `.worktrees`, `.claude`) for `.reposkein/` dirs. One hit
+   is used automatically; two or more leave the repo unresolved.
+
+If nothing resolves — or step 3 finds more than one repo — repo-scoped tools
+don't fail silently at startup: each call returns a structured error telling
+you what to run (`reposkein-mcp init`) or which `REPOSKEIN_REPO_PATH` to set
+(naming the candidates when ambiguous). `reposkein-mcp doctor` and `--help`
+never require a resolved repo. See `mcp/src/store/resolveRepoPath.ts`.
+
 | Env var | Purpose |
 | --- | --- |
-| `REPOSKEIN_REPO_PATH` | the repository the server operates on (required for repo-scoped tools) |
+| `REPOSKEIN_REPO_PATH` | pins the repository the server operates on — optional, see repo resolution above |
 | `REPOSKEIN_STORE` | `auto` (default) · `jsonl` (zero-infra) · `neo4j` |
 | `REPOSKEIN_INDEXER_BIN` | override the `reposkein-indexer` binary path (unsupported platforms) |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | optional Neo4j backend (large graphs / Cypher at scale) |

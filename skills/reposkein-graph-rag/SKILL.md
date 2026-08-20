@@ -14,6 +14,14 @@ calls — that you enrich with natural-language summaries just-in-time. Do NOT
 guess file dependencies, and do NOT explore the repo by directory listing or
 grep when the graph can answer structurally.
 
+The server resolves the target repo automatically from your working
+directory — no setup is required. If a tool call still returns an error
+naming `REPOSKEIN_REPO_PATH`, do not abandon these tools and fall back to
+grep: the error is actionable — run `reposkein-mcp init` in the repo (if it
+has no `.reposkein/` yet), or set `REPOSKEIN_REPO_PATH` to the repo it names
+(the error lists candidates if more than one repo was found) — then retry the
+same call.
+
 ## Tools
 
 - **`semantic_find`** — **start here when you don't have a seed symbol.** Rank

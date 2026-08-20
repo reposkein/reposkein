@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
-import { runDoctor } from "./cli/doctor.js";
+import { runDoctor, resolveDoctorRepoPath } from "./cli/doctor.js";
 import { runAdr } from "./cli/adr.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
 import { existsSync, realpathSync } from "node:fs";
@@ -26,8 +26,9 @@ import { makeReaffirmDecision } from "./tools/reaffirmDecision.js";
 import { makeListDecisions } from "./tools/listDecisions.js";
 import { makeGetDecision } from "./tools/getDecision.js";
 import { resolveRepoId } from "./store/repoId.js";
+import { resolveRepoPath, type RepoResolution } from "./store/resolveRepoPath.js";
 import { ensureGraph } from "./indexer/ensureGraph.js";
-import { ensureIndexerBinary } from "./indexer/fetchBinary.js";
+import { ensureIndexerBinary, packageVersion } from "./indexer/fetchBinary.js";
 import { spawnIndexer } from "./indexer/runIndexer.js";
 
 /** Selects the store backend.
@@ -60,9 +61,47 @@ function buildStore(repoPath: string | undefined, repoId: string | undefined): G
   return neo4j();
 }
 
-const REPO_REQUIRED_MSG =
-  "REPOSKEIN_REPO_PATH (or REPOSKEIN_REPO_ID) must be set to use this tool. " +
-  "Set REPOSKEIN_REPO_PATH to the root of the repository you want to work with.";
+const HELP_TEXT = `reposkein-mcp — deterministic code-graph MCP server
+
+Usage:
+  reposkein-mcp                 start the MCP server (stdio transport)
+  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph)
+  reposkein-mcp index [path]    (re)build the committed graph
+  reposkein-mcp doctor [path]   health check (indexer binary, index, repo id)
+  reposkein-mcp adr <sub> ...   decision-log utilities
+  reposkein-mcp view [path]     open the constellation viewer (--export <dir> for a static site)
+  reposkein-mcp --help          show this help
+  reposkein-mcp --version       print the package version
+
+Repo resolution (used by the server and by [path]-less CLI commands):
+  1. an explicit path argument, if given
+  2. REPOSKEIN_REPO_PATH, if set
+  3. the nearest ancestor of the current directory containing .reposkein/
+  4. a single .reposkein/ found while scanning subdirectories (2 levels deep,
+     skipping node_modules/.git/target/dist/.worktrees/.claude)
+  If step 4 finds more than one .reposkein/, resolution fails with an error
+  naming the candidates — set REPOSKEIN_REPO_PATH (or pass a path) to pick one.
+
+Docs: https://github.com/reposkein/reposkein/tree/main/mcp#readme`;
+
+/** Structured, actionable message for repo-scoped tool calls when no repo
+ *  resolved (see `resolveRepoPath`). Names the discovered candidates when
+ *  resolution failed due to workspace-mode ambiguity, so the agent can pick
+ *  one instead of abandoning the tools. */
+function repoRequiredMessage(resolution: RepoResolution): string {
+  if (resolution.candidates && resolution.candidates.length > 0) {
+    return (
+      `Multiple RepoSkein repos were found under ${process.cwd()} and none is selected: ` +
+      resolution.candidates.join(", ") +
+      `. Set REPOSKEIN_REPO_PATH to one of them to use this tool.`
+    );
+  }
+  return (
+    "No RepoSkein repo found (checked the current directory, its ancestors, and its " +
+    "immediate subdirectories for .reposkein/). Run `reposkein-mcp init` in the repository " +
+    "you want to work with, or set REPOSKEIN_REPO_PATH to its root."
+  );
+}
 
 // Exported for the regression test. `hops` MUST stay a bounded integer: a literal union
 // (z.union([z.literal(1), z.literal(2)])) serialises to JSON-Schema `anyOf:[{const:1},{const:2}]`,
@@ -111,8 +150,16 @@ export const getDecisionInputSchema = {
 };
 
 export async function main(): Promise<void> {
-  const repoPath = process.env.REPOSKEIN_REPO_PATH;
+  // Zero-config repo resolution: explicit arg (n/a here) > REPOSKEIN_REPO_PATH >
+  // walk-up (nearest ancestor with .reposkein/) > walk-down (workspace mode).
+  // See store/resolveRepoPath.ts for the full precedence + ambiguity rules.
+  const resolution = resolveRepoPath({
+    cwd: process.cwd(),
+    envRepoPath: process.env.REPOSKEIN_REPO_PATH,
+  });
+  const repoPath = resolution.repoPath;
   const repoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
+  const REPO_REQUIRED_MSG = repoRequiredMessage(resolution);
   // Build the graph if the repo has none yet. Derived JSONL is git-ignored, so a
   // fresh clone arrives without it; without this the first query would fail on a
   // repo that indexes fine in a couple of seconds.
@@ -379,11 +426,9 @@ export async function main(): Promise<void> {
     }
   );
 
-  if (!repoId) {
-    console.error(
-      "[reposkein-mcp] REPOSKEIN_REPO_PATH not set; repo-scoped tools will return an error until it is configured"
-    );
-  }
+  // No passive startup warning here: an unresolved repo is surfaced per-call,
+  // as a structured, actionable tool error (REPO_REQUIRED_MSG above) — not a
+  // stderr line an agent can miss and route around by grepping the repo.
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -405,7 +450,14 @@ function invokedAsBin(): boolean {
 }
 if (invokedAsBin()) {
   const sub = process.argv[2];
-  if (sub === "init") {
+  if (sub === "--help" || sub === "-h" || sub === "help") {
+    // No repo resolution, no config warnings — just usage, per requirement #3.
+    console.log(HELP_TEXT);
+    process.exit(0);
+  } else if (sub === "--version" || sub === "-v") {
+    console.log(packageVersion());
+    process.exit(0);
+  } else if (sub === "init") {
     const rest = process.argv.slice(3);
     const noIndex = rest.includes("--no-index");
     const path = rest.find((a) => !a.startsWith("-")) ?? ".";
@@ -420,7 +472,12 @@ if (invokedAsBin()) {
   } else if (sub === "doctor") {
     const rest = process.argv.slice(3);
     const json = rest.includes("--json");
-    const path = rest.find((a) => !a.startsWith("-")) ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+    const explicitPath = rest.find((a) => !a.startsWith("-"));
+    const { path, error } = resolveDoctorRepoPath(explicitPath, process.cwd(), process.env.REPOSKEIN_REPO_PATH);
+    if (error) {
+      console.error(`reposkein doctor: ${error}`);
+      process.exit(1);
+    }
     runDoctor(path, json)
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
