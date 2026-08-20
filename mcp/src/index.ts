@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
 import { runDoctor } from "./cli/doctor.js";
+import { runAdr } from "./cli/adr.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -421,6 +422,13 @@ if (invokedAsBin()) {
     runDoctor(path, json)
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
+  } else if (sub === "adr") {
+    const rest = process.argv.slice(3);
+    const adrSub = rest[0];
+    const positional = rest.slice(1).filter((a) => !a.startsWith("-"));
+    const path = positional[0] ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+    const dir = positional[1];
+    process.exit(runAdr(adrSub, path, dir));
   } else if (sub === "view") {
     const { repoPath, opts, exportDir } = parseViewArgs(process.argv.slice(3));
     const resolvedViewRepoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
