@@ -73,6 +73,7 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 - `reposkein-mcp init` — set up a repo (downloads the indexer, installs git hooks + the skill, builds the graph, prints an MCP config block).
 - `reposkein-mcp doctor` — health check (binary → index → MCP reachability).
 - `reposkein-mcp index` — rebuild the committed graph after big changes.
+- `reposkein-mcp stats [--last | --session <id> | --all] [--json]` — session usage report: calls by tool, top queried nodes/files, ADRs/summaries written, session duration, and an *estimated* context-tokens-saved-vs-grep number. See [Session usage stats](#session-usage-stats) below.
 - `reposkein-mcp view [path]` — open the **constellation viewer**: a local, read-only, zero-infra web app (bound to `127.0.0.1`) that renders the committed `.reposkein` graph as an interactive 3D astronomy-style map. `--export <dir>` instead writes a self-contained static site (works from `file://` or any static host). See the [viewer section in the main README](https://github.com/reposkein/reposkein#visualize-the-graph--the-constellation-viewer), or **[try the live demo](https://reposkein.github.io/reposkein/)** (RepoSkein viewing its own graph).
 
 ## How your agent uses it
@@ -93,6 +94,47 @@ npx skills add reposkein/reposkein --all
 ```
 
 (`reposkein-mcp init` already installs the navigation skill for Claude Code; this adds it to Cursor, Codex, and 70+ other agents.)
+
+## Session usage stats
+
+Every tool call is logged, server-side, as one JSONL line to
+`.reposkein/local/sessions/<session-id>.jsonl` under the repo the call
+touched — `{ts, tool, argsShape, resultBytes, nodeIds}`, never argument or
+result *values* (only argument key names — no code/user text ever lands on
+disk). Because logging happens in the server, this works for **any**
+MCP-capable agent (Claude Code, Cursor, Codex, …), not just one. It's
+zero-infra like everything else here: local-only, git-ignored (`local/`),
+never blocks or fails a tool call — a logging failure is always swallowed.
+Old sessions are pruned automatically (newest 50, or 30 days, whichever is
+stricter).
+
+```sh
+reposkein-mcp stats                 # last session, human-readable
+reposkein-mcp stats --all           # every retained session, combined
+reposkein-mcp stats --session <id>  # one specific session
+reposkein-mcp stats --json          # machine-readable
+```
+
+The report includes calls by tool, the top queried nodes/files, ADRs and
+semantic summaries written, session duration, and an **estimated**
+context-tokens-saved-vs-grep figure (using the ~8.4× mean token ratio
+measured in [`mcp/bench`](https://github.com/reposkein/reposkein/tree/main/mcp/bench) — always labeled an estimate, never claimed as measured).
+
+**Claude Code Stop-hook recipe** — print a session's stats the moment it ends, by adding to `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "reposkein-mcp stats --last" }
+        ]
+      }
+    ]
+  }
+}
+```
 
 ## Configuration
 
@@ -126,6 +168,7 @@ a resolved repo. See `mcp/src/store/resolveRepoPath.ts` and
 | Env var | Purpose |
 | --- | --- |
 | `REPOSKEIN_REPO_PATH` | pins the repository the server operates on — optional, see repo resolution above |
+| `REPOSKEIN_SESSION_ID` | override the session id used for `reposkein-mcp stats` logging (default: start-timestamp + pid) |
 | `REPOSKEIN_STORE` | `auto` (default) · `jsonl` (zero-infra) · `neo4j` |
 | `REPOSKEIN_INDEXER_BIN` | override the `reposkein-indexer` binary path (unsupported platforms) |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | optional Neo4j backend (large graphs / Cypher at scale) |
