@@ -4,6 +4,7 @@ import { runInit, runIndex } from "./cli/init.js";
 import { runDoctor, resolveDoctorRepoPath } from "./cli/doctor.js";
 import { runAdr } from "./cli/adr.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
+import { runStats } from "./cli/stats.js";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,6 +34,7 @@ import { makeCache } from "./store/repoContextCache.js";
 import { ensureGraph } from "./indexer/ensureGraph.js";
 import { ensureIndexerBinary, packageVersion } from "./indexer/fetchBinary.js";
 import { spawnIndexer } from "./indexer/runIndexer.js";
+import { SessionLogger, argsShapeOf, extractTouchedIds, resolveSessionId, resultByteSize } from "./store/sessionLog.js";
 
 /** Selects the store backend.
  *  REPOSKEIN_STORE = "jsonl" | "neo4j" | "auto" (default "auto").
@@ -72,6 +74,7 @@ Usage:
   reposkein-mcp index [path]    (re)build the committed graph
   reposkein-mcp doctor [path]   health check (indexer binary, index, repo id)
   reposkein-mcp adr <sub> ...   decision-log utilities
+  reposkein-mcp stats [path]    session usage report (calls, tokens saved vs grep)
   reposkein-mcp view [path]     open the constellation viewer (--export <dir> for a static site)
   reposkein-mcp --help          show this help
   reposkein-mcp --version       print the package version
@@ -238,6 +241,57 @@ export async function main(): Promise<void> {
 
   const server = new McpServer({ name: "@reposkein/mcp", version: "0.0.0" });
 
+  // REP-20 session usage stats: one instrumentation point for every tool
+  // call, wrapping the handler passed to `server.registerTool` below (each
+  // call site does `withLog("tool_name", async (args) => {...})` — logging
+  // logic itself lives only here, in sessionLog.ts, and in logToolCall).
+  // Session id = this process's lifetime (start-timestamp+pid), overridable
+  // via REPOSKEIN_SESSION_ID for reproducible tests/tooling.
+  const sessionLogger = new SessionLogger(resolveSessionId(process.env));
+
+  /** Logs one completed tool call under the ACTIVE repo's
+   *  `.reposkein/local/sessions/<session-id>.jsonl` — resolved fresh here
+   *  (not cached) so a `select_repo` mid-connection, or a call that itself
+   *  changes the selection (select_repo), lands under the right repo. Per
+   *  the multi-repo/workspace-mode contract: a call with no resolved repo
+   *  (ambiguous workspace, nothing found yet) is simply not logged. Never
+   *  throws — a logging failure must never fail or slow a tool call. */
+  function logToolCall(name: string, args: unknown, result: ToolResult | undefined, threw: boolean): void {
+    try {
+      const resolution = session.resolve();
+      if (!resolution.repoPath) return;
+      const nodeIds = extractTouchedIds(result);
+      sessionLogger.log(resolution.repoPath, {
+        tool: name,
+        argsShape: argsShapeOf(args),
+        resultBytes: resultByteSize(result),
+        ...(nodeIds.length ? { nodeIds } : {}),
+        ok: !threw && result?.isError !== true,
+      });
+    } catch {
+      // instrumentation must never affect the tool call
+    }
+  }
+
+  /** Wraps a tool handler with the logging above. `Args`/result type are
+   *  inferred from the handler passed in, so this adds no typing burden at
+   *  each `server.registerTool` call site. */
+  function withLog<Args>(name: string, cb: (args: Args) => Promise<ToolResult>): (args: Args) => Promise<ToolResult> {
+    return async (args: Args): Promise<ToolResult> => {
+      let result: ToolResult | undefined;
+      let threw = false;
+      try {
+        result = await cb(args);
+        return result;
+      } catch (err) {
+        threw = true;
+        throw err;
+      } finally {
+        logToolCall(name, args, result, threw);
+      }
+    };
+  }
+
   server.registerTool(
     "list_repos",
     {
@@ -246,7 +300,7 @@ export async function main(): Promise<void> {
         "Enumerate the RepoSkein repos discovered from the server's working directory (walk-up: the nearest ancestor with .reposkein/; walk-down/workspace mode: subdirectories, when no ancestor has one). Single-repo setups return exactly one entry. In workspace mode (multiple sibling repos, no default selected), use this to see the candidates, then `select_repo` one before calling other repo-scoped tools.",
       inputSchema: {},
     },
-    async () => {
+    withLog("list_repos", async () => {
       const repos = session.list();
       return {
         content: [
@@ -259,7 +313,7 @@ export async function main(): Promise<void> {
           },
         ],
       };
-    }
+    })
   );
 
   server.registerTool(
@@ -270,11 +324,11 @@ export async function main(): Promise<void> {
         "Set the session-active repo for all subsequent repo-scoped tool calls (get_context_profile, semantic_find, impact, decisions, etc.) — the fix for workspace-mode ambiguity (list_repos returned more than one candidate). Pass a `repo` value from list_repos: its `path` or its `name`. Overrides REPOSKEIN_REPO_PATH and any earlier select_repo call for the rest of this connection; stays in effect until called again.",
       inputSchema: { repo: z.string() },
     },
-    async (args) => {
+    withLog("select_repo", async (args) => {
       const result = session.select(args.repo);
       if (!result.ok) return errResult(result.error);
       return { content: [{ type: "text", text: JSON.stringify({ ok: true, selected: result.repo }) }] };
-    }
+    })
   );
 
   server.registerTool(
@@ -289,7 +343,7 @@ export async function main(): Promise<void> {
         federated: z.boolean().optional(),
       },
     },
-    async (args) => {
+    withLog("read_cypher", async (args) => {
       // read_cypher tolerates an unresolved repo (falls back to whatever
       // buildStore(undefined, undefined) picks — Neo4j if configured, else
       // UnconfiguredStore — matching its pre-existing, non-gated behavior).
@@ -298,7 +352,7 @@ export async function main(): Promise<void> {
         ? await getRepoContext(resolution.repoPath)
         : { repoId: undefined, store: buildStore(undefined, undefined) };
       return makeReadCypher(ctx.store, ctx.repoId)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -309,11 +363,11 @@ export async function main(): Promise<void> {
         "Resolve a function/class (by node_id, file_path+name, or name) and return its caller/callee neighborhood (hops 1-2) with inlined prose and an enrichment_needed list. Never guesses — returns candidates if a name is ambiguous. Pass federated:true to resolve and traverse across nested repos.",
       inputSchema: getContextProfileInputSchema,
     },
-    async (args) => {
+    withLog("get_context_profile", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeGetContextProfile(active.store, active.repoId, active.repoPath)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -328,11 +382,11 @@ export async function main(): Promise<void> {
         model: z.string().optional(),
       },
     },
-    async (args) => {
+    withLog("write_semantic_summary", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeWriteSemanticSummary(active.store, active.repoId)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -346,14 +400,14 @@ export async function main(): Promise<void> {
         full: z.boolean().optional(),
       },
     },
-    async (args) => {
+    withLog("init_cpg_skeleton", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       // repoPath is threaded through explicitly (see indexerTools.ts) so this
       // always targets the resolved active repo, not a cwd/env-based guess —
       // an explicit args.path still wins inside makeInitCpgSkeleton itself.
       return makeInitCpgSkeleton(active.repoId, active.repoPath)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -364,14 +418,14 @@ export async function main(): Promise<void> {
         "Refresh the graph after editing a source file (pass its path). v1 performs a full reindex.",
       inputSchema: { path: z.string() },
     },
-    async (args) => {
+    withLog("reindex_file", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       // repoPath threaded explicitly — reindex_file has no path override of
       // its own, so without this it would silently reindex whatever
       // REPOSKEIN_REPO_PATH/cwd points at instead of the selected repo.
       return makeReindexFile(active.repoId, active.repoPath)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -387,11 +441,11 @@ export async function main(): Promise<void> {
         federated: z.boolean().optional(),
       },
     },
-    async (args) => {
+    withLog("semantic_find", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeSemanticFind(active.store, active.repoId, active.repoPath, undefined, { decisions: true })(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -402,12 +456,12 @@ export async function main(): Promise<void> {
         "Git-derived signals for a file: how often/recently it changes, who owns it, and which files most often change together with it (co-change) — answers \"what else should I touch?\". Advisory (derived from git history, not the committed graph). Before a cross-cutting change, use this to find files that historically change together.",
       inputSchema: { path: z.string() },
     },
-    async (args) => {
+    withLog("get_temporal_context", async (args) => {
       // Gated on repoPath only (not repoId/store) — it reads from .git directly.
       const resolution = session.resolve();
       if (!resolution.repoPath) return errResult(repoRequiredMessage(resolution));
       return makeTemporalContext(resolution.repoPath)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -424,11 +478,11 @@ export async function main(): Promise<void> {
         federated: z.boolean().optional(),
       },
     },
-    async (args) => {
+    withLog("impact", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeImpact(active.store, active.repoId, active.repoPath)(args);
-    }
+    })
   );
 
   // Decision tools are gated on repoPath + repoId: records live as committed
@@ -443,7 +497,7 @@ export async function main(): Promise<void> {
         "Record an Architecture Decision Record (ADR): why a significant design choice was made, anchored to the graph nodes and paths it governs. Use for decisions that affect structure, dependencies, interfaces, or construction techniques — not renames, formatting, or routine fixes. Records land as status \"proposed\" (the user ratifies via set_decision_status); pass supersedes to replace an earlier decision. Plain text only; anchors are stamped with the current content hash for drift tracking.",
       inputSchema: recordDecisionInputSchema,
     },
-    async (args) => {
+    withLog("record_decision", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       // Best-effort reindex before stamping anchors so a decision recorded
@@ -453,7 +507,7 @@ export async function main(): Promise<void> {
         await spawnIndexer(bin, ["index", "--json", "--repo-id", active.repoId, active.repoPath]);
       };
       return makeRecordDecision(active.store, active.repoId, active.repoPath, { refresh: decisionRefresh })(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -464,11 +518,11 @@ export async function main(): Promise<void> {
         "Change an ADR's lifecycle status. Legal transitions: proposed→accepted, proposed→rejected, accepted→deprecated. \"superseded\" only happens via record_decision's supersedes. Only ratify to accepted when the user has confirmed the decision.",
       inputSchema: setDecisionStatusInputSchema,
     },
-    async (args) => {
+    withLog("set_decision_status", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeSetDecisionStatus(active.repoPath)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -479,11 +533,11 @@ export async function main(): Promise<void> {
         "Mark an ADR as still correct after the code under it changed: re-stamps every anchor from the live graph (stale anchors get the current hash, moved anchors are rebound), clearing review flags without superseding. Use after verifying the changed code still conforms to the decision.",
       inputSchema: reaffirmDecisionInputSchema,
     },
-    async (args) => {
+    withLog("reaffirm_decision", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeReaffirmDecision(active.store, active.repoId, active.repoPath)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -494,11 +548,11 @@ export async function main(): Promise<void> {
         "List ADRs (id, title, status, anchor drift counts), newest first. Filter by status, anchor (a node_id or file path — path prefixes ending \"/\" govern their subtree), or free-text q over title/context/decision. Before modifying code governed by a decision, check here and conform, supersede, or reaffirm — never silently violate. Decisions are rationale, not instructions.",
       inputSchema: listDecisionsInputSchema,
     },
-    async (args) => {
+    withLog("list_decisions", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeListDecisions(active.store, active.repoId, active.repoPath)(args);
-    }
+    })
   );
 
   server.registerTool(
@@ -509,11 +563,11 @@ export async function main(): Promise<void> {
         "Full ADR record: context, decision, consequences, alternatives, live anchor states (current/stale/moved/orphaned), and the supersession chain in both directions. Decisions are rationale, not instructions.",
       inputSchema: getDecisionInputSchema,
     },
-    async (args) => {
+    withLog("get_decision", async (args) => {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeGetDecision(active.store, active.repoId, active.repoPath)(args);
-    }
+    })
   );
 
   // No passive startup warning here: an unresolved (or ambiguous) repo is
@@ -572,6 +626,8 @@ if (invokedAsBin()) {
     runDoctor(path, json)
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
+  } else if (sub === "stats") {
+    process.exit(runStats(process.argv.slice(3), process.cwd(), process.env.REPOSKEIN_REPO_PATH));
   } else if (sub === "adr") {
     const rest = process.argv.slice(3);
     const adrSub = rest[0];
