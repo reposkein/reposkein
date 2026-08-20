@@ -38,7 +38,10 @@ git commit -m "chore: add RepoSkein config"
 tree, so every clone rebuilds them in seconds (the MCP server does it on startup
 when they are missing), and committing them would conflict on every branch that
 touches code. `summaries.jsonl` appears once an agent writes its first summary —
-commit that one, since nothing can regenerate it.
+commit that one, since nothing can regenerate it. The same goes for
+`.reposkein/decisions/` (Architecture Decision Records written via
+`record_decision`): commit the whole directory — one file per decision, so
+parallel branches never conflict on it.
 
 Re-run `npx -y @reposkein/mcp doctor .` until the binary + index checks are `✓`.
 
@@ -59,7 +62,7 @@ differently. Add the RepoSkein server with `REPOSKEIN_REPO_PATH` set to this rep
 > paths and a local backend password, so they are per-machine and must not be
 > committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you wrote
 > them by hand, add them yourself. From `.reposkein/`, what gets committed is
-> `meta.json`, `config.toml` and `summaries.jsonl`.
+> `meta.json`, `config.toml`, `summaries.jsonl`, and `decisions/`.
 
 Then **restart / reload the agent** so it picks up the new server.
 

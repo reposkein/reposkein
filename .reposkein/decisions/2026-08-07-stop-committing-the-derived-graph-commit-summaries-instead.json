@@ -1,0 +1,35 @@
+{
+  "id": "adr:2026-08-07-stop-committing-the-derived-graph-commit-summaries-instead",
+  "alternatives": "Committing derived JSONL with a union merge driver (fails on forges); committing with a custom merge driver (not consulted in bare repos); no committed files at all (loses shared team memory).",
+  "anchors": [
+    {
+      "hash": "f1b64e90cc460ea5c4f4475b7ad90066f2a963c3e085ff38ecd1d88ce8aaa881",
+      "kind": "File",
+      "name": "merge.rs",
+      "node_id": "rs1:reposkein-indexer:file:crates/core/src/merge.rs",
+      "path": "crates/core/src/merge.rs"
+    },
+    {
+      "hash": "47f4ec9878f2c00d94f621cce0e5d24d63a77534862fe9542cb0415dfdaa87dd",
+      "kind": "File",
+      "name": "main.rs",
+      "node_id": "rs1:reposkein-indexer:file:crates/cli/src/main.rs",
+      "path": "crates/cli/src/main.rs"
+    }
+  ],
+  "body_hash": "7ae56124b421d4de23df1215c15ec1be523f2d37ffb8f95bccc0025135e8ae91",
+  "consequences": "Fresh clones rebuild the graph on first MCP startup. Summaries survive via summaries.jsonl. Any future committed RepoSkein file must be authored-only and merge-safe by construction.",
+  "context": "nodes.jsonl and edges.jsonl are a pure function of the working tree, rebuilt in seconds. Committing them made every branch that touches code rewrite two machine-generated files, so every open PR conflicted the moment any other merged. gitattributes merge=union could not rescue this: forges compute mergeability in a bare repo where tree-level gitattributes is never consulted, and where union does apply it keeps both sides' lines, duplicating ids.",
+  "decided_at": "2026-08-07",
+  "decided_by": "marcus (ratified in session, recorded by claude)",
+  "decision": "Derived JSONL (nodes.jsonl, edges.jsonl) stays out of git and is rebuilt from the working tree on demand. Authored data agents write (summaries, and later decision records) is committed - nothing can regenerate it.",
+  "paths": [
+    ".reposkein/"
+  ],
+  "status": "accepted",
+  "supersedes": [],
+  "title": "Stop committing the derived graph; commit summaries instead",
+  "trigger": {
+    "kind": "manual"
+  }
+}

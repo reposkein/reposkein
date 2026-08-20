@@ -1,0 +1,28 @@
+{
+  "id": "adr:2026-08-14-no-hosted-vector-db-for-semantic-search-local-only-embedding",
+  "alternatives": "Neo4j vector index (adds infra, breaks determinism); hosted embedding APIs (cloud dependency, nondeterministic drift); no semantic search at all.",
+  "anchors": [
+    {
+      "hash": "d7bf070615ab1a700f3c2e3ad37ed273fc0a2aae57418cb5e775d52511852a3b",
+      "kind": "File",
+      "name": "semanticFind.ts",
+      "node_id": "rs1:reposkein-mcp:file:src/tools/semanticFind.ts",
+      "path": "src/tools/semanticFind.ts"
+    }
+  ],
+  "body_hash": "d90c41ca58b90a8ea6ed4c9dccb9b9236412fcd697de64f6bae1602b48be56a0",
+  "consequences": "Retrieval quality without embeddings depends on names, signatures, and agent-written summaries - enriching summaries directly improves search. Any future corpus addition (e.g. decision records) must keep a deterministic lexical path.",
+  "context": "Semantic retrieval could use Neo4j vector indexes or hosted embedding services, but both break RepoSkein's core guarantees: determinism (same code, byte-identical graph) and zero-infra (no database, no cloud dependency). Industry code-embedding offerings were abandoned or unreliable for this use.",
+  "decided_at": "2026-08-14",
+  "decided_by": "marcus (ratified in session, recorded by claude)",
+  "decision": "semantic_find is lexical (BM25F) by default and deterministic. Embeddings are an optional, local-only enhancement (REPOSKEIN_EMBED_PROVIDER with the local embed-server); when configured, hybrid RRF reranking applies and the response discloses ranking hybrid. No Neo4j vector indexes, no hosted embedding APIs.",
+  "paths": [
+    "embed-server/"
+  ],
+  "status": "accepted",
+  "supersedes": [],
+  "title": "No hosted vector DB for semantic search; local-only embeddings, lexical fallback",
+  "trigger": {
+    "kind": "manual"
+  }
+}

@@ -43,7 +43,8 @@ function toTargetRow(n: ParsedNode): TargetRow {
     repo_id: n.repoId,
     name,
     qualified_name: str(n.props.qualified_name) ?? name,
-    file_path: str(n.props.file_path) ?? "",
+    // File/Directory nodes carry `path` instead of `file_path`.
+    file_path: str(n.props.file_path) ?? str(n.props.path) ?? "",
     start_line: num(n.props.start_line),
     end_line: num(n.props.end_line),
     semantic_summary: str(n.props.semantic_summary),
@@ -302,7 +303,8 @@ export class JsonlGraphStore implements GraphStore {
         qualified_name: str(n.props.qualified_name) ?? name,
         signature: str(n.props.signature) ?? "",
         summary: str(n.props.semantic_summary) ?? "",
-        file_path: str(n.props.file_path) ?? "",
+        // File/Directory nodes carry `path` instead of `file_path`.
+    file_path: str(n.props.file_path) ?? str(n.props.path) ?? "",
         repo_id: n.repoId,
       });
     }

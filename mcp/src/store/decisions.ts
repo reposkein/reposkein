@@ -273,6 +273,17 @@ export function loadDecisions(repoPath: string): LoadedDecisions {
   return { decisions, warnings };
 }
 
+/** Repo ids for anchor resolution: the root plus its federated children —
+ *  decisions live at the root but may govern nodes in nested repos. Falls
+ *  back to the root alone if federation lookup fails. */
+export async function anchorRepoIds(store: GraphStore, repoId: string): Promise<string[]> {
+  try {
+    return [repoId, ...(await store.federatedRepoIds(repoId))];
+  } catch {
+    return [repoId];
+  }
+}
+
 /** The portion of a node id that survives repo_id drift: `:<kind>:<rest>`. */
 function idSuffix(nodeId: string): string | null {
   const m = /^rs1:[^:]+(:.+)$/.exec(nodeId);

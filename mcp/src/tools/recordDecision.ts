@@ -2,6 +2,7 @@ import type { GraphStore } from "../store/GraphStore.js";
 import type { ToolResult } from "./readCypher.js";
 import { sanitizeDecisionFields } from "../guard/decisionValidation.js";
 import {
+  anchorRepoIds,
   computeBodyHash,
   loadDecisions,
   mintDecisionId,
@@ -98,10 +99,11 @@ export function makeRecordDecision(
         }
       }
 
+      const repoIds = await anchorRepoIds(store, repoId);
       const anchors: DecisionAnchor[] = [];
       const unresolved: string[] = [];
       for (const nodeId of anchorIds) {
-        const live = await store.getNode([repoId], nodeId);
+        const live = await store.getNode(repoIds, nodeId);
         if (!live) {
           unresolved.push(nodeId);
           continue;

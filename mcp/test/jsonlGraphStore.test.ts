@@ -7,6 +7,7 @@ import { CypherUnsupportedError } from "../src/store/GraphStore.js";
 import { assertConformance, CONFORMANCE_REPO } from "./storeConformance.js";
 
 const NODES = [
+  `{"id":"rs1:proftest:file:base.py","labels":["File"],"content_hash":"hf","name":"base.py","path":"base.py"}`,
   `{"id":"rs1:proftest:func:base.py#helper@0","labels":["Function"],"content_hash":"hh","end_line":2,"file_path":"base.py","name":"helper","qualified_name":"helper","start_line":1}`,
   `{"id":"rs1:proftest:func:svc.py#Svc.mid@0","labels":["Function"],"content_hash":"hm","end_line":6,"file_path":"svc.py","name":"mid","qualified_name":"Svc.mid","start_line":5}`,
   `{"id":"rs1:proftest:func:svc.py#Svc.run@1","labels":["Function"],"content_hash":"hr","end_line":4,"file_path":"svc.py","name":"run","qualified_name":"Svc.run","start_line":2}`,
@@ -101,6 +102,13 @@ describe("JsonlGraphStore", () => {
     utimesSync(join(dir, "nodes.jsonl"), future, future);
     const after = await store.resolveByName(CONFORMANCE_REPO, "added");
     expect(after).toHaveLength(1);
+  });
+
+  it("maps a File node's path prop to file_path (File nodes have no file_path)", async () => {
+    const store = new JsonlGraphStore(root, CONFORMANCE_REPO);
+    const file = await store.getNode([CONFORMANCE_REPO], "rs1:proftest:file:base.py");
+    expect(file?.file_path).toBe("base.py");
+    expect(file?.labels).toContain("File");
   });
 
   it("findByContentHash returns live nodes with that hash, scoped by repo", async () => {

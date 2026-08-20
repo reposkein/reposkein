@@ -1,7 +1,7 @@
 import type { GraphStore } from "../store/GraphStore.js";
 import type { ToolResult } from "./readCypher.js";
 import { neutralizeSummary } from "../guard/summaryValidation.js";
-import { loadDecisions, resolveAnchorStates } from "../store/decisions.js";
+import { anchorRepoIds, loadDecisions, resolveAnchorStates } from "../store/decisions.js";
 
 export interface GetDecisionArgs {
   decision_id: string;
@@ -20,7 +20,7 @@ export function makeGetDecision(store: GraphStore, repoId: string, repoPath: str
       const { decisions } = loadDecisions(repoPath);
       const rec = decisions.find((d) => d.id === args.decision_id);
       if (!rec) return err(`unknown decision: ${args.decision_id}`);
-      const resolved = await resolveAnchorStates(store, [repoId], rec.anchors);
+      const resolved = await resolveAnchorStates(store, await anchorRepoIds(store, repoId), rec.anchors);
       // The chain in both directions: what this supersedes (recorded) and
       // what supersedes it (recorded on flip, recovered from siblings if the
       // flip was lost to merge damage).

@@ -1,6 +1,7 @@
 import type { GraphStore } from "../store/GraphStore.js";
 import type { ToolResult } from "./readCypher.js";
 import {
+  anchorRepoIds,
   computeBodyHash,
   loadDecisions,
   resolveAnchorStates,
@@ -27,7 +28,8 @@ export function makeReaffirmDecision(store: GraphStore, repoId: string, repoPath
       const rec = decisions.find((d) => d.id === args.decision_id);
       if (!rec) return err(`unknown decision: ${args.decision_id}`);
 
-      const resolved = await resolveAnchorStates(store, [repoId], rec.anchors);
+      const repoIds = await anchorRepoIds(store, repoId);
+      const resolved = await resolveAnchorStates(store, repoIds, rec.anchors);
       const anchors: DecisionAnchor[] = [];
       const results: { node_id: string; state: string }[] = [];
       for (const r of resolved) {
@@ -36,7 +38,7 @@ export function makeReaffirmDecision(store: GraphStore, repoId: string, repoPath
           anchors.push({ node_id: r.node_id, path: r.path, name: r.name, kind: r.kind, hash: r.hash });
           continue;
         }
-        const live = await store.getNode([repoId], r.resolved_node_id);
+        const live = await store.getNode(repoIds, r.resolved_node_id);
         if (!live) {
           anchors.push({ node_id: r.node_id, path: r.path, name: r.name, kind: r.kind, hash: r.hash });
           continue;

@@ -1,0 +1,35 @@
+{
+  "id": "adr:2026-08-20-architecture-decisions-stored-file-per-decision-with-portabl",
+  "alternatives": "Single decisions.jsonl with a conflict-tolerant reader (repairs damage but still shows conflicted PRs on forges); markdown ADRs in docs/adr as source of truth (loses graph anchoring; sequential numbering collides across branches); decisions as derived graph nodes only (lost on rebuild).",
+  "anchors": [
+    {
+      "hash": "cc5d76d576b9103cdaab72770f526bf846c2887d3c1cd8a89b9db21a5ae0a3b8",
+      "kind": "File",
+      "name": "decisions.ts",
+      "node_id": "rs1:reposkein-mcp:file:src/store/decisions.ts",
+      "path": "src/store/decisions.ts"
+    },
+    {
+      "hash": "e4e42e893c6e85741fb503e9430037ca150cd641d70d262060c494d95521cc36",
+      "kind": "File",
+      "name": "recordDecision.ts",
+      "node_id": "rs1:reposkein-mcp:file:src/tools/recordDecision.ts",
+      "path": "src/tools/recordDecision.ts"
+    }
+  ],
+  "body_hash": "e95507027904bf626917d485b7305067aaf2dd2bb1ff3aef163bbf8d4f6242a2",
+  "consequences": "Appending decisions on parallel branches never conflicts. Same-day same-slug collisions across branches surface as two files (ordinal suffix within one checkout); doctor flags duplicate ids. The decision log is a budget (~100 active records) - significance filtering lives in the skill, not the tool.",
+  "context": "Decision records must be committed (nothing can regenerate rationale) yet merge-safe: a single decisions.jsonl would recreate the derived-graph failure - forges compute mergeability in a bare repo where gitattributes union merge is never consulted, so parallel branches appending records would conflict on every PR. Ids embedding repo_id would break on forks and no-remote clones, where repo_id computes differently unless meta.json is committed.",
+  "decided_at": "2026-08-20",
+  "decided_by": "marcus (ratified in session, recorded by claude)",
+  "decision": "Each decision is one canonical JSON file at .reposkein/decisions/<date>-<slug>.json with a portable adr:<date>-<slug> id. Bodies are immutable (body_hash-checked); only status, supersession, and anchor re-stamping may change; records are never machine-deleted. Anchors keep full rs1: node ids but match tolerantly by suffix across repo_id drift, with content-hash recovery for renamed nodes.",
+  "paths": [
+    ".reposkein/decisions/"
+  ],
+  "status": "accepted",
+  "supersedes": [],
+  "title": "Architecture decisions stored file-per-decision with portable ids",
+  "trigger": {
+    "kind": "manual"
+  }
+}

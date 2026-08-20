@@ -127,6 +127,22 @@ describe("record_decision", () => {
     expect(loadDecisions(root).decisions).toHaveLength(0);
   });
 
+  it("resolves anchors in federated child repos", async () => {
+    const childId = "rs1:childrepo:file:src/x.ts";
+    const store = fakeStore({
+      federatedRepoIds: async () => ["childrepo"],
+      getNode: async (repos, id) =>
+        repos.includes("childrepo") && id === childId
+          ? { ...liveNode("hc", childId), repo_id: "childrepo", file_path: "src/x.ts" }
+          : null,
+    });
+    const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
+    const res = await record({ ...baseArgs, anchor_node_ids: [childId] });
+    const out = parse(res);
+    expect(out.unresolved).toEqual([]);
+    expect(loadDecisions(root).decisions[0]!.anchors[0]!.node_id).toBe(childId);
+  });
+
   it("runs the refresh hook before stamping anchor hashes", async () => {
     let hash = "pre-edit";
     const store = fakeStore({ getNode: async (_r, id) => (id === NODE_ID ? liveNode(hash) : null) });

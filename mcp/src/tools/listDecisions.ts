@@ -2,6 +2,7 @@ import type { GraphStore } from "../store/GraphStore.js";
 import type { ToolResult } from "./readCypher.js";
 import { neutralizeSummary } from "../guard/summaryValidation.js";
 import {
+  anchorRepoIds,
   loadDecisions,
   resolveAnchorStates,
   type DecisionRecord,
@@ -73,9 +74,10 @@ export function makeListDecisions(store: GraphStore, repoId: string, repoPath: s
       if (args.q) filtered = filtered.filter((d) => matchesText(d, args.q!));
       const ordered = sortDecisions(filtered);
       const page = ordered.slice(0, limit);
+      const repoIds = await anchorRepoIds(store, repoId);
       const rows = [];
       for (const d of page) {
-        const states = await resolveAnchorStates(store, [repoId], d.anchors);
+        const states = await resolveAnchorStates(store, repoIds, d.anchors);
         const counts = { current: 0, stale: 0, moved: 0, orphaned: 0 };
         for (const s of states) counts[s.state]++;
         rows.push({
