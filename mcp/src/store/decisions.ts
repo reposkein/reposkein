@@ -239,34 +239,49 @@ export interface LoadedDecisions {
   warnings: string[];
 }
 
-/** Loads every decision file. Tolerant: malformed files (conflict markers,
- *  bad JSON, missing fields) are skipped with a warning, never thrown — a
- *  damaged file must not take recall down. */
-export function loadDecisions(repoPath: string): LoadedDecisions {
+export interface DecisionFileEntry {
+  file: string;
+  /** null when the file is malformed (bad JSON, conflict markers, missing
+   *  required fields). */
+  record: DecisionRecord | null;
+}
+
+/** Raw per-file scan (no dedupe) — the substrate for loadDecisions and for
+ *  doctor's duplicate/integrity checks. */
+export function loadDecisionFiles(repoPath: string): DecisionFileEntry[] {
   const dir = decisionsDir(repoPath);
-  const warnings: string[] = [];
-  if (!existsSync(dir)) return { decisions: [], warnings };
+  if (!existsSync(dir)) return [];
   let files: string[];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith(".json") && !f.startsWith("."));
   } catch {
-    return { decisions: [], warnings };
+    return [];
   }
-  const byId = new Map<string, DecisionRecord>();
-  for (const f of files.sort()) {
-    let rec: DecisionRecord | null = null;
+  return files.sort().map((f) => {
+    let record: DecisionRecord | null = null;
     try {
-      rec = parseDecision(JSON.parse(readFileSync(join(dir, f), "utf8")) as Record<string, unknown>);
+      record = parseDecision(JSON.parse(readFileSync(join(dir, f), "utf8")) as Record<string, unknown>);
     } catch {
-      rec = null;
+      record = null;
     }
-    if (!rec) {
-      warnings.push(`skipped malformed decision file: ${f}`);
+    return { file: f, record };
+  });
+}
+
+/** Loads every decision file. Tolerant: malformed files (conflict markers,
+ *  bad JSON, missing fields) are skipped with a warning, never thrown — a
+ *  damaged file must not take recall down. */
+export function loadDecisions(repoPath: string): LoadedDecisions {
+  const warnings: string[] = [];
+  const byId = new Map<string, DecisionRecord>();
+  for (const { file, record } of loadDecisionFiles(repoPath)) {
+    if (!record) {
+      warnings.push(`skipped malformed decision file: ${file}`);
       continue;
     }
-    const existing = byId.get(rec.id);
-    if (!existing || STATUS_PRECEDENCE[rec.status] > STATUS_PRECEDENCE[existing.status]) {
-      byId.set(rec.id, rec);
+    const existing = byId.get(record.id);
+    if (!existing || STATUS_PRECEDENCE[record.status] > STATUS_PRECEDENCE[existing.status]) {
+      byId.set(record.id, record);
     }
   }
   const decisions = [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

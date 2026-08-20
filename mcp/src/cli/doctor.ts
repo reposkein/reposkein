@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
 import { resolveRepoId } from "../store/repoId.js";
+import { decisionChecks } from "./doctorDecisions.js";
 
 export interface Check {
   id: string;
@@ -79,6 +80,9 @@ export async function runChecks(repoPath: string): Promise<DoctorReport> {
     detail: repoId ?? "could not resolve a repo id",
     fix: repoId ? undefined : "set REPOSKEIN_REPO_PATH (or REPOSKEIN_REPO_ID) for the MCP server",
   });
+
+  // 4) Decision log validation (all non-critical: degrade, don't block).
+  checks.push(...decisionChecks(repoPath));
 
   const ok = checks.filter((c) => c.critical).every((c) => c.ok);
   return { repoPath, ok, checks };
