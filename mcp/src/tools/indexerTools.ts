@@ -6,9 +6,23 @@ import {
   shouldLoadNeo4j,
 } from "../indexer/runIndexer.js";
 import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
+import {
+  decisionsAffectedBy,
+  mergeDeltas,
+  readPendingDelta,
+  type DecisionAffected,
+  type GraphDeltaJson,
+} from "../indexer/decisionsAffected.js";
 
 export type RunResult =
-  | { ok: true; nodes: number; edges: number; files: number; warnings: string[] }
+  | {
+      ok: true;
+      nodes: number;
+      edges: number;
+      files: number;
+      warnings: string[];
+      graph_delta?: GraphDeltaJson;
+    }
   | { ok: false; error: string };
 
 export interface RunOpts {
@@ -44,8 +58,28 @@ function defaultRun(repoId: string, indexPath: string, opts?: RunOpts): Promise<
       edges: stats.edges,
       files: stats.files,
       warnings: stats.warnings ?? [],
+      ...(stats.graph_delta ? { graph_delta: stats.graph_delta } : {}),
     };
   })();
+}
+
+/** Combines this run's delta with the pending one hook-driven indexes parked
+ *  (their stdout is discarded — post-merge drift would otherwise vanish), and
+ *  cross-references the decision log. Returns {} when there is no drift. */
+function driftFields(runDelta: GraphDeltaJson | undefined): {
+  graph_delta?: GraphDeltaJson;
+  decisions_affected?: DecisionAffected[];
+} {
+  const root = repoPath();
+  const pending = readPendingDelta(root);
+  let delta = runDelta ?? null;
+  if (pending) delta = delta ? mergeDeltas(delta, pending) : pending;
+  if (!delta) return {};
+  const affected = decisionsAffectedBy(root, delta);
+  return {
+    graph_delta: delta,
+    ...(affected.length > 0 ? { decisions_affected: affected } : {}),
+  };
 }
 
 function makeRunner(repoId: string, deps?: Partial<IndexerDeps>) {
@@ -77,6 +111,7 @@ export function makeInitCpgSkeleton(repoId: string, deps?: Partial<IndexerDeps>)
           files: r.files,
           duration_ms: Date.now() - start,
           warnings: r.warnings,
+          ...driftFields(r.graph_delta),
         }),
       }],
     };
@@ -111,6 +146,7 @@ export function makeReindexFile(repoId: string, deps?: Partial<IndexerDeps>) {
           duration_ms: Date.now() - start,
           loaded: shouldLoadNeo4j(),
           warnings: r.warnings,
+          ...driftFields(r.graph_delta),
         }),
       }],
     };

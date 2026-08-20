@@ -2,6 +2,7 @@
 
 pub mod cache;
 pub mod classify;
+pub mod delta;
 pub mod extractor;
 pub mod hash;
 pub mod heritage;
