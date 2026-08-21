@@ -448,3 +448,180 @@ fn post_merge_hook_reindexes_and_records_marker_end_to_end() {
     let marker = fs::read_to_string(root.join(".reposkein/local/indexed-at")).unwrap();
     assert_eq!(marker.trim(), head_sha);
 }
+
+/// A stand-in `$BIN` that always fails, regardless of subcommand/args — used
+/// to prove the marker is withheld on a failed index rather than written
+/// unconditionally (the exact bug this test file's other tests would NOT
+/// have caught, since they only exercise the success path).
+fn write_failing_binary(root: &std::path::Path) -> std::path::PathBuf {
+    let p = root.join("fake-failing-indexer.sh");
+    fs::write(&p, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    p
+}
+
+fn head_sha(root: &std::path::Path) -> String {
+    let out = Proc::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn precommit_postcommit_withhold_the_marker_when_the_index_fails() {
+    let dir = git_repo();
+    let root = dir.path();
+    configure_identity(root);
+    run_init(root);
+    let failing_bin = write_failing_binary(root);
+
+    fs::write(root.join("a.py"), "def f():\n    return 1\n").unwrap();
+    Proc::new("git")
+        .args(["add", "a.py"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    let commit_status = Proc::new("git")
+        .args(["commit", "-qm", "add a.py"])
+        .current_dir(root)
+        .env("REPOSKEIN_INDEXER_BIN", &failing_bin)
+        .status()
+        .unwrap();
+    // A failed index must not block the commit (pre-existing design: exit 0
+    // either way) — only the marker write is gated.
+    assert!(commit_status.success());
+
+    assert!(
+        !root.join(".reposkein/local/indexed-at").exists(),
+        "the indexed-at marker must not be written when pre-commit's index failed"
+    );
+    assert!(
+        !root.join(".reposkein/local/.precommit-indexed-ok").exists(),
+        "the transient success flag must not survive a failed index (nothing to consume)"
+    );
+}
+
+#[test]
+fn precommit_postcommit_do_not_advance_a_marker_left_by_an_earlier_successful_commit() {
+    // Same as above, but starting from a repo that already has a real,
+    // correctly-recorded marker (from a prior successful commit) — proves a
+    // later *failed* index doesn't advance it to the new (unindexed) HEAD.
+    let dir = git_repo();
+    let root = dir.path();
+    configure_identity(root);
+    run_init(root);
+    let real_bin = cargo_bin("reposkein-indexer");
+
+    fs::write(root.join("a.py"), "def f():\n    return 1\n").unwrap();
+    Proc::new("git")
+        .args(["add", "a.py"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    Proc::new("git")
+        .args(["commit", "-qm", "commit A (indexes successfully)"])
+        .current_dir(root)
+        .env("REPOSKEIN_INDEXER_BIN", &real_bin)
+        .status()
+        .unwrap();
+    let sha_a = head_sha(root);
+    let marker_after_a = fs::read_to_string(root.join(".reposkein/local/indexed-at")).unwrap();
+    assert_eq!(marker_after_a.trim(), sha_a);
+
+    let failing_bin = write_failing_binary(root);
+    fs::write(root.join("a.py"), "def f():\n    return 2\n").unwrap();
+    Proc::new("git")
+        .args(["add", "a.py"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    Proc::new("git")
+        .args(["commit", "-qm", "commit B (index fails)"])
+        .current_dir(root)
+        .env("REPOSKEIN_INDEXER_BIN", &failing_bin)
+        .status()
+        .unwrap();
+    let sha_b = head_sha(root);
+    assert_ne!(sha_a, sha_b);
+
+    let marker_after_b = fs::read_to_string(root.join(".reposkein/local/indexed-at")).unwrap();
+    assert_eq!(
+        marker_after_b.trim(),
+        sha_a,
+        "the marker must stay at the last successfully-indexed commit, not advance to HEAD"
+    );
+}
+
+#[test]
+fn post_merge_hook_withholds_the_marker_when_the_index_fails() {
+    let dir = git_repo();
+    let root = dir.path();
+    configure_identity(root);
+    run_init(root);
+    let real_bin = cargo_bin("reposkein-indexer");
+
+    fs::write(root.join("a.py"), "def f():\n    return 1\n").unwrap();
+    Proc::new("git")
+        .args(["add", "a.py"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    Proc::new("git")
+        .args(["commit", "-qm", "init"])
+        .current_dir(root)
+        .env("REPOSKEIN_INDEXER_BIN", &real_bin)
+        .status()
+        .unwrap();
+    let sha_a = head_sha(root);
+    let marker_after_a = fs::read_to_string(root.join(".reposkein/local/indexed-at")).unwrap();
+    assert_eq!(marker_after_a.trim(), sha_a);
+
+    // Land a second commit as if via merge/pull (skip hooks entirely), then
+    // invoke post-merge by hand with a failing $BIN — simulating the
+    // reindex itself failing (missing binary handling is already covered
+    // by the "indexer not found" early-exit branch; this is the "found but
+    // fails" case the fix targets).
+    fs::write(root.join("b.py"), "def g():\n    return 2\n").unwrap();
+    Proc::new("git")
+        .args(["add", "b.py"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    Proc::new("git")
+        .args([
+            "commit",
+            "-qm",
+            "simulate a merge commit landing b.py",
+            "--no-verify",
+        ])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    let sha_b = head_sha(root);
+    assert_ne!(sha_a, sha_b);
+
+    let failing_bin = write_failing_binary(root);
+    let status = Proc::new(root.join(".git/hooks/post-merge"))
+        .current_dir(root)
+        .env("REPOSKEIN_INDEXER_BIN", &failing_bin)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "post-merge must still exit 0 even when the index fails"
+    );
+
+    let marker_after_failed_merge =
+        fs::read_to_string(root.join(".reposkein/local/indexed-at")).unwrap();
+    assert_eq!(
+        marker_after_failed_merge.trim(),
+        sha_a,
+        "a failed post-merge index must not advance the marker to the new (unindexed) HEAD"
+    );
+}
