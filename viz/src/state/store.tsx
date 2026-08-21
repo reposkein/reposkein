@@ -38,7 +38,7 @@ import {
   useNewChannel,
   type Channel,
 } from "./channel";
-import { getCameraPose, type CameraPose } from "./cameraPose";
+import { getCameraPose, isNodeOnScreenNow, type CameraPose } from "./cameraPose";
 import type { HopMemory } from "../data/navigate";
 import {
   pushView,
@@ -150,7 +150,7 @@ export type Action =
   | { t: "toggleExpand"; key: string }
   | { t: "collapseBranch" }
   | { t: "collapseToFileLevel" }
-  | { t: "select"; id: string | null }
+  | { t: "select"; id: string | null; frame?: boolean }
   | { t: "requestFit" }
   | { t: "revealAndSelect"; id: string; fly?: boolean; collapseDeeper?: boolean }
   | { t: "revealWithoutRefit"; keys: string[] }
@@ -365,7 +365,16 @@ export function reducer(state: State, a: Action): State {
       // does NOT bump fitNonce: with nothing selected, Controls' fit effect
       // falls through to "frame every visible cluster", so bumping would turn
       // Esc — and a misclick on empty space — into an unrequested reframe of
-      // the whole constellation. Selecting a node still frames it.
+      // the whole constellation.
+      //
+      // NEITHER IS SELECTING SOMETHING ALREADY IN VIEW (V4 §6, fix round 1
+      // `I3`). `frame` is the caller's frustum verdict: clicking a star you can
+      // already see should not swing the camera to centre it, for the same
+      // reason a hop to an on-screen neighbour doesn't. The decision lives in
+      // the action wrapper (which can read the live camera) rather than here, so
+      // this stays a pure function of its arguments. `undefined` means FRAME —
+      // "unknown" must always resolve to moving the camera, since a wasted
+      // flight is cheap next to a selection the reader cannot find.
       //
       // `focusTarget` is cleared either way: it is a one-shot fly request, and
       // a stale one surviving into a later fitNonce bump is exactly the V1 bug
@@ -375,7 +384,8 @@ export function reducer(state: State, a: Action): State {
         ...state,
         selected: a.id,
         focusTarget: null,
-        fitNonce: a.id === null ? state.fitNonce : state.fitNonce + 1,
+        fitNonce:
+          a.id !== null && a.frame !== false ? state.fitNonce + 1 : state.fitNonce,
         impact: a.id === state.selected ? state.impact : null,
         focus: a.id === state.selected ? state.focus : null,
       };
@@ -491,7 +501,10 @@ export function reducer(state: State, a: Action): State {
      *
      *  Overlays are dropped: `impact` and `focus` are anchored to a selection
      *  and a filter set that the snapshot does not carry, so restoring them
-     *  would restore a stale computation. */
+     *  would restore a stale computation. `lastHop` goes for the same reason —
+     *  it describes a step between two nodes that has nothing to do with the
+     *  view being restored, and leaving it would let the next arrow press
+     *  "return" to an anchor from a different part of the session. */
     case "restoreView": {
       if (!state.model) return state;
       const { selected, expanded, pose } = a.snapshot;
@@ -502,6 +515,7 @@ export function reducer(state: State, a: Action): State {
         focusTarget: null,
         impact: null,
         focus: null,
+        lastHop: null,
         poseTarget: pose,
         poseNonce: state.poseNonce + 1,
       };
@@ -885,7 +899,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         record((s) => hasExpansionAboveFileLevel(s.model!, s.expanded));
         dispatch({ t: "collapseToFileLevel" });
       },
-      select: (id) => dispatch({ t: "select", id }),
+      select: (id) =>
+        // The frustum verdict is taken HERE, at dispatch time, so the reducer
+        // stays pure — the same split the hop uses (fix round 1, `I3`).
+        dispatch({ t: "select", id, frame: id === null ? false : !isNodeOnScreenNow(id) }),
       requestFit: () => dispatch({ t: "requestFit" }),
       revealAndSelect: (id, opts) => {
         record();

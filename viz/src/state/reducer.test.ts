@@ -204,7 +204,8 @@ describe("revealWithoutRefit", () => {
   });
 });
 
-describe("setIdleDrift", () => {  it("defaults off and toggles without touching the camera", () => {
+describe("setIdleDrift", () => {
+  it("defaults off and toggles without touching the camera", () => {
     const model = clientModel(graph());
     const ready = readyState(model);
     expect(ready.idleDrift).toBe(false);
@@ -267,6 +268,56 @@ describe("collapseBranch — `x`", () => {
       s = next;
     }
     expect(s.expanded.has(model.rootKey)).toBe(true);
+    expect(reducer(s, { t: "collapseBranch" })).toBe(s);
+  });
+
+  it("the climb terminates on the outermost cluster that still has a backing node", () => {
+    const model = clientModel(graph());
+    let s = reducer(readyState(model), { t: "revealAndSelect", id: B1, fly: true });
+    for (let i = 0; i < 8; i++) {
+      const next = reducer(s, { t: "collapseBranch" });
+      if (next === s) break;
+      s = next;
+    }
+    // NOT null. The last collapse closes the "." directory, whose own cluster is
+    // then the deepest VISIBLE one on the selection's chain — so
+    // `reanchorSelection` leaves the selection right there, and the breadcrumb
+    // stays truthful (the V2 never-null-breadcrumb invariant). Only the root
+    // galaxy is above it, and the galaxy never closes, so the next `x` is a
+    // no-op rather than a step into nothing.
+    expect(s.selected).toBe("rs1:r:dir:.");
+    expect(s.expanded.has(model.rootKey)).toBe(true);
+    expect(reducer(s, { t: "collapseBranch" })).toBe(s);
+  });
+
+  it("…but DOES clear the selection when that cluster is the synthetic galaxy", () => {
+    // A repo whose root galaxy directly holds a file, with no Directory node to
+    // re-anchor to: the galaxy is synthetic (no `nodeId`), so there is honestly
+    // nothing to select and the selection clears.
+    const g: RawGraph = {
+      nodes: [
+        { id: "rs1:r:repo:.", labels: ["Repository"], props: { name: "r" } },
+        { id: "rs1:r:file:a.ts", labels: ["File"], props: { name: "a.ts", path: "a.ts" } },
+        {
+          id: "rs1:r:sym:a.ts#run",
+          labels: ["Function"],
+          props: { name: "run", file_path: "a.ts", content_hash: "h" },
+        },
+      ],
+      edges: [],
+    };
+    const model = clientModel(g);
+    let s = reducer(readyState(model), {
+      t: "revealAndSelect",
+      id: "rs1:r:sym:a.ts#run",
+      fly: true,
+    });
+    for (let i = 0; i < 8; i++) {
+      const next = reducer(s, { t: "collapseBranch" });
+      if (next === s) break;
+      s = next;
+    }
+    expect(s.selected).toBeNull();
     expect(reducer(s, { t: "collapseBranch" })).toBe(s);
   });
 

@@ -172,15 +172,20 @@ export function handleGlobalKey(
       if (e.shiftKey || e.key === "X") actions.collapseToFileLevel();
       else actions.collapseBranch();
       return true;
-    // VIEW HISTORY (V4 §4). Returns whether it actually moved, so the key is
-    // left UNCONSUMED at either end of the stack — the browser's own back /
-    // forward gesture is not something to swallow silently.
-    case "[":
-      e.preventDefault();
-      return actions.historyBack();
-    case "]":
-      e.preventDefault();
-      return actions.historyForward();
+    // VIEW HISTORY (V4 §4). Returns whether it actually moved, so at either end
+    // of the stack the key is left UNCONSUMED and unprevented — `[` and `]` are
+    // ordinary characters, and swallowing them when there is nothing to step to
+    // would break a browser or OS binding for no benefit.
+    case "[": {
+      const moved = actions.historyBack();
+      if (moved) e.preventDefault();
+      return moved;
+    }
+    case "]": {
+      const moved = actions.historyForward();
+      if (moved) e.preventDefault();
+      return moved;
+    }
   }
 
   // Neighbor hopping needs both a model and a selection to hop from.

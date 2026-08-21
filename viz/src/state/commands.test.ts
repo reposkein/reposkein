@@ -258,10 +258,26 @@ describe("buildCommandRegistry — completeness (every REP-13-listed store actio
     expect(env.screenshot).toHaveBeenCalledOnce();
   });
 
-  it("Copy link calls env.copyLink() and is disabled without a selection", () => {
+  /** Since V4 §7 the link carries the lens and the overlays too, so a selection
+   *  is no longer the only thing worth sharing. */
+  it("Copy link is enabled for ANY non-default view, not just a selection", () => {
     const cmd = find("copy-link");
-    expect(cmd.disabled(notSelected)).toBe(true);
+    // A genuinely default view has nothing to share.
+    expect(cmd.disabled(stateWith({ selected: null }))).toBe(true);
+
     expect(cmd.disabled(selected)).toBe(false);
+    expect(cmd.disabled(stateWith({ selected: null, lens: "calls" }))).toBe(false);
+    expect(cmd.disabled(stateWith({ selected: null, coupling: true }))).toBe(false);
+    expect(cmd.disabled(stateWith({ selected: null, audit: "ambiguous" }))).toBe(false);
+    expect(
+      cmd.disabled(
+        stateWith({
+          selected: null,
+          focus: { sourceId: "n1", nodes: new Set(["n1"]), depth: 1 },
+        }),
+      ),
+    ).toBe(false);
+
     const env = mockEnv();
     cmd.run(mockActions(), selected, env);
     expect(env.copyLink).toHaveBeenCalledOnce();

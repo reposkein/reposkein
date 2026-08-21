@@ -261,6 +261,17 @@ describe("restoreView — all three at once, and no refit", () => {
     expect(next.poseNonce).toBe(ready.poseNonce + 1);
   });
 
+  it("clears the hop anchor — it belongs to a step, not to a view", () => {
+    const withHop: State = {
+      ...ready,
+      lastHop: { from: "a", to: "b", dir: "next" },
+    } as State;
+    const next = reducer(withHop, { t: "restoreView", snapshot: view("x", [], null) });
+    // Leaving it would let the next arrow press "return" to an anchor from a
+    // different part of the session.
+    expect(next.lastHop).toBeNull();
+  });
+
   it("is a no-op before the model loads", () => {
     const cold = createInitialState();
     expect(reducer(cold, { t: "restoreView", snapshot: view("x", [], null) })).toBe(cold);

@@ -15,7 +15,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { StoreProvider, useActions, useStoreState, type Actions, type State } from "./store";
-import { publishCameraPose, resetCameraPose, type CameraPose } from "./cameraPose";
+import {
+  publishCameraPose,
+  registerOnScreenProbe,
+  resetCameraPose,
+  type CameraPose,
+} from "./cameraPose";
 import { historyDepth, resetViewHistory } from "./viewHistory";
 import { buildModel } from "../data/model";
 import { fromWorker, type ClientModel } from "../data/clientModel";
@@ -403,5 +408,49 @@ describe("expansion snapshots are safe to hold by reference", () => {
     act(() => void h.actions.historyBack());
     expect(h.state().expanded).toBe(original);
     expect(h.state().expanded.has(FILE_A)).toBe(false);
+  });
+});
+
+/** V4 §6 / fix round 1 `I3`. Clicking a star you can already see should not
+ *  swing the camera to centre it, for the same reason a hop to an on-screen
+ *  neighbour doesn't. The verdict is taken in the action wrapper (which can read
+ *  the live camera through the registered probe) so the reducer stays pure. */
+describe("select consults the frustum probe", () => {
+  it("does NOT refit when the target is already on screen", () => {
+    const h = mount();
+    registerOnScreenProbe(() => true);
+    const before = h.state().fitNonce;
+    act(() => h.actions.select(SYM_A));
+    expect(h.state().selected).toBe(SYM_A);
+    expect(h.state().fitNonce).toBe(before);
+  });
+
+  it("refits when the target is off screen", () => {
+    const h = mount();
+    registerOnScreenProbe(() => false);
+    const before = h.state().fitNonce;
+    act(() => h.actions.select(SYM_A));
+    expect(h.state().fitNonce).toBe(before + 1);
+  });
+
+  it("refits with NO probe registered — unknown resolves to moving", () => {
+    const h = mount(); // `resetCameraPose` in beforeEach cleared any probe
+    const before = h.state().fitNonce;
+    act(() => h.actions.select(SYM_A));
+    expect(h.state().fitNonce).toBe(before + 1);
+  });
+
+  it("asks about the node being selected, and never for a deselect", () => {
+    const h = mount();
+    const probe = vi.fn(() => true);
+    registerOnScreenProbe(probe);
+    act(() => h.actions.select(SYM_A));
+    expect(probe).toHaveBeenCalledExactlyOnceWith(SYM_A);
+
+    probe.mockClear();
+    const before = h.state().fitNonce;
+    act(() => h.actions.select(null));
+    expect(probe).not.toHaveBeenCalled(); // deselection never frames anyway
+    expect(h.state().fitNonce).toBe(before);
   });
 });

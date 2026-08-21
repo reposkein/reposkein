@@ -401,8 +401,22 @@ describe("handleGlobalKey — [ and ] walk view history", () => {
   it("leaves the key UNCONSUMED at either end of the stack", () => {
     // historyBack/-Forward default to returning false in mockActions().
     const actions = mockActions();
-    expect(handleGlobalKey(key("["), stateWith(), actions, mockEnv())).toBe(false);
-    expect(handleGlobalKey(key("]"), stateWith(), actions, mockEnv())).toBe(false);
+    const back = key("[");
+    const fwd = key("]");
+    expect(handleGlobalKey(back, stateWith(), actions, mockEnv())).toBe(false);
+    expect(handleGlobalKey(fwd, stateWith(), actions, mockEnv())).toBe(false);
+    // …and unprevented: `[` and `]` are ordinary characters, so swallowing them
+    // when there is nowhere to step would break a browser/OS binding for free.
+    expect(back.preventDefault).not.toHaveBeenCalled();
+    expect(fwd.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("prevents the default only when it actually moved", () => {
+    const actions = mockActions();
+    vi.mocked(actions.historyBack).mockReturnValue(true);
+    const e = key("[");
+    expect(handleGlobalKey(e, stateWith(), actions, mockEnv())).toBe(true);
+    expect(e.preventDefault).toHaveBeenCalledOnce();
   });
 
   it("neither fires while typing (a '[' in the palette's query is a '[')", () => {

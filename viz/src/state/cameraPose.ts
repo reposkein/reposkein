@@ -39,10 +39,13 @@ export function getCameraPose(): CameraPose | null {
   return current;
 }
 
-/** Test/unmount hook: forget the pose. Controls calls this on teardown so a
- *  remounted scene never restores into a stale frame. */
+/** Test/unmount hook: forget the pose AND the probe. Controls calls it on
+ *  teardown so a remounted scene never restores into a stale frame; clearing the
+ *  probe too is right for the same reason — with no scene there is no view, so
+ *  every "is it on screen?" must fall back to "unknown". */
 export function resetCameraPose(): void {
   current = null;
+  onScreenProbe = null;
 }
 
 /** Structural equality, for tests and for skipping a redundant restore. */
@@ -54,4 +57,29 @@ export function samePose(a: CameraPose | null, b: CameraPose | null): boolean {
     if (a.target[i] !== b.target[i]) return false;
   }
   return true;
+}
+
+/** "Is this node comfortably in view?", as a REGISTERED capability.
+ *
+ *  The store needs this answer to decide whether selecting a node should refit
+ *  the camera (V4 §6 / fix round 1 `I3`), but the answer needs the live
+ *  perspective params that live in `scene/Controls.tsx` — and Controls imports
+ *  the store, so a direct store → scene import would be a cycle. Root already
+ *  builds exactly this closure for the global-key env, so it registers the same
+ *  one here. Mirrors the `recenterCamera` / `flyToWorld` pattern Controls
+ *  already uses for the minimap.
+ *
+ *  The frustum math itself is `scene/onScreen.ts` — pure, and tested there. */
+let onScreenProbe: ((nodeId: string) => boolean) | null = null;
+
+export function registerOnScreenProbe(probe: ((nodeId: string) => boolean) | null): void {
+  onScreenProbe = probe;
+}
+
+/** False when nothing is registered or the scene has not rendered a frame.
+ *  "Unknown" must answer false everywhere in this feature: the caller's
+ *  fallback is then to MOVE the camera, and a wasted flight is cheap next to a
+ *  selection the reader cannot find. */
+export function isNodeOnScreenNow(nodeId: string): boolean {
+  return onScreenProbe?.(nodeId) ?? false;
 }

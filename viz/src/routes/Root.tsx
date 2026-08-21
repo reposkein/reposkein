@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -13,7 +13,7 @@ import { Labels } from "../scene/Labels";
 import { Controls, getCameraView } from "../scene/Controls";
 import { HopTrail } from "../scene/HopTrail";
 import { isNodeOnScreen } from "../scene/onScreen";
-import { getCameraPose } from "../state/cameraPose";
+import { getCameraPose, registerOnScreenProbe } from "../state/cameraPose";
 import { TemporalLinks } from "../scene/TemporalLinks";
 import { fetchTemporal } from "../data/temporal";
 import { CommandPalette } from "../panels/CommandPalette";
@@ -52,6 +52,27 @@ function View() {
   const search = useSearch({ from: "/" });
   const navigate = useNavigate({ from: "/" });
 
+  /** "Is this node comfortably in view?" — the one frustum closure this app
+   *  needs, used by two callers that both refuse to move the camera for a node
+   *  the reader can already see: the neighbour hop (V4 §5) and `select` (V4 §6 /
+   *  fix round 1 `I3`). `store.model` is the only reactive input; the pose and
+   *  the perspective params are read fresh from the scene singletons at call
+   *  time, so the closure stays valid across camera moves. */
+  const model = store.model;
+  const isOnScreen = useCallback(
+    (id: string) =>
+      model ? isNodeOnScreen(model, id, getCameraPose(), getCameraView()) : false,
+    [model],
+  );
+
+  // The store's `select` wrapper cannot import `scene/` (Controls imports the
+  // store — that would be a cycle), so it reads this capability through a
+  // registered probe. See `state/cameraPose.ts`.
+  useEffect(() => {
+    registerOnScreenProbe(isOnScreen);
+    return () => registerOnScreenProbe(null);
+  }, [isOnScreen]);
+
   // Global keys. The bindings themselves live in `panels/globalKeys.ts` (a pure
   // function over a plain event shape) so they can be tested without standing
   // up a WebGL harness — and so `data/keymap.ts`, which the help overlay
@@ -62,14 +83,11 @@ function View() {
         openPalette: requestCommandPalette,
         toggleLayer,
         paletteOpen: isCommandPaletteOpen,
-        isOnScreen: (id) =>
-          store.model
-            ? isNodeOnScreen(store.model, id, getCameraPose(), getCameraView())
-            : false,
+        isOnScreen,
       });
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [store]);
+  }, [store, isOnScreen]);
 
   const [nodeNotice, setNodeNotice] = useState<string | null>(null);
 

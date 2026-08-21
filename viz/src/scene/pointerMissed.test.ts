@@ -87,11 +87,38 @@ describe("deselection is not a collapse and not a camera move", () => {
     expect(next.focusTarget).toBeNull();
   });
 
-  it("selecting a node still frames it (deselect is the only silent one)", () => {
+  it("selecting a node still frames it when it is OFF screen", () => {
     const model = clientModel(graph());
     const ready = reducer(createInitialState(), { t: "ready", model });
-    const picked = reducer(ready, { t: "select", id: SYM });
+    const picked = reducer(ready, { t: "select", id: SYM, frame: true });
     expect(picked.selected).toBe(SYM);
     expect(picked.fitNonce).toBe(ready.fitNonce + 1);
+  });
+
+  /** V4 §6 / fix round 1 `I3`. Clicking a star you can already see should not
+   *  swing the camera to centre it, for the same reason a hop to an on-screen
+   *  neighbour doesn't. */
+  it("selecting a node ALREADY on screen leaves the camera alone", () => {
+    const model = clientModel(graph());
+    const ready = reducer(createInitialState(), { t: "ready", model });
+    const picked = reducer(ready, { t: "select", id: SYM, frame: false });
+    expect(picked.selected).toBe(SYM);
+    expect(picked.fitNonce).toBe(ready.fitNonce);
+  });
+
+  it("an omitted verdict means FRAME — unknown always resolves to moving", () => {
+    const model = clientModel(graph());
+    const ready = reducer(createInitialState(), { t: "ready", model });
+    // A wasted flight is cheap next to a selection the reader cannot find.
+    expect(reducer(ready, { t: "select", id: SYM }).fitNonce).toBe(ready.fitNonce + 1);
+  });
+
+  it("deselection never frames, whatever the verdict says", () => {
+    const model = clientModel(graph());
+    const ready = reducer(createInitialState(), { t: "ready", model });
+    const sel = reducer(ready, { t: "select", id: SYM, frame: true });
+    for (const frame of [true, false, undefined]) {
+      expect(reducer(sel, { t: "select", id: null, frame }).fitNonce).toBe(sel.fitNonce);
+    }
   });
 });

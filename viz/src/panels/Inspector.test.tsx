@@ -490,7 +490,6 @@ describe("Inspector + Root's global keys mounted together (the seam)", () => {
     expect(rows()[1]!.getAttribute("tabindex")).toBe("0");
     // THE ASSERTION THAT WAS MISSING: no selection change.
     expect(actions.hop).not.toHaveBeenCalled();
-    expect(actions.hop).not.toHaveBeenCalled();
     expect(actions.revealAndSelect).not.toHaveBeenCalled();
     teardown();
   });

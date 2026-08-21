@@ -14,6 +14,7 @@
 import type { Actions, State } from "./store";
 import { LENS_ORDER, LENS_PRESETS } from "../data/lens";
 import { canStepBack, canStepForward } from "./viewHistory";
+import { encodeViewSearch } from "../data/urlState";
 import type { LayerId } from "../panels/layerState";
 
 export interface PaletteEnv {
@@ -223,9 +224,15 @@ export function buildCommandRegistry(): CommandItem[] {
       id: "copy-link",
       label: "Copy link to this view",
       subtitle: "The node, the lens and every active overlay (?node&lens&overlays)",
-      disabledReason: NEEDS_SELECTION,
+      // Enabled for ANY non-default view, not just a selection: since V4 §7 the
+      // link carries the lens and the overlays too, so "impact on, tests lens,
+      // nothing selected" is a perfectly shareable view. Asking
+      // `encodeViewSearch` keeps this in step with whatever the encoding
+      // actually writes — the alternative is a second list of "things worth
+      // sharing" that drifts the moment a param is added.
+      disabledReason: "Nothing to share yet — select a node, pick a lens, or turn on an overlay",
       group: "commands",
-      disabled: (s) => !s.selected,
+      disabled: (s) => Object.keys(encodeViewSearch(s)).length === 0,
       run: (_actions, _state, env) => env.copyLink(),
     },
     {
