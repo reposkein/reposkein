@@ -19,6 +19,7 @@ function mockActions(): Actions & Record<keyof Actions, ReturnType<typeof vi.fn>
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
     historyBack: vi.fn(() => false),
     historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),

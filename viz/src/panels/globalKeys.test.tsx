@@ -45,6 +45,7 @@ function mockActions(): Actions {
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
     historyBack: vi.fn(() => false),
     historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
@@ -73,7 +74,14 @@ function mockActions(): Actions {
 }
 
 function mockEnv(): GlobalKeyEnv & Record<keyof GlobalKeyEnv, ReturnType<typeof vi.fn>> {
-  return { openPalette: vi.fn(), toggleLayer: vi.fn(), paletteOpen: vi.fn(() => false) };
+  return {
+    openPalette: vi.fn(),
+    toggleLayer: vi.fn(),
+    paletteOpen: vi.fn(() => false),
+    // Default OFF-screen, so a hop flies unless a test says otherwise — the
+    // same "unknown means fly" default the real env uses.
+    isOnScreen: vi.fn(() => false),
+  };
 }
 
 const SEL = "rs1:r:sym:a.ts#run@0";
@@ -271,10 +279,55 @@ describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
         actions,
         mockEnv(),
       );
-      expect(actions.revealAndSelect).toHaveBeenCalledWith("rs1:r:sym:a.ts#other@0", {
-        fly: true,
-      });
+      // The target, the hop memory to carry into the next press, and the fly
+      // decision — which mockEnv's isOnScreen() answers "off screen" → true.
+      expect(actions.hop).toHaveBeenCalledWith(
+        "rs1:r:sym:a.ts#other@0",
+        expect.objectContaining({ from: SEL, to: "rs1:r:sym:a.ts#other@0" }),
+        true,
+      );
+      // The V3 path is gone: a hop is no longer an ordinary reveal.
+      expect(actions.revealAndSelect).not.toHaveBeenCalled();
     }
+  });
+
+  /** FLY ONLY IF OFF SCREEN (V4 §5). V3 flew on every hop, which yanked the
+   *  view around a cluster the reader could already see whole. */
+  it("does NOT fly when the target is already on screen", () => {
+    const actions = mockActions();
+    const env = { ...mockEnv(), isOnScreen: vi.fn(() => true) };
+    handleGlobalKey(
+      key("ArrowRight"),
+      stateWith({ model: tinyModel(), selected: SEL }),
+      actions,
+      env,
+    );
+    expect(env.isOnScreen).toHaveBeenCalledWith("rs1:r:sym:a.ts#other@0");
+    expect(actions.hop).toHaveBeenCalledWith(
+      "rs1:r:sym:a.ts#other@0",
+      expect.anything(),
+      false,
+    );
+  });
+
+  it("threads the anchor memory: ArrowRight then ArrowLeft returns to the anchor", () => {
+    const model = tinyModel();
+    const OTHER = "rs1:r:sym:a.ts#other@0";
+
+    const out = mockActions();
+    handleGlobalKey(key("ArrowRight"), stateWith({ model, selected: SEL }), out, mockEnv());
+    const memory = vi.mocked(out.hop).mock.calls[0]![1];
+    expect(memory).toEqual({ from: SEL, to: OTHER, dir: "next" });
+
+    // Now at OTHER, carrying that memory: the opposite arrow goes home.
+    const back = mockActions();
+    handleGlobalKey(
+      key("ArrowLeft"),
+      stateWith({ model, selected: OTHER, lastHop: memory }),
+      back,
+      mockEnv(),
+    );
+    expect(back.hop).toHaveBeenCalledWith(SEL, expect.anything(), true);
   });
 
   it("hopping needs both a model and a selection", () => {
@@ -286,7 +339,7 @@ describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
       actions,
       mockEnv(),
     );
-    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+    expect(actions.hop).not.toHaveBeenCalled();
   });
 
   it("an unbound key is not consumed", () => {

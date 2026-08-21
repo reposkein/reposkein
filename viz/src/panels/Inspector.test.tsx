@@ -48,6 +48,7 @@ function mockActions(): Actions {
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
     historyBack: vi.fn(() => false),
     historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
@@ -460,7 +461,12 @@ describe("Inspector + Root's global keys mounted together (the seam)", () => {
   /** Exactly what Root's effect installs. */
   function mountGlobalKeys(
     store: Store,
-    env = { openPalette: vi.fn(), toggleLayer: vi.fn(), paletteOpen: () => false },
+    env = {
+      openPalette: vi.fn(),
+      toggleLayer: vi.fn(),
+      paletteOpen: () => false,
+      isOnScreen: () => false,
+    },
   ) {
     const onKey = (e: KeyboardEvent) => handleGlobalKey(e, store, store, env);
     window.addEventListener("keydown", onKey);
@@ -483,6 +489,8 @@ describe("Inspector + Root's global keys mounted together (the seam)", () => {
     expect(document.activeElement).toBe(rows()[1]);
     expect(rows()[1]!.getAttribute("tabindex")).toBe("0");
     // THE ASSERTION THAT WAS MISSING: no selection change.
+    expect(actions.hop).not.toHaveBeenCalled();
+    expect(actions.hop).not.toHaveBeenCalled();
     expect(actions.revealAndSelect).not.toHaveBeenCalled();
     teardown();
   });
@@ -498,6 +506,7 @@ describe("Inspector + Root's global keys mounted together (the seam)", () => {
     for (const key of ["End", "Home", "ArrowDown", "ArrowUp"]) {
       fireEvent.keyDown(document.activeElement!, { key, bubbles: true });
     }
+    expect(actions.hop).not.toHaveBeenCalled();
     expect(actions.revealAndSelect).not.toHaveBeenCalled();
     teardown();
   });
@@ -513,11 +522,12 @@ describe("Inspector + Root's global keys mounted together (the seam)", () => {
 
     screen.getAllByTestId("inspector-edge-row")[0]!.focus();
     fireEvent.keyDown(document.activeElement!, { key: "Tab", bubbles: true });
-    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+    expect(actions.hop).not.toHaveBeenCalled();
 
     // The sort buttons live inside the same scope, so Tab there is safe too.
     screen.getByTestId("inspector-sort-neighbor").focus();
     fireEvent.keyDown(document.activeElement!, { key: "Tab", bubbles: true });
+    expect(actions.hop).not.toHaveBeenCalled();
     expect(actions.revealAndSelect).not.toHaveBeenCalled();
     teardown();
   });
@@ -532,7 +542,8 @@ describe("Inspector + Root's global keys mounted together (the seam)", () => {
     screen.getByTestId("inspector-impact").focus();
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown", bubbles: true });
 
-    expect(actions.revealAndSelect).toHaveBeenCalledOnce();
+    // V4 §5: a hop is `actions.hop`, not an ordinary reveal.
+    expect(actions.hop).toHaveBeenCalledOnce();
     teardown();
   });
 

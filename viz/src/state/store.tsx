@@ -39,6 +39,7 @@ import {
   type Channel,
 } from "./channel";
 import { getCameraPose, type CameraPose } from "./cameraPose";
+import type { HopMemory } from "../data/navigate";
 import {
   pushView,
   resetViewHistory,
@@ -87,6 +88,15 @@ export interface State {
    *  the frame the reader was looking at, it does NOT re-fit. */
   poseTarget: CameraPose | null;
   poseNonce: number;
+  /** ANCHOR-AWARE HOP (V4 §5). How the last arrow/Tab hop got here, so the
+   *  opposite arrow returns to the anchor instead of walking the new node's own
+   *  ring. Self-invalidating rather than cleared by every other action:
+   *  `nextHop` only honours a memory whose `to` IS the current selection, so a
+   *  selection moved by any other means silently retires it. */
+  lastHop: HopMemory | null;
+  /** Bumped on every hop, so the in-scene trail line can retrigger even when
+   *  the same pair is hopped twice. The trail reads `lastHop` for endpoints. */
+  hopNonce: number;
   /** Active lens id (one-click filter preset). "all" = default. A manual
    *  filter edit drops the lens back to "all" so the chip never lies. */
   lens: LensId;
@@ -144,6 +154,7 @@ export type Action =
   | { t: "requestFit" }
   | { t: "revealAndSelect"; id: string; fly?: boolean; collapseDeeper?: boolean }
   | { t: "revealWithoutRefit"; keys: string[] }
+  | { t: "hop"; id: string; memory: HopMemory; fly: boolean }
   | { t: "restoreView"; snapshot: ViewSnapshot }
   | { t: "setKindFilter"; kind: string; hidden: boolean }
   | { t: "setEdgeTypeFilter"; type: string; hidden: boolean }
@@ -411,6 +422,36 @@ export function reducer(state: State, a: Action): State {
       if (!changed) return state;
       return { ...state, expanded };
     }
+    /** One arrow/Tab hop (V4 §5). Like `revealAndSelect` — reveal the target's
+     *  chain and select it in ONE transition — plus the two things that make a
+     *  hop a hop:
+     *
+     *   - `memory`, so the opposite arrow returns to the anchor;
+     *   - `fly`, decided by the CALLER from a frustum check, not by the reducer.
+     *     A neighbour already on screen must not move the camera: V3 flew on
+     *     every hop, which yanked the view around a cluster the reader could
+     *     already see whole. `fly:false` therefore bumps neither fitNonce nor
+     *     focusTarget — the selection simply changes where the reader is
+     *     looking.
+     *
+     *  `hopNonce` always bumps, so the trail line draws even for a hop that
+     *  moves no camera and even when the same pair is hopped twice. */
+    case "hop": {
+      if (!state.model) return state;
+      const expanded = expandToReveal(state.model, state.expanded, [a.id]);
+      const sameSelection = a.id === state.selected;
+      return {
+        ...state,
+        expanded,
+        selected: a.id,
+        focusTarget: a.fly ? a.id : null,
+        fitNonce: a.fly ? state.fitNonce + 1 : state.fitNonce,
+        impact: sameSelection ? state.impact : null,
+        focus: sameSelection ? state.focus : null,
+        lastHop: a.memory,
+        hopNonce: state.hopNonce + 1,
+      };
+    }
     /** `[` / `]` — restore a remembered view WHOLE (V4 §4): selection,
      *  expansion and camera pose in ONE transition, so no intermediate frame
      *  exists where the expansion is back but the camera isn't.
@@ -609,6 +650,9 @@ export interface Actions {
   revealAndSelect(id: string, opts?: { fly?: boolean; collapseDeeper?: boolean }): void;
   /** Open explicit cluster keys without touching selection or the camera. */
   revealWithoutRefit(keys: string[]): void;
+  /** One neighbour hop: reveal + select `id`, remember how we got there, and
+   *  fly ONLY when the caller determined the target is off screen. */
+  hop(id: string, memory: HopMemory, fly: boolean): void;
   /** `[` — restore the previous view (selection + expansion + exact camera
    *  pose). No-op with an empty history; returns whether it moved. */
   historyBack(): boolean;
@@ -670,6 +714,8 @@ export function createInitialState(): State {
     focusTarget: null,
     poseTarget: null,
     poseNonce: 0,
+    lastHop: null,
+    hopNonce: 0,
     lens: "all",
     emphasis: "none",
     audit: "off",
@@ -812,6 +858,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         });
       },
       revealWithoutRefit: (keys) => dispatch({ t: "revealWithoutRefit", keys }),
+      hop: (id, memory, fly) => {
+        record();
+        dispatch({ t: "hop", id, memory, fly });
+      },
       historyBack: () => {
         const previous = stepBack(snapshot());
         if (!previous) return false;

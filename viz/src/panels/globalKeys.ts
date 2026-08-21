@@ -17,7 +17,7 @@
  *  can't be implemented-but-undocumented or documented-but-dead. */
 
 import type { Actions, State } from "../state/store";
-import { pickNeighbor } from "../data/navigate";
+import { nextHop, type HopDir } from "../data/navigate";
 import type { LayerId } from "./layerState";
 
 export interface GlobalKeyEnv {
@@ -36,6 +36,15 @@ export interface GlobalKeyEnv {
    *  silently rearranged the scene). Asking the singleton is what makes "the
    *  palette wins" true rather than aspirational. */
   paletteOpen(): boolean;
+  /** Is this node comfortably inside the current view (`scene/onScreen.ts`)?
+   *
+   *  A hop flies only when the answer is NO. It is an env function rather than
+   *  a pure computation over `State` because the answer depends on the live
+   *  camera — the pose and the perspective params — which lives inside <Canvas>
+   *  and is not reducer state. "Unknown" (no frame rendered yet) must answer
+   *  FALSE, so an unknown hop still flies: a wasted animation is cheap, a
+   *  selection the reader cannot see is not. */
+  isOnScreen(nodeId: string): boolean;
 }
 
 /** Spread onto any widget that binds Arrow / Home / End / Tab FOR ITSELF, to
@@ -180,14 +189,17 @@ export function handleGlobalKey(
   // …and must never fight a widget that binds these keys itself. See
   // `keyScopeProps` for the double-fire this prevents.
   if (inKeyScope(e)) return false;
-  let dir: "next" | "prev" | null = null;
+  let dir: HopDir | null = null;
   if (e.key === "ArrowRight" || e.key === "ArrowDown") dir = "next";
   else if (e.key === "ArrowLeft" || e.key === "ArrowUp") dir = "prev";
   else if (e.key === "Tab") dir = e.shiftKey ? "prev" : "next";
   if (!dir) return false;
   e.preventDefault();
-  const next = pickNeighbor(model.drawEdges, state.selected, dir);
-  if (!next) return true; // consumed: we handled the hop, there was nowhere to go
-  actions.revealAndSelect(next, { fly: true });
+  const hop = nextHop(model, state.selected, dir, state.lastHop);
+  if (!hop) return true; // consumed: we handled the hop, there was nowhere to go
+  // FLY ONLY IF OFF SCREEN (V4 §5). A neighbour already in front of the reader
+  // needs no camera move; V3 flew unconditionally, which yanked the view around
+  // a cluster that was already whole on screen.
+  actions.hop(hop.id, hop.memory, !env.isOnScreen(hop.id));
   return true;
 }

@@ -67,6 +67,7 @@ function mockActions(): Actions {
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
     historyBack: vi.fn(() => false),
     historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
@@ -544,6 +545,7 @@ describe("Esc stack: palette > tour > layer > chip", () => {
         openPalette: vi.fn(),
         toggleLayer: vi.fn(),
         paletteOpen: isCommandPaletteOpen,
+        isOnScreen: () => true,
       });
     window.addEventListener("keydown", onKey);
     render(

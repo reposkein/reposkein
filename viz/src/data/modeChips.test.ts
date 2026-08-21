@@ -20,6 +20,7 @@ function mockActions(): Actions {
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
     historyBack: vi.fn(() => false),
     historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),

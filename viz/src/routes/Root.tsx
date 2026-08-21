@@ -11,6 +11,10 @@ import { EdgeLines } from "../scene/EdgeLines";
 import { FlowParticles } from "../scene/FlowParticles";
 import { Labels } from "../scene/Labels";
 import { Controls } from "../scene/Controls";
+import { getCameraView } from "../scene/Controls";
+import { HopTrail } from "../scene/HopTrail";
+import { isNodeOnScreen } from "../scene/onScreen";
+import { getCameraPose } from "../state/cameraPose";
 import { TemporalLinks } from "../scene/TemporalLinks";
 import { fetchTemporal } from "../data/temporal";
 import { CommandPalette } from "../panels/CommandPalette";
@@ -54,6 +58,10 @@ function View() {
         openPalette: requestCommandPalette,
         toggleLayer,
         paletteOpen: isCommandPaletteOpen,
+        isOnScreen: (id) =>
+          store.model
+            ? isNodeOnScreen(store.model, id, getCameraPose(), getCameraView())
+            : false,
       });
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -115,6 +123,7 @@ function View() {
             <EdgeLines />
             <FlowParticles />
             <TemporalLinks />
+            <HopTrail />
             {store.showLabels && <Labels />}
           </>
         )}
