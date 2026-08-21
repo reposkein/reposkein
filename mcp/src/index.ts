@@ -6,6 +6,7 @@ import { runDoctor, resolveDoctorRepoPath } from "./cli/doctor.js";
 import { runAdr } from "./cli/adr.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
 import { runStats } from "./cli/stats.js";
+import { runSupport } from "./cli/support.js";
 import { runServe, parseServeArgs } from "./serve/serve.js";
 import { realpathSync } from "node:fs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -39,6 +40,7 @@ Usage:
   reposkein-mcp doctor [path]   health check (indexer binary, index, repo id, hooks, graph freshness); --json for machine output, --ci additionally fails on stale graph / missing hooks / unsplit legacy summaries
   reposkein-mcp adr <sub> ...   decision-log utilities
   reposkein-mcp stats [path]    session usage report (calls, tokens saved vs grep)
+  reposkein-mcp support <token> install a supporter token (verified locally, stored at ~/.config/reposkein/supporter.jwt, mode 600); pass \`-\` to read it from stdin instead of argv (keeps it out of shell history and \`ps\`); --status to show tier/expiry, --remove to delete it. Offline: no network call, ever
   reposkein-mcp view [path]     open the constellation viewer (--export <dir> for a static site)
   reposkein-mcp serve --http    ADVANCED, OPTIONAL: shared remote server — MCP over Streamable HTTP + the viewer/API in one process, bearer-token auth, read-only by default (see docs/REMOTE.md)
   reposkein-mcp --help          show this help
@@ -119,6 +121,10 @@ if (invokedAsBin()) {
       .catch((err) => { console.error(err); process.exit(1); });
   } else if (sub === "stats") {
     process.exit(runStats(process.argv.slice(3), process.cwd(), process.env.REPOSKEIN_REPO_PATH));
+  } else if (sub === "support") {
+    // No repo resolution: entitlement is a property of the user, not of a
+    // checkout, so this subcommand works anywhere — including outside a repo.
+    process.exit(runSupport(process.argv.slice(3)));
   } else if (sub === "adr") {
     const rest = process.argv.slice(3);
     const adrSub = rest[0];

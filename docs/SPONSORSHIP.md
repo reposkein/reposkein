@@ -67,10 +67,11 @@ Evaluated in this order on every eligible tool call, in
 3. **Credentials** — both `LULU_ADS_PUBLISHER_ID` and `LULU_ADS_API_KEY`,
    **environment only** (never config.toml, never argv, never logged). Absent
    either: inert, no request attempted.
-4. **Supporter** — a verified supporter never sees a slot. Currently a stub
-   (`mcp/src/ads/supporter.ts`) that reports "not a supporter" for everyone;
-   REP-29 (Ko-fi verification) fills it in, and the gate is wired now so the
-   feature cannot ship without it.
+4. **Supporter** — a verified supporter never sees a slot. The check is a
+   local Ed25519 signature verification over
+   `~/.config/reposkein/supporter.jwt` (`mcp/src/ads/supporter.ts`), makes no
+   network call of any kind, and runs *before* any slot is requested. See
+   [Supporting RepoSkein](#supporting-reposkein).
 
 | `[ads] enabled` | `REPOSKEIN_ADS` | Credentials | Result |
 |---|---|---|---|
@@ -80,6 +81,7 @@ Evaluated in this order on every eligible tool call, in
 | absent/false | `on` | missing | no slot (`no_credentials`) |
 | absent/false | `on` | present | slot requested |
 | `true` | `on` | present | slot requested |
+| any | `on` | present | **no slot** — a valid supporter token outranks all of the above (`supporter`) |
 
 Plus two placement gates that are code, not configuration:
 
@@ -105,6 +107,170 @@ gating chain is evaluated per connection but reads the **operator's** process
 environment, so opting that process in opts in every client it serves —
 including read-only ones. Run it opted out unless every consumer of that
 endpoint has agreed.
+
+## Supporting RepoSkein
+
+**Status: the verifier is built and shipped; the tier is not yet purchasable.**
+Everything in this section works today except the one step that takes money —
+creating the Ko-fi *Skein* membership tier is REP-27, and until that lands
+there is nothing to buy and therefore no token to be issued. `reposkein-mcp
+support --status` already answers correctly ("none installed"), and a token
+issued the day the tier opens will verify against the version of RepoSkein
+you have installed right now.
+
+### What the token is
+
+A supporter token is ~200 bytes of signed text:
+
+```
+rsk1.<base64url payload>.<base64url Ed25519 signature>
+```
+
+The payload is exactly this and nothing else:
+
+```json
+{"v":1,"kid":"skein-2026-08","sub":"<opaque>","tier":"skein","iat":…,"exp":…}
+```
+
+Install it once:
+
+```bash
+reposkein-mcp support rsk1.eyJ2IjoxLCJra…
+# Supporter token installed. /home/you/.config/reposkein/supporter.jwt (mode 600)
+# Supporter: active — tier skein
+#   expires 2026-09-20 (30 days from now)
+```
+
+Or pipe it in, so it never appears in argv:
+
+```bash
+pbpaste | reposkein-mcp support -          # macOS
+reposkein-mcp support - < token.txt        # anywhere
+```
+
+A token passed as an argument lands in `~/.bash_history`, and while the
+process runs it is visible in `ps` and `/proc/<pid>/cmdline` to every other
+user on the machine. `-` reads it from stdin instead and avoids both. The
+token is not worth much — the worst outcome of a leak is somebody else seeing
+no ads — but that is a poor reason not to offer the private option.
+
+It is stored **per user, never per repo**: `~/.config/reposkein/supporter.jwt`
+(or `$XDG_CONFIG_HOME/reposkein/`), mode `600`, directory `700`. Nothing about
+entitlement is ever written inside a repository, so it cannot ride into git,
+cannot be shared with everyone who clones, and does not have to be
+re-installed in every working copy. A test byte-compares a repo tree across
+an install to keep it that way.
+
+### Verification is offline, permanently
+
+The public half of the signing key is compiled into the published package
+(`mcp/src/ads/supporterKey.ts`, with its provenance). Verifying your
+entitlement is a signature check against that constant plus a clock
+comparison. There is:
+
+- **no licence server** — nothing to call, so nothing to be down;
+- **no activation, no heartbeat, no usage report** — we cannot learn that you
+  installed a token, let alone that you ran a tool;
+- **no revocation list**, deliberately. A revocation check is a phone-home by
+  another name, and the thing being protected is *the absence of an ad* — the
+  least valuable secret in the system. Someone who steals a token gains what
+  they could equally have had by typing `REPOSKEIN_ADS=off`. Expiry plus
+  re-issue is the whole enforcement model, and that is proportionate.
+
+This is not a promise you have to take on trust. The import graph reachable
+from `mcp/src/ads/supporter.ts` is four files — `supporter.ts`,
+`supporterToken.ts`, `supporterStore.ts`, `supporterKey.ts` — importing only
+`node:crypto`, `node:fs`, `node:os` and `node:path`. A test walks that graph
+and fails if a fifth module, a networking builtin, or a literal `fetch(`
+appears anywhere in it.
+
+### No tracking: the `sub` field is opaque
+
+`sub` is an HMAC-SHA256 of your Ko-fi email under a salt held only by the
+fulfilment worker, truncated to 32 base64url characters. It is not reversible
+to an email — not by us reading it back, and not by anyone who obtains your
+token. It exists for exactly one purpose: recognising a renewal as the same
+subscription as the original. There is no account, no device id, no install
+id, and no counter.
+
+Nothing in RepoSkein transmits `sub` anywhere. The only thing that reads it is
+`support --status`, which prints the first eight characters so you can tell
+two tokens apart.
+
+Because the public key is published, you can decode your own token's payload
+with any base64 tool and confirm all of the above. That is intended: there is
+nothing hidden in it, because there is nothing about you in it.
+
+### Expiry and the grace period
+
+A token issued for a monthly membership lasts 35 days, and RepoSkein honours
+it for a further **3 days** past `exp`. The grace window is about renewal
+timing, not generosity: Ko-fi bills on its own schedule and the replacement
+token is minted only when that payment lands, so without it a supporter whose
+renewal posted a few hours late would watch a paid-for feature switch itself
+off. Three days covers a weekend plus a payment retry.
+
+```bash
+reposkein-mcp support --status
+# Supporter: in grace period — tier skein
+#   expired 2026-09-20; still honoured for 2 more days
+```
+
+`--status` exits `0` while entitled (valid or grace) and `1` otherwise, so it
+can be branched on in a script. `--json` prints `state`, `expiresAt`,
+`graceEndsAt` and `entitled`.
+
+### Removing it
+
+```bash
+reposkein-mcp support --remove
+# Removed supporter token (/home/you/.config/reposkein/supporter.jwt).
+```
+
+That is a plain file delete; `rm ~/.config/reposkein/supporter.jwt` does the
+same thing. Nothing is left behind, nothing is reported anywhere, and the
+install returns to its default state — which, note, is still ad-free unless
+someone has separately opted in with `REPOSKEIN_ADS=on` *and* supplied
+credentials.
+
+### Where tokens come from
+
+`workers/kofi-fulfillment/` — a small, optional Cloudflare Worker that
+verifies the Ko-fi webhook, mints a token on a *Skein* membership payment, and
+parks it behind a one-time claim link. It is **our infrastructure and nothing
+depends on it**: a token already issued keeps working whether or not that
+worker is running, because verification never contacts it.
+
+Being honest about the delivery path: Ko-fi's webhook is fire-and-forget and
+Ko-fi has no API for messaging a supporter, so a webhook *cannot* hand you
+anything directly. The worker announces a one-time claim **code** — never a
+link, because Discord and Slack fetch posted links to build previews, which
+would spend one of the claim's reads and hand the token to the platform's
+crawler. The maintainer assembles the link and sends it via Ko-fi's own
+supporter DM. A human is in that loop, on purpose — the self-service
+alternative (look up a token by email address) is an oracle that leaks who
+supports the project. See the worker's
+[README](../workers/kofi-fulfillment/README.md).
+
+### Known limits, stated rather than hidden
+
+- **Up to 5 seconds** can pass before an installed, renewed, or deleted token
+  takes effect in a running server, because the entitlement file is re-probed
+  at most that often. Deliberate: the alternative is a `statSync` on every
+  tool call, and this gate's only job is suppressing an ad.
+- **A filesystem with coarse timestamps** (some network mounts, or an
+  `mtime` granularity of a second) can delay that further if a replacement
+  token is byte-identical in length to the one it replaces. `support` is not
+  affected — it never uses the cache — so `--status` always tells the truth.
+- **A badly wrong system clock** produces confusing answers: a clock far in
+  the past makes a valid token look `not_yet_valid`, and one far in the future
+  makes it look expired. `--status` names the reason ("check this machine's
+  clock") but cannot distinguish a wrong clock from a genuinely stale token,
+  because offline verification has nothing else to ask.
+- **`--remove` deletes whatever the configured path points at.** With the
+  default path that is the entitlement file and nothing else; if you have
+  pointed `REPOSKEIN_SUPPORTER_FILE` somewhere unusual, it will remove that
+  instead.
 
 ## Exactly what leaves the machine
 
@@ -244,6 +410,18 @@ On the **response envelope only**, copy-on-write:
 | The `sponsored` label cannot be renamed, blanked, or dropped | `mcp/test/adsSanitize.test.ts` |
 | Sponsored data never lands in `.reposkein/` (tree byte-compared, ads on vs off; the local audit counter is the one permitted difference and carries no sponsor bytes) | `mcp/test/adsSlot.test.ts` |
 | `semantic_find`, mutating tools and error paths never carry a slot | `mcp/test/adsGating.test.ts`, `mcp/test/adsSlot.test.ts`, `mcp/test/adsWiring.test.ts` |
+| A forged, tampered, foreign-signed or re-labelled supporter token never entitles | `mcp/test/supporterToken.test.ts` |
+| Expiry is honoured through the 3-day grace window and not one millisecond past it | `mcp/test/supporterToken.test.ts` |
+| Entitlement verification imports nothing that can open a connection (import graph walked, `fetch(` grepped) | `mcp/test/supporterEntitlement.test.ts` |
+| The import-graph walker itself catches side-effect imports, re-exports, dynamic imports and `require` — proven against synthetic modules, so a clean result is not a vacuous one | `mcp/test/supporterEntitlement.test.ts` |
+| Non-canonical encodings (padding, `+`/`/`, trailing-bit slack, embedded whitespace) are refused, not repaired | `mcp/test/supporterToken.test.ts` |
+| `__proto__` / inherited-property `kid`s cannot nominate a trust root, and a payload key cannot pollute `Object.prototype` | `mcp/test/supporterToken.test.ts` |
+| The worker's `SUPPORTER_KID` names a key the package trusts, and its token lifetime fits the verifier's cap — "money taken, token rejected" is un-shippable | `mcp/test/supporterKeyProvenance.test.ts` |
+| The maintainer notification carries a claim code and no fetchable URL, so a link-preview bot cannot spend a read or read the token | `mcp/test/kofiWorker.test.ts` |
+| A valid token means **zero** slot requests and zero audit lines on a fully enabled install | `mcp/test/supporterEntitlement.test.ts` |
+| The token is stored mode `600` in a `700` directory, and nothing is written inside a repo | `mcp/test/supportCli.test.ts`, `mcp/test/supporterEntitlement.test.ts` |
+| No shipped code trusts the committed *test* keypair | `mcp/test/supporterKeyProvenance.test.ts` |
+| The worker mints only for `Skein` subscription payments, 401s a bad webhook token, and 200-ignores everything else | `mcp/test/kofiWorker.test.ts` |
 
 ## The `lulu-ads` dependency
 
@@ -291,6 +469,11 @@ record first (`set_decision_status`), then:
 
 - [`HOSTING.md` — Sponsorship & support](HOSTING.md#sponsorship--support) — the
   placement policy summary and the static-export invariant.
-- REP-29 — supporter verification, which fills in
-  `mcp/src/ads/supporter.ts`.
+- [Supporting RepoSkein](#supporting-reposkein) — the supporter token, its
+  offline verification, and how to remove it.
+- [`workers/kofi-fulfillment/README.md`](../workers/kofi-fulfillment/README.md)
+  — the optional fulfilment worker that mints tokens, and an honest account of
+  what Ko-fi's webhook can and cannot deliver.
+- REP-27 — creating the purchasable Ko-fi *Skein* tier. Until it lands the
+  supporter path is complete but unreachable: there is nothing to buy.
 - [Ko-fi](https://ko-fi.com/mongx) — the support path that exists today.

@@ -63,7 +63,11 @@ export interface AdsHook {
 export function createAdsHook(opts: AdsHookOptions): AdsHook {
   const env = opts.env ?? process.env;
   const timeoutMs = opts.timeoutMs ?? SLOT_TIMEOUT_MS;
-  const isSupporter = opts.isSupporter ?? defaultIsSupporter;
+  // Bound to THIS hook's env so an injected environment reaches the
+  // entitlement-file lookup too (`REPOSKEIN_SUPPORTER_FILE`), rather than the
+  // supporter check silently reading the real `process.env` while everything
+  // else in the chain reads the injected one.
+  const isSupporter = opts.isSupporter ?? (() => defaultIsSupporter(env));
   const audit = opts.audit ?? appendAdsRequest;
   const schedule = opts.schedule ?? setImmediate;
 

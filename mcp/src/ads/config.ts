@@ -57,7 +57,11 @@ export interface ResolveAdsOptions {
    *  Undefined (no repo resolved) simply means that opt-in source is absent. */
   repoPath?: string | undefined;
   env?: NodeJS.ProcessEnv;
-  /** REP-29 fills this in. Default: nobody is a supporter yet. */
+  /** Supplied by `createAdsHook`, which binds `ads/supporter.ts`'s
+   *  `isSupporter` to its own env. Defaulted to "nobody" here rather than
+   *  imported, so `resolveAdsVerdict` stays a pure function of its arguments
+   *  and a gating test never depends on what is in the developer's home
+   *  directory. */
   isSupporter?: () => boolean;
   /** Test seam for the config.toml read, and the connection-lifetime memo in
    *  `slot.ts` (one filesystem read per repo, not one per tool call). */
@@ -80,7 +84,12 @@ export interface ResolveAdsOptions {
  *   3. Credentials — `LULU_ADS_PUBLISHER_ID` + `LULU_ADS_API_KEY`, env only,
  *      never config, never argv, never logged. Absent either, the integration
  *      is inert: no network call is even attempted.
- *   4. Supporter — a verified supporter never sees a slot (REP-29).
+ *   4. Supporter — a verified supporter never sees a slot (REP-29). The check
+ *      is a local Ed25519 signature verification over
+ *      `~/.config/reposkein/supporter.jwt`; it makes no network call, so
+ *      consulting it here cannot itself be the thing that phones home.
+ *      It runs BEFORE any slot is requested, which is the whole point: a
+ *      supporter's machine must not even ask.
  *
  *  Nothing in this function touches the network; it is the only thing that
  *  decides whether anything ever will. */

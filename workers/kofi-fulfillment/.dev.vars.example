@@ -1,0 +1,29 @@
+# Local secrets for `wrangler dev`. Copy to `.dev.vars` and fill in.
+#
+# `.dev.vars` is gitignored at the repository root. The signing key in
+# particular must never reach git — it is the one value that can mint
+# entitlement tokens for every RepoSkein install in the world.
+
+# Ko-fi → Settings → API → "Verification token".
+KOFI_WEBHOOK_TOKEN="paste-kofi-verification-token"
+
+# Base64 PKCS#8 Ed25519 private key. Its public half is committed at
+# mcp/src/ads/supporterKey.ts. Generate a fresh pair with:
+#
+#   node -e 'const{generateKeyPairSync}=require("crypto");const{publicKey,privateKey}=generateKeyPairSync("ed25519");console.log(publicKey.export({type:"spki",format:"pem"}).toString());console.log(privateKey.export({type:"pkcs8",format:"der"}).toString("base64"))'
+#
+# ...then commit the printed PEM into SUPPORTER_PUBLIC_KEYS under a NEW kid.
+SUPPORTER_SIGNING_KEY="paste-base64-pkcs8-ed25519-private-key"
+
+# Salts the HMAC that turns a Ko-fi email into the token's opaque `sub`.
+# Any random 32+ byte string; `openssl rand -base64 32` is fine. Changing it
+# makes previously-issued tokens unrecognisable as the same subscriber (they
+# keep working — `sub` is not checked by the client — but renewal matching is
+# lost), so pick one and keep it.
+SUBJECT_SALT="paste-random-salt"
+
+# Optional. A Discord or Slack incoming webhook that receives the claim CODE
+# (never a link — preview bots fetch links, which would spend one of the
+# supporter's reads and show the token to the crawler) so it can be sent to the
+# supporter via Ko-fi's supporter DM.
+NOTIFY_WEBHOOK_URL=""

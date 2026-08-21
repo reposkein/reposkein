@@ -189,8 +189,13 @@ describe("ads gating chain — supporter and base URL", () => {
     expect(verdict).toEqual({ enabled: false, reason: "supporter" });
   });
 
-  it("the REP-29 stub reports non-supporter until it is implemented", () => {
-    expect(isSupporter()).toBe(false);
+  it("reports non-supporter when there is no entitlement file (REP-29)", () => {
+    // Pointed at a path that certainly holds no token, so the assertion is
+    // about the code rather than about whatever is in the developer's home
+    // directory. The token format, grace window, and forgery rejection are
+    // covered in supporterToken/supporterEntitlement.
+    const empty = mkdtempSync(join(tmpdir(), "reposkein-no-entitlement-"));
+    expect(isSupporter({ REPOSKEIN_SUPPORTER_FILE: join(empty, "supporter.jwt") })).toBe(false);
   });
 
   it("derives the click-host allowlist from the base URL actually in use", () => {
