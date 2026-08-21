@@ -1,5 +1,7 @@
 # Policy: bulk re-summarization sweeps run serialized on `main`
 
+For humans and agents.
+
 Status: active.
 Written: 2026-08-20.
 Applies to: any repository committing `.reposkein/summaries/`.

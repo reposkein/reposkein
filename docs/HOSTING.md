@@ -1,5 +1,7 @@
 # Host your constellation
 
+For humans.
+
 RepoSkein's viewer can export a **self-contained static site** — the graph
 is baked into `graph-data.js`, so the exported folder needs no server, no
 Neo4j, and no network access. That makes it easy to publish a durable,

@@ -1,5 +1,7 @@
 # RepoSkein — Agent Install Guide
 
+Agent-executable — also readable by humans.
+
 > **For agents:** the user pasted this document because they want you to install [RepoSkein](https://github.com/reposkein/reposkein) in their repo (or a workspace containing several repos). RepoSkein is a deterministic code-graph MCP server. **Read this whole document first.** Then ask the user the question-tree in §1, then execute §2–§7 in order. The minimal happy path is `npx @reposkein/mcp init` per git repo — everything else is optional.
 >
 > **For humans:** prefer the [README](../README.md) for usage. This file is for handing off to an agent ("here, install it for me, ask me what I need").
@@ -315,7 +317,7 @@ The MCP server runs over stdio. The command is `reposkein-mcp` (global) or `npx 
 
 | Var | Required | Notes |
 |---|---|---|
-| `REPOSKEIN_REPO_PATH` | **Yes** for repo-scoped tools | Absolute path. One MCP server entry = one repo path. |
+| `REPOSKEIN_REPO_PATH` | No — recommended for a single-repo config | Absolute path, pins resolution for that server entry. Without it the server resolves the repo from its cwd (nearest ancestor with `.reposkein/`, or a workspace scan — see `list_repos`/`select_repo` in [`docs/TOOLS.md`](TOOLS.md)); still set it explicitly when the server's cwd won't match the repo (most agent-launched configs). |
 | `REPOSKEIN_STORE` | No | `auto` (default — JSONL if present else Neo4j), `jsonl`, `neo4j`. |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | If `REPOSKEIN_STORE=neo4j` or `auto`-with-Neo4j | — |
 | `REPOSKEIN_EMBED_PROVIDER` | If §1-Q3 ≠ off | `voyage`, `http`, or unset for lexical-only. |
@@ -348,7 +350,7 @@ Write `<repo>/.mcp.json`:
 }
 ```
 
-Drop any block whose feature the user didn't enable. `REPOSKEIN_REPO_PATH` is the only required key.
+Drop any block whose feature the user didn't enable. No key is strictly required — `REPOSKEIN_REPO_PATH` is optional (see §6 table) — but set it explicitly for any config an agent writes on the user's behalf, since the server's cwd at launch is rarely the repo root.
 
 > **Gitignore `.mcp.json` / `opencode.json`.** They hold absolute machine paths and a local `NEO4J_PASSWORD`, so they are per-machine and must not be committed. `reposkein-mcp init` adds them to `.gitignore` for you; if you write them by hand, do the same. What is shared from `.reposkein/` is `meta.json`, `config.toml`, `.gitignore`, `.gitattributes`, `summaries/` and `decisions/` (§4.2).
 
@@ -477,7 +479,8 @@ npx skills add reposkein/reposkein --all
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `REPOSKEIN_REPO_PATH (or REPOSKEIN_REPO_ID) must be set` | The env var is missing from the MCP server entry. | Add it to the agent's MCP config (§6). |
+| `No RepoSkein repo found (checked the current directory, its ancestors, and its immediate subdirectories for .reposkein/)` | Resolution failed: no `REPOSKEIN_REPO_PATH`, no `.reposkein/` in the server's cwd or its ancestors/children. | Run `reposkein-mcp init` in the target repo, call `list_repos` to see what was discovered, or set `REPOSKEIN_REPO_PATH` to its root (§6). |
+| `Multiple RepoSkein repos were found … and none is selected` | Workspace mode found 2+ sibling repos with none selected. | Call `list_repos`, then `select_repo` with one of its `path`/`name` values. |
 | `npm install -g @reposkein/mcp` succeeds but no `reposkein-indexer` binary | Postinstall fetch failed. | Re-run `npm install -g @reposkein/mcp --force` with network access. Else point `REPOSKEIN_INDEXER_BIN` at a [from-source build](https://github.com/reposkein/reposkein#build-from-source). |
 | Binary fetch hangs or fails behind a corporate firewall | No proxy configured for the download. | Set `HTTPS_PROXY` (and `NO_PROXY` for internal hosts) — see §2 — or set `REPOSKEIN_INDEXER_BIN` to skip the fetch entirely. |
 | `TypeError: create_causal_mask() got an unexpected keyword argument 'input_embeds'` | Native embed-server with `transformers >= 5.0`. | `uv pip install 'transformers>=4.51,<5'` and restart. |
