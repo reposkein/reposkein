@@ -5,6 +5,7 @@ import { ensureIndexerBinary, packageRoot, platformKey, cargoInstallFallbackMess
 import { spawnIndexer } from "../indexer/runIndexer.js";
 import { writeAgentConfigs, formatAdapterResult, type AgentId, type WriteAgentConfigsOptions } from "./agentAdapters.js";
 import { runChecks, renderDoctorReport } from "./doctor.js";
+import { writeIndexedAtMarker } from "../store/indexedAt.js";
 
 /** Where the navigation skill is installed for a repo (Claude project skills). */
 export function skillTargetPath(repoPath: string): string {
@@ -142,13 +143,21 @@ export function writeCiWorkflow(repoPath: string): { written: boolean; path: str
 
 /** `reposkein-mcp index [path]`: (re)build the code graph at `repoPath` using the
  *  native indexer. The package-friendly way to index — the `reposkein-indexer`
- *  binary is fetched into the package (not on PATH), so end users run this. */
+ *  binary is fetched into the package (not on PATH), so end users run this.
+ *  On success, also records the current git HEAD to `.reposkein/local/indexed-at`
+ *  — `doctor --ci`'s `graph_stale` check reads it back (see doctorFreshness.ts).
+ *  Known gap (documented, not fixed here): the pre-commit hook re-indexes by
+ *  calling the indexer binary directly, not through this path, so it doesn't
+ *  update the marker — `graph_stale` can read as stale after a string of
+ *  hook-driven commits until someone runs `reposkein-mcp index`/`init` again. */
 export async function runIndex(repoPath = "."): Promise<number> {
   const bin = await ensureIndexerBinary();
   const r = await spawnIndexer(bin, ["index", repoPath]);
   if (r.stdout.trim()) console.error(r.stdout.trim());
   if (r.code !== 0) {
     console.error(`reposkein: index failed: ${r.stderr || r.stdout}`);
+  } else {
+    writeIndexedAtMarker(repoPath);
   }
   return r.code;
 }

@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Check } from "./doctor.js";
+import { readIndexedAtSha } from "../store/indexedAt.js";
 
 /** Marker `init --hooks` (the Rust indexer) writes into every hook it
  *  installs — see indexer/crates/cli/src/main.rs `write_hook`. Doctor uses
@@ -50,33 +51,49 @@ export function hooksCheck(repoPath: string): Check {
   );
 }
 
-/** `git -C repoPath log -1 --format=%ct` for the given pathspec, or null on
- *  any failure (no git, not a repo, no commits, no matching commit). */
-function lastCommitEpochMs(repoPath: string, pathspec: string[]): number | null {
+/** `git -C repoPath rev-parse HEAD`, or null on any failure (no git, not a
+ *  repo, no commits yet). */
+function currentHeadSha(repoPath: string): string | null {
   try {
-    const out = execFileSync("git", ["-C", repoPath, "log", "-1", "--format=%ct", "--", ...pathspec], {
+    const out = execFileSync("git", ["-C", repoPath, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    if (!out) return null;
-    const sec = parseInt(out, 10);
-    return Number.isFinite(sec) ? sec * 1000 : null;
+    return out || null;
   } catch {
     return null;
   }
 }
 
-/** Pragmatic staleness heuristic: the committed graph (`.reposkein/nodes.jsonl`)
- *  should be at least as new as the last commit that touched tracked files
- *  outside `.reposkein/` (a commit that only edits summaries/decisions
- *  doesn't require a re-index). Compares mtimes, not content — cheap, no
- *  hashing, and good enough to catch "forgot to re-index after a big change".
+/** Content-based staleness: the committed graph is fresh iff the commit SHA
+ *  recorded the last time it was (re)built (`.reposkein/local/indexed-at` —
+ *  see mcp/src/store/indexedAt.ts) equals the current git HEAD.
  *
- *  Known limitation (documented, not fixed): `git checkout`/`clone` sets
- *  every file's mtime to checkout time, not commit time, so a fresh clone's
- *  nodes.jsonl (rebuilt by `init`/hooks right after) usually reads as fresh
- *  by construction, and a long-lived local checkout is the case this most
- *  reliably catches. Non-critical by default; `doctor --ci` promotes it. */
+ *  Replaces an earlier mtime-based heuristic (mtime(nodes.jsonl) vs. the last
+ *  commit's timestamp) that turned out to be structurally blind after any
+ *  fresh checkout: `git clone`/`checkout` — or a CI cache restoring
+ *  `.reposkein/` from a prior run — stamps every file it writes with
+ *  "now", which is always ≥ any past commit's timestamp, so
+ *  `mtime < lastCommitMs` could never be true right when it mattered most.
+ *  A recorded SHA has no such blind spot: it's compared by value, not by
+ *  filesystem timestamp.
+ *
+ *  Deliberately a **plain SHA mismatch**, not a diff filtered to
+ *  indexed-language extensions: filtering would need to stay in sync with
+ *  `config.toml`'s `[languages] enabled` list and the indexer's own
+ *  extension→language table, which is one more thing to drift. The cost of
+ *  getting it wrong is asymmetric — a false "stale" just costs a redundant
+ *  `reposkein-mcp index` (cheap), while a false "fresh" is exactly the bug
+ *  being fixed — so the simpler, conservative rule wins here.
+ *
+ *  Two distinct failure shapes, both reported under the same check id:
+ *   - no recorded SHA at all → never indexed via the mcp-side path (a fresh
+ *     clone's local/ never carries over, since it's gitignored) — FAIL.
+ *   - a recorded SHA that doesn't match HEAD → commits landed since the last
+ *     index — FAIL.
+ *
+ *  Non-critical by default; `doctor --ci` promotes it (CI_FAIL_IDS in
+ *  doctor.ts). */
 export function graphStaleCheck(repoPath: string): Check {
   const nodesFile = join(repoPath, ".reposkein", "nodes.jsonl");
   if (!existsSync(nodesFile)) {
@@ -88,23 +105,32 @@ export function graphStaleCheck(repoPath: string): Check {
       "run `reposkein-mcp index`"
     );
   }
-  // Exclude .reposkein/ itself (summaries/decisions land there and don't
-  // require a re-index) with git's exclude pathspec magic; fall back to an
-  // unscoped query on older git versions that reject it.
-  let lastCommitMs = lastCommitEpochMs(repoPath, [".", ":(exclude).reposkein"]);
-  if (lastCommitMs === null) lastCommitMs = lastCommitEpochMs(repoPath, ["."]);
-  if (lastCommitMs === null) {
-    return warn("graph_stale", "graph freshness", true, "no git history to compare against (skipped)");
+
+  const recordedSha = readIndexedAtSha(repoPath);
+  if (!recordedSha) {
+    return warn(
+      "graph_stale",
+      "graph freshness",
+      false,
+      "nodes.jsonl exists but no recorded indexed-at commit (.reposkein/local/indexed-at) — " +
+        "never indexed via `reposkein-mcp index`/`init`, or a fresh clone whose local/ scratch didn't carry over",
+      "run `reposkein-mcp index`"
+    );
   }
-  const mtimeMs = statSync(nodesFile).mtimeMs;
-  const stale = mtimeMs < lastCommitMs;
+
+  const headSha = currentHeadSha(repoPath);
+  if (headSha === null) {
+    return warn("graph_stale", "graph freshness", true, "no git HEAD to compare against (skipped)");
+  }
+
+  if (recordedSha === headSha) {
+    return warn("graph_stale", "graph freshness", true, `graph matches HEAD (${headSha.slice(0, 7)})`);
+  }
   return warn(
     "graph_stale",
     "graph freshness",
-    !stale,
-    stale
-      ? "nodes.jsonl is older than the last commit touching tracked files outside .reposkein/"
-      : "graph is at least as new as the last relevant commit",
-    stale ? "run `reposkein-mcp index`" : undefined
+    false,
+    `graph was indexed at ${recordedSha.slice(0, 7)}, but HEAD is now ${headSha.slice(0, 7)} — commits landed since the last index`,
+    "run `reposkein-mcp index`"
   );
 }

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { runChecks, resolveDoctorRepoPath, runDoctor, ciFailingChecks } from "../src/cli/doctor.js";
 import { decisionChecks } from "../src/cli/doctorDecisions.js";
 import { computeBodyHash, writeDecision, decisionsDir, type DecisionRecord } from "../src/store/decisions.js";
+import { writeIndexedAtMarker } from "../src/store/indexedAt.js";
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rs-doctor-")); });
@@ -182,6 +183,7 @@ describe("doctor --ci exit codes", () => {
     writeFileSync(join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\n# reposkein-managed\nexit 0\n");
     mkdirSync(join(dir, ".reposkein"), { recursive: true });
     writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), `{"id":"rs1:r:Function:a.py#f@0"}\n`);
+    writeIndexedAtMarker(dir); // records current HEAD as the indexed-at commit
     const code = await runDoctor(dir, { json: true, ci: true });
     expect(code).toBe(0);
   });
