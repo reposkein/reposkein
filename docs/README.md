@@ -34,3 +34,5 @@ the [root README's Documentation table](../README.md#documentation).
 
 - [`../README.md`](../README.md) — the project front door.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — dev setup, invariants, adding a language.
+
+**Support:** [Ko-fi](https://ko-fi.com/mongx) — funds hosted-constellation infra + indexer maintenance.
