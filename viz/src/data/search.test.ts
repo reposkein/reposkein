@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { rankSearch } from "./search";
+import { rankSearch, searchBucket } from "./search";
 import type { NodeRecord } from "./model";
 
 function rec(
@@ -93,5 +93,23 @@ describe("ranked search ordering", () => {
 
   it("returns nothing for a blank query", () => {
     expect(rankSearch([rec("a", "foo")], "   ")).toEqual([]);
+  });
+});
+
+describe("searchBucket", () => {
+  it("buckets every symbol kind as 'symbols'", () => {
+    for (const kind of ["Function", "Class", "Interface", "Enum", "Variable"]) {
+      expect(searchBucket(kind)).toBe("symbols");
+    }
+  });
+
+  it("buckets 'File' as 'files'", () => {
+    expect(searchBucket("File")).toBe("files");
+  });
+
+  it("buckets 'Directory' and 'Repository' (and anything unrecognized) as 'directories'", () => {
+    expect(searchBucket("Directory")).toBe("directories");
+    expect(searchBucket("Repository")).toBe("directories");
+    expect(searchBucket("SomethingNew")).toBe("directories");
   });
 });

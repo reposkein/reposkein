@@ -3,6 +3,7 @@ import { useStore } from "../state/store";
 import { buildTour, type TourStop } from "../data/tour";
 import { tourExpandKeys } from "../data/tourApply";
 import { BRAND } from "../scene/encoding";
+import { isCommandPaletteOpen } from "./paletteOpenState";
 
 /** Dwell (ms) parked on each stop before auto-advancing while playing. Tuned a
  *  touch above the camera's idle-drift threshold (Controls.IDLE_AFTER_MS=4000)
@@ -111,10 +112,17 @@ export function TourController() {
   }, [active, playing, index, stops.length, goTo]);
 
   // Esc exits the tour (takes precedence over the global collapse-level Esc).
+  // Stacking rule: the newest overlay wins Esc. While the command palette is
+  // open, step aside entirely (don't stopImmediatePropagation, don't exit the
+  // tour) so the SAME Esc closes the palette instead — otherwise this
+  // capture-phase, window-level listener fires before the palette ever sees
+  // the keydown and swallows it, exiting the tour while the palette stays
+  // open (REP-13 fix-round #3).
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (isCommandPaletteOpen()) return;
         // Stop the global collapse-level Esc handler (also on window) from also
         // firing for this keypress.
         e.stopImmediatePropagation();

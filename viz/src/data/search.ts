@@ -119,6 +119,28 @@ export function rankSearch(
   return hits.slice(0, limit);
 }
 
+/** Command-palette result grouping: which of the three node buckets
+ *  (Symbols / Files / Directories) a `NodeRecord.kind` belongs in.
+ *
+ *  `NodeRecord.kind` is the RAW graph label (`n.labels[0]` in model.ts) —
+ *  `"Function"` / `"Class"` / ... for symbols, but `"File"` / `"Directory"` /
+ *  `"Repository"` (capitalized nouns) for structural nodes. That's a
+ *  DIFFERENT vocabulary from `scene/encoding.ts`'s `ClusterKind`
+ *  (`"galaxy"|"dir"|"file"|"symbol"`) that `NODE_KIND_META` reuses for its
+ *  non-symbol rows — do not conflate the two. `"Repository"` (the repo root)
+ *  buckets as a directory: it's structurally the top of the same cluster
+ *  tree and results containing it are rare enough not to need a fourth
+ *  group. */
+export type SearchBucket = "symbols" | "files" | "directories";
+
+const SYMBOL_KINDS = new Set(["Function", "Class", "Interface", "Enum", "Variable"]);
+
+export function searchBucket(kind: string): SearchBucket {
+  if (SYMBOL_KINDS.has(kind)) return "symbols";
+  if (kind === "File") return "files";
+  return "directories"; // "Directory", "Repository", and any unrecognized kind.
+}
+
 /** Human label for a matched field (for the result row). */
 export function fieldLabel(f: Field): string {
   switch (f) {
