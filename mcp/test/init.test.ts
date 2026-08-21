@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { skillTargetPath, mcpConfigSnippet, ciWorkflowTargetPath, ciWorkflowTemplate, writeCiWorkflow } from "../src/cli/init.js";
-import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync as wf } from "node:fs";
+import { skillTargetPath, mcpConfigSnippet, ciWorkflowTargetPath, ciWorkflowTemplate, writeCiWorkflow, detectJoinMode, runInit } from "../src/cli/init.js";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync as wf, readdirSync } from "node:fs";
 import { tmpdir as osTmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
+import { execFileSync } from "node:child_process";
+import type { Exec, ExecResult } from "../src/cli/agentAdapters.js";
 // Re-exported under distinct names below purely so the second describe block
 // (the pre-existing gated `runInit` smoke test) can keep its own reads.
 
@@ -16,6 +18,150 @@ describe("init helpers", () => {
     const snip = JSON.parse(mcpConfigSnippet("/repo"));
     expect(snip.mcpServers.reposkein.command).toBe("reposkein-mcp");
     expect(snip.mcpServers.reposkein.env.REPOSKEIN_REPO_PATH).toBe("/repo");
+  });
+});
+
+function git(args: string[], cwd: string): void {
+  execFileSync("git", args, { cwd, stdio: "ignore" });
+}
+
+const noCliExec: Exec = () => ({ status: 1, stdout: "", stderr: "not found" });
+
+describe("detectJoinMode", () => {
+  it("false when .reposkein/meta.json doesn't exist", () => {
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-join-"));
+    try {
+      expect(detectJoinMode(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("false when meta.json exists on disk but is not yet committed (first-time setup)", () => {
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-join-"));
+    try {
+      git(["init", "-q"], dir);
+      mkdirSync(pathJoin(dir, ".reposkein"));
+      wf(pathJoin(dir, ".reposkein", "meta.json"), '{"repo_id":"abc"}');
+      expect(detectJoinMode(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("true when meta.json is committed (a real join)", () => {
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-join-"));
+    try {
+      git(["init", "-q"], dir);
+      git(["config", "user.email", "t@example.com"], dir);
+      git(["config", "user.name", "t"], dir);
+      mkdirSync(pathJoin(dir, ".reposkein"));
+      wf(pathJoin(dir, ".reposkein", "meta.json"), '{"repo_id":"abc"}');
+      git(["add", ".reposkein/meta.json"], dir);
+      git(["commit", "-qm", "add reposkein config"], dir);
+      expect(detectJoinMode(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("false outside a git repo entirely (no crash)", () => {
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-join-"));
+    try {
+      mkdirSync(pathJoin(dir, ".reposkein"));
+      wf(pathJoin(dir, ".reposkein", "meta.json"), '{"repo_id":"abc"}');
+      expect(detectJoinMode(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runInit — unsupported platform continues instead of failing", () => {
+  const origPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const origArch = Object.getOwnPropertyDescriptor(process, "arch")!;
+  const savedBin = process.env.REPOSKEIN_INDEXER_BIN;
+
+  function forcePlatform(platform: string, arch: string): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    Object.defineProperty(process, "arch", { value: arch, configurable: true });
+  }
+  function restorePlatform(): void {
+    Object.defineProperty(process, "platform", origPlatform);
+    Object.defineProperty(process, "arch", origArch);
+    if (savedBin === undefined) delete process.env.REPOSKEIN_INDEXER_BIN;
+    else process.env.REPOSKEIN_INDEXER_BIN = savedBin;
+  }
+
+  it("returns 0, skips hooks/index, and still writes agent config in join mode (darwin-x64)", async () => {
+    delete process.env.REPOSKEIN_INDEXER_BIN;
+    forcePlatform("darwin", "x64");
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-init-unsup-"));
+    try {
+      const code = await runInit(dir, {
+        join: true,
+        agents: ["claude"],
+        agentWriteOpts: { exec: noCliExec },
+      });
+      expect(code).toBe(0);
+      expect(existsSync(pathJoin(dir, ".git", "hooks", "pre-commit"))).toBe(false);
+      expect(existsSync(pathJoin(dir, ".reposkein", "nodes.jsonl"))).toBe(false);
+      expect(existsSync(pathJoin(dir, ".mcp.json"))).toBe(true);
+      const doc = JSON.parse(readFileSync(pathJoin(dir, ".mcp.json"), "utf8"));
+      expect(doc.mcpServers.reposkein.command).toBe("reposkein-mcp");
+    } finally {
+      restorePlatform();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 0 on win32-arm64 too", async () => {
+    delete process.env.REPOSKEIN_INDEXER_BIN;
+    forcePlatform("win32", "arm64");
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-init-unsup-"));
+    try {
+      const code = await runInit(dir, { join: true, agents: ["claude"], agentWriteOpts: { exec: noCliExec } });
+      expect(code).toBe(0);
+    } finally {
+      restorePlatform();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runInit — join mode agent config + dry-run + backup", () => {
+  it("--dry-run plans a write without touching disk, then a real run creates it", async () => {
+    delete process.env.REPOSKEIN_INDEXER_BIN;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    Object.defineProperty(process, "arch", { value: "x64", configurable: true }); // unsupported → no bin needed
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-init-dry-"));
+    try {
+      const dry = await runInit(dir, { join: true, agents: ["claude"], dryRun: true, agentWriteOpts: { exec: noCliExec } });
+      expect(dry).toBe(0);
+      expect(existsSync(pathJoin(dir, ".mcp.json"))).toBe(false);
+      const real = await runInit(dir, { join: true, agents: ["claude"], agentWriteOpts: { exec: noCliExec } });
+      expect(real).toBe(0);
+      expect(existsSync(pathJoin(dir, ".mcp.json"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is idempotent end-to-end: a second real run reports the file as already up to date (no duplicate/second .bak)", async () => {
+    delete process.env.REPOSKEIN_INDEXER_BIN;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    Object.defineProperty(process, "arch", { value: "x64", configurable: true });
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-init-idem-"));
+    try {
+      await runInit(dir, { join: true, agents: ["claude", "opencode"], agentWriteOpts: { exec: noCliExec } });
+      const mcpAfterFirst = readFileSync(pathJoin(dir, ".mcp.json"), "utf8");
+      await runInit(dir, { join: true, agents: ["claude", "opencode"], agentWriteOpts: { exec: noCliExec } });
+      expect(readFileSync(pathJoin(dir, ".mcp.json"), "utf8")).toBe(mcpAfterFirst);
+      const backups = readdirSync(dir).filter((f: string) => f.endsWith(".bak"));
+      expect(backups).toEqual([]); // nothing changed on re-run, so nothing was backed up
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -59,8 +205,7 @@ describe("init --ci (writeCiWorkflow)", () => {
 });
 
 import { describe as d2, it as it2, expect as e2, beforeAll, afterAll } from "vitest";
-import { execFileSync } from "node:child_process";
-import { runInit, skillTargetPath as stp, bundledSkillPath } from "../src/cli/init.js";
+import { skillTargetPath as stp, bundledSkillPath } from "../src/cli/init.js";
 
 const gated = process.env.REPOSKEIN_INDEXER_BIN ? d2 : d2.skip;
 
