@@ -1,0 +1,45 @@
+name = "reposkein-kofi-fulfillment"
+main = "src/worker.js"
+
+# Ed25519 in WebCrypto under its standard algorithm name needs a reasonably
+# recent compatibility date. `src/token.js` also falls back to Cloudflare's
+# older `NODE-ED25519` name, so an older date still works — but there is no
+# reason to pick one.
+compatibility_date = "2026-01-01"
+
+# No build step, on purpose: `src/*.js` are plain ES modules that wrangler
+# uploads as they are. Nothing to install, nothing to compile, nothing that
+# can drift between what was tested and what was deployed.
+
+[vars]
+# The Ko-fi membership tier whose payments mint a token. Case-insensitive.
+KOFI_TIER_NAME = "Skein"
+# Which committed public key the minted tokens name. Must exist in
+# mcp/src/ads/supporterKey.ts SUPPORTER_PUBLIC_KEYS, or every token this
+# worker mints will be rejected by every client.
+SUPPORTER_KID = "skein-2026-08"
+# Token lifetime. A monthly membership plus a few days, so a renewal that
+# posts late does not have to be absorbed entirely by the client's own 3-day
+# grace period.
+TOKEN_TTL_DAYS = "35"
+# How long an unclaimed claim link survives, and how many times it may be
+# opened.
+CLAIM_TTL_DAYS = "30"
+CLAIM_MAX_READS = "3"
+# Set to the worker's public URL once known (e.g. "https://kofi.reposkein.dev").
+# Falls back to the request origin, which is right in almost every case but
+# wrong behind a proxy that rewrites Host.
+# PUBLIC_BASE_URL = ""
+
+# Claim storage. Create it once with:
+#   wrangler kv namespace create SUPPORTER_CLAIMS
+# then paste the printed id below.
+[[kv_namespaces]]
+binding = "SUPPORTER_CLAIMS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Secrets are NEVER put in this file. Set them with `wrangler secret put`:
+#   KOFI_WEBHOOK_TOKEN     — from Ko-fi → Settings → API → Webhooks
+#   SUPPORTER_SIGNING_KEY  — base64 PKCS#8 Ed25519 private key
+#   SUBJECT_SALT           — random 32+ bytes, salts the opaque `sub` HMAC
+#   NOTIFY_WEBHOOK_URL     — optional Discord/Slack incoming webhook
