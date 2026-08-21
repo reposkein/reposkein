@@ -45,7 +45,8 @@ interface Filters {
 /** Live "showing N of M connections" readout: drawn = bundles rendered after
  *  the cap, total = pre-cap bundle count. Published by EdgeLines through the
  *  edgeStats CHANNEL (not the reducer) — it updates on every render pass, and
- *  only the HeaderBar readout should re-render for it. */
+ *  only the status bar's readout (panels/StatusBar.tsx, REP-18) should
+ *  re-render for it. */
 export interface EdgeStats {
   drawn: number;
   total: number;

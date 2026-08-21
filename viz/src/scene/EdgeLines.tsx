@@ -131,8 +131,8 @@ export function EdgeLines() {
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   // Post-commit (never during render): publish the "showing N of M" readout on
-  // its own channel, so recounting re-renders the HeaderBar readout alone
-  // instead of every reducer consumer.
+  // its own channel, so recounting re-renders the status bar's readout alone
+  // (panels/StatusBar.tsx, REP-18) instead of every reducer consumer.
   useEffect(() => {
     setEdgeStats({ drawn, total });
   }, [drawn, total, setEdgeStats]);

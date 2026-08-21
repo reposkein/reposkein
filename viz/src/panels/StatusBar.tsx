@@ -1,17 +1,64 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore, useEdgeStats } from "../state/store";
 import { deriveModeChips, dismissModeChip, type ModeChip } from "../data/modeChips";
-import { resolveBreadcrumb, type Crumb } from "../data/breadcrumbPath";
+import {
+  breadcrumbMaxVisibleForWidth,
+  collapseCrumbsForDisplay,
+  resolveBreadcrumb,
+  type Crumb,
+} from "../data/breadcrumbPath";
 import { startCameraNearestTracking, useCameraNearestClusterKey } from "../scene/cameraNearest";
 import { badgeInfo, teamConstellationHref } from "../data/badge";
 import { LENS_ORDER, LENS_PRESETS } from "../data/lens";
 import { captureScreenshot } from "../scene/Screenshot";
 import { isCommandPaletteOpen } from "./paletteOpenState";
+import {
+  isChipsPopoverOpen,
+  isLensPopoverOpen,
+  setChipsPopoverOpen,
+  setLensPopoverOpen,
+} from "./statusBarOverlayState";
 import { TourController } from "./TourController";
 
 const BAR = "h-7 text-[13px] text-[var(--color-brand-cream)]";
 const MONO = "font-mono";
 const DIM = "opacity-60";
+/** Minimum hit area for every clickable pill in the bar — the bar itself is
+ *  only 28px tall, so this is close to the ceiling of what fits, but it must
+ *  hold regardless of how narrow the viewport gets (fix round 1, `#2`:
+ *  "icon buttons keep min tap targets" — nothing below responsively shrinks
+ *  these, only the SURROUNDING content is hidden/collapsed). */
+const TAP = "min-h-6 min-w-6";
+
+/** Width tiers driving progressive degradation (fix round 1, `#2`). Ordered
+ *  widest-first so the comment above each documents "the first thing to give
+ *  ground" as the bar narrows:
+ *   1. the breadcrumb starts collapsing to a middle-ellipsis chain (widest
+ *      threshold — it gives ground before anything else does);
+ *   2. the staleness label (sha/age/team link) is dropped;
+ *   3. the node/edge counts are dropped, leaving only the repo name;
+ *   4. mode chips collapse into a single "N modes" popover chip.
+ *  Controls (lens popover, minimap/legend/shot/frame/tour/help) never shrink
+ *  or hide — see TAP above and the footer's `overflow-x-auto` safety net. */
+const BP_HIDE_STALENESS = 768;
+const BP_HIDE_COUNTS = 640;
+const BP_COLLAPSE_CHIPS = 480;
+
+/** The viewport width, updated on resize. The bar is `fixed inset-x-0`, so
+ *  viewport width IS the bar's own width — no ResizeObserver on the footer
+ *  element needed. SSR-safe default (this app is client-only, but jsdom/test
+ *  environments without a real layout still get a sane wide-tier default). */
+function useViewportWidth(): number {
+  const [width, setWidth] = useState<number>(() =>
+    typeof window === "undefined" ? 1280 : window.innerWidth,
+  );
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return width;
+}
 
 /** The 28px persistent status bar (REP-18 / Astrolabe V2). The ONLY chrome
  *  that is always on screen: everything HeaderBar / LensSwitcher / the
@@ -26,14 +73,20 @@ const DIM = "opacity-60";
  *    popover (LensSwitcher's replacement) + minimap/legend/help toggles +
  *    tour/screenshot/frame-all.
  *
- *  Esc stacking: the palette wins first (isCommandPaletteOpen), the guided
- *  tour wins second (it owns Esc while active — see TourController), and
- *  only then does a topmost mode chip get dismissed. When no chip is active
- *  the event is left alone so Root's collapse-level Esc binding still runs —
- *  unchanged behavior for the common case. */
+ *  Esc stacking: the palette wins first (isCommandPaletteOpen), then either
+ *  local ephemeral popover this bar owns (the lens popover / the collapsed
+ *  "N modes" popover — statusBarOverlayState.ts, mirroring paletteOpenState's
+ *  pattern so the NEWEST overlay always wins: a popover's own Escape handler
+ *  closes and consumes the event before this one would have dismissed a
+ *  chip), then the guided tour (it owns Esc while active — see
+ *  TourController), and only THEN does a topmost mode chip get dismissed.
+ *  When nothing above is open and no chip is active, the event is left alone
+ *  so Root's collapse-level Esc binding still runs — unchanged behavior for
+ *  the common case. */
 export function StatusBar() {
   const store = useStore();
   const model = store.model;
+  const width = useViewportWidth();
 
   // A ref mirroring the latest store, read from callbacks that must NOT be
   // recreated on every dispatch (the camera-nearest poll's getters and the
@@ -49,6 +102,10 @@ export function StatusBar() {
     () => (model ? resolveBreadcrumb(model, store.selected, nearestKey) : []),
     [model, store.selected, nearestKey],
   );
+  const displayCrumbs = useMemo(
+    () => collapseCrumbsForDisplay(crumbs, breadcrumbMaxVisibleForWidth(width)),
+    [crumbs, width],
+  );
 
   // Start the throttled camera-nearest poll once the model exists; stop it
   // when the bar (or the model) goes away. Reads storeRef fresh on every
@@ -63,14 +120,16 @@ export function StatusBar() {
   }, [model]);
 
   // Esc dismisses the topmost (leftmost) active chip — but only after the
-  // palette and an active tour have had their say. Read the latest chips/tour
-  // through the same ref pattern so the listener is attached exactly once.
+  // palette, this bar's own local popovers, and an active tour have had
+  // their say. Read the latest chips/tour through the same ref pattern so
+  // the listener is attached exactly once.
   const chipsRef = useRef(chips);
   chipsRef.current = chips;
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (isCommandPaletteOpen()) return; // palette is above chips in the stack
+      if (isCommandPaletteOpen()) return; // palette is above everything else
+      if (isLensPopoverOpen() || isChipsPopoverOpen()) return; // newest overlay wins — the popover closes itself
       if (storeRef.current.tour) return; // the guided tour owns Esc while active
       const topmost = chipsRef.current[0];
       if (!topmost) return; // nothing to dismiss — let collapseLevel run as before
@@ -85,16 +144,22 @@ export function StatusBar() {
   return (
     <footer
       role="contentinfo"
-      className={`${BAR} fixed inset-x-0 bottom-0 z-[100] flex items-center gap-4 border-t border-[rgba(148,163,207,0.16)] bg-[color-mix(in_srgb,var(--color-brand-navy)_94%,transparent)] px-3`}
+      className={`${BAR} fixed inset-x-0 bottom-0 z-[100] flex items-center gap-4 overflow-x-auto border-t border-[rgba(148,163,207,0.16)] bg-[color-mix(in_srgb,var(--color-brand-navy)_94%,transparent)] px-3`}
     >
-      <StatusBarLeft />
-      <StatusBarCenter crumbs={crumbs} />
-      <StatusBarRight chips={chips} />
+      <StatusBarLeft hideStaleness={width < BP_HIDE_STALENESS} hideCounts={width < BP_HIDE_COUNTS} />
+      <StatusBarCenter crumbs={displayCrumbs} />
+      <StatusBarRight chips={chips} collapseChips={width < BP_COLLAPSE_CHIPS} />
     </footer>
   );
 }
 
-function StatusBarLeft() {
+function StatusBarLeft({
+  hideStaleness,
+  hideCounts,
+}: {
+  hideStaleness: boolean;
+  hideCounts: boolean;
+}) {
   const store = useStore();
   const model = store.model;
 
@@ -103,13 +168,13 @@ function StatusBarLeft() {
       <span data-testid="statusbar-repo-name" className="font-medium text-[var(--color-brand-amber)]">
         {model?.repoId ?? "RepoSkein"}
       </span>
-      {model && (
+      {model && !hideCounts && (
         <span className={`${MONO} text-[11px] ${DIM}`}>
           {model.counts.nodes} nodes · {model.counts.edges} edges
         </span>
       )}
-      {model && <EdgeCapIndicator />}
-      {model && <StalenessLabel />}
+      {model && !hideCounts && <EdgeCapIndicator />}
+      {model && !hideStaleness && <StalenessLabel />}
     </div>
   );
 }
@@ -213,15 +278,18 @@ function StatusBarCenter({ crumbs }: { crumbs: Crumb[] }) {
   );
 }
 
-function StatusBarRight({ chips }: { chips: ModeChip[] }) {
+function StatusBarRight({ chips, collapseChips }: { chips: ModeChip[]; collapseChips: boolean }) {
   const store = useStore();
   const [helpOpen, setHelpOpen] = useState(false);
 
   return (
     <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-      {chips.map((chip) => (
-        <ModeChipPill key={chip.kind} chip={chip} />
-      ))}
+      {chips.length > 0 &&
+        (collapseChips ? (
+          <ChipsSummaryPopover chips={chips} />
+        ) : (
+          chips.map((chip) => <ModeChipPill key={chip.kind} chip={chip} />)
+        ))}
       <LensPopoverButton />
       <IconToggle
         label="Map"
@@ -277,7 +345,7 @@ function ModeChipPill({ chip }: { chip: ModeChip }) {
       type="button"
       onClick={() => dismissModeChip(chip.kind, store)}
       title={`${chip.label} — click to dismiss`}
-      className="flex items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-brand-amber)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-amber)_14%,transparent)] px-2 py-0.5 text-[11px] text-[var(--color-brand-amber)] transition-opacity duration-150 ease-out hover:opacity-80"
+      className={`${TAP} flex items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-brand-amber)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-amber)_14%,transparent)] px-2 py-1 text-[11px] text-[var(--color-brand-amber)] transition-opacity duration-150 ease-out hover:opacity-80`}
     >
       <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-brand-amber)]" />
       {chip.label}
@@ -285,24 +353,31 @@ function ModeChipPill({ chip }: { chip: ModeChip }) {
   );
 }
 
-function LensPopoverButton() {
+/** Below `BP_COLLAPSE_CHIPS` (fix round 1, `#2`), every active mode chip
+ *  collapses into ONE "N modes" pill with its own popover — each row inside
+ *  still dismisses via the exact same `dismissModeChip`, so nothing about
+ *  the underlying mode-clearing semantics changes, only the bar's use of
+ *  horizontal space. Uses the same `isChipsPopoverOpen` singleton as the
+ *  lens popover so it wins Esc over the (now-hidden) individual chips. */
+function ChipsSummaryPopover({ chips }: { chips: ModeChip[] }) {
   const store = useStore();
   const [open, setOpen] = useState(false);
-  const current = store.lens;
   const rootRef = useRef<HTMLSpanElement>(null);
 
-  // Ephemeral local UI, not a mode — closes on outside click or Escape, and
-  // (via `stopPropagation`) doesn't let that Escape also fall through to the
-  // mode-chip / collapse-level handling below it in the stack.
+  function updateOpen(next: boolean) {
+    setOpen(next);
+    setChipsPopoverOpen(next);
+  }
+
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(e.target as Node)) updateOpen(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        setOpen(false);
+        updateOpen(false);
       }
     };
     document.addEventListener("mousedown", onPointerDown);
@@ -313,14 +388,99 @@ function LensPopoverButton() {
     };
   }, [open]);
 
+  // Safety net: never leave the singleton stuck reporting "open" if this
+  // component unmounts (e.g. the bar widens past the collapse threshold)
+  // while the popover happens to be open.
+  useEffect(() => () => setChipsPopoverOpen(false), []);
+
   return (
     <span ref={rootRef} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => updateOpen(!open)}
+        title={`${chips.length} active mode${chips.length === 1 ? "" : "s"}`}
+        aria-expanded={open}
+        className={`${TAP} flex items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-brand-amber)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-amber)_14%,transparent)] px-2 py-1 text-[11px] text-[var(--color-brand-amber)]`}
+      >
+        <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-brand-amber)]" />
+        {chips.length} mode{chips.length === 1 ? "" : "s"} ▾
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute bottom-full right-0 mb-2 flex w-48 flex-col gap-0.5 rounded-[8px] border border-[rgba(148,163,207,0.18)] bg-[color-mix(in_srgb,var(--color-brand-navy)_96%,white_4%)] p-1 shadow-[0_8px_24px_-8px_rgba(0,0,0,0.6)]"
+        >
+          {chips.map((chip) => (
+            <button
+              key={chip.kind}
+              type="button"
+              onClick={() => {
+                dismissModeChip(chip.kind, store);
+                if (chips.length <= 1) updateOpen(false);
+              }}
+              title={`${chip.label} — click to dismiss`}
+              className="flex items-center justify-between gap-2 rounded-[6px] px-2 py-1 text-left text-[12px] text-[var(--color-brand-cream)] opacity-85 hover:opacity-100"
+            >
+              <span>{chip.label}</span>
+              <span aria-hidden="true" className="opacity-60">
+                ✕
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function LensPopoverButton() {
+  const store = useStore();
+  const [open, setOpen] = useState(false);
+  const current = store.lens;
+  const rootRef = useRef<HTMLSpanElement>(null);
+
+  function updateOpen(next: boolean) {
+    setOpen(next);
+    setLensPopoverOpen(next);
+  }
+
+  // Ephemeral local UI, not a mode — closes on outside click or Escape, and
+  // (via `stopPropagation`) doesn't let that Escape also fall through to the
+  // mode-chip / collapse-level handling below it in the stack. The
+  // `isLensPopoverOpen` singleton (set via `updateOpen` above) is what lets
+  // StatusBar's OWN capture-phase Esc handler defer to this bubble-phase one
+  // instead of racing it (fix round 1, `#1`).
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) updateOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        updateOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  // Safety net: never leave the singleton stuck reporting "open" if this
+  // component unmounts while the popover happens to be open.
+  useEffect(() => () => setLensPopoverOpen(false), []);
+
+  return (
+    <span ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => updateOpen(!open)}
         title="Switch lens"
         aria-expanded={open}
-        className="rounded-full border border-[rgba(148,163,207,0.25)] px-2 py-0.5 text-[11px] opacity-80 hover:opacity-100"
+        className={`${TAP} rounded-full border border-[rgba(148,163,207,0.25)] px-2 py-1 text-[11px] opacity-80 hover:opacity-100`}
       >
         Lens{current !== "all" ? `: ${LENS_PRESETS[current].label}` : ""} ▾
       </button>
@@ -339,7 +499,7 @@ function LensPopoverButton() {
                 aria-checked={active}
                 onClick={() => {
                   store.setLens(id);
-                  setOpen(false);
+                  updateOpen(false);
                 }}
                 title={LENS_PRESETS[id].hint}
                 className={`rounded-[6px] px-2 py-1 text-left text-[12px] ${
@@ -375,7 +535,7 @@ function IconToggle({
       onClick={onClick}
       title={title}
       aria-pressed={active}
-      className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+      className={`${TAP} rounded-full border px-2 py-1 text-[11px] transition-colors ${
         active
           ? "border-[color-mix(in_srgb,var(--color-brand-teal)_45%,transparent)] text-[var(--color-brand-teal)]"
           : "border-[rgba(148,163,207,0.2)] opacity-70 hover:opacity-100"

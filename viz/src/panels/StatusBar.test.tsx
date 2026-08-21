@@ -29,10 +29,25 @@ vi.mock("../state/store", async () => {
 
 const { StatusBar } = await import("./StatusBar");
 const { setCommandPaletteOpen } = await import("./paletteOpenState");
+const { isLensPopoverOpen, isChipsPopoverOpen, setLensPopoverOpen, setChipsPopoverOpen } =
+  await import("./statusBarOverlayState");
+
+const ORIGINAL_INNER_WIDTH = window.innerWidth;
+
+/** Sets `window.innerWidth` and fires a resize event — `useViewportWidth`
+ *  (StatusBar.tsx) reads the property on mount and re-reads it on resize, so
+ *  this exercises the exact same path a real browser resize would. */
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
+  fireEvent(window, new Event("resize"));
+}
 
 afterEach(() => {
   cleanup();
   setCommandPaletteOpen(false);
+  setLensPopoverOpen(false);
+  setChipsPopoverOpen(false);
+  setViewportWidth(ORIGINAL_INNER_WIDTH);
 });
 
 function mockActions(): Actions {
@@ -263,3 +278,162 @@ describe("StatusBar — mode chips are a pure function of state (silent clears b
     view.unmount();
   });
 });
+
+describe("StatusBar — Esc stacking: the lens popover wins over chip dismissal (fix round 1, #1)", () => {
+  it("first Esc closes the popover and leaves the chip alive; second Esc dismisses the chip", () => {
+    const model = tinyModel();
+    const { store, actions } = makeStore({ model, lens: "calls" });
+    currentStore = store;
+    render(<StatusBar />);
+
+    fireEvent.click(screen.getByTitle("Switch lens"));
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(isLensPopoverOpen()).toBe(true);
+
+    // First Esc: the popover is the newest overlay — it closes itself and
+    // consumes the event. The chip (still "calls") must NOT be dismissed.
+    // Fired on `document` (not `window`) — a real Escape keydown targets
+    // whatever has focus, which bubbles through document before reaching
+    // window; dispatching directly on `window` would skip the popover's
+    // own (document-level) listener entirely and prove nothing.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(isLensPopoverOpen()).toBe(false);
+    expect(actions.setLens).not.toHaveBeenCalled();
+
+    // Second Esc: nothing is above the chip anymore — it gets dismissed.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(actions.setLens).toHaveBeenCalledWith("all");
+  });
+
+  it("outside-click also closes the popover (not just Escape) without touching the chip", () => {
+    const model = tinyModel();
+    const { store, actions } = makeStore({ model, lens: "calls" });
+    currentStore = store;
+    render(<StatusBar />);
+
+    fireEvent.click(screen.getByTitle("Switch lens"));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(actions.setLens).not.toHaveBeenCalled();
+  });
+});
+
+describe("StatusBar — Esc stacking: the collapsed chips popover wins over dismissal too", () => {
+  it("first Esc closes the 'N modes' popover and leaves chips alive; second Esc dismisses the topmost", () => {
+    setViewportWidth(400); // below BP_COLLAPSE_CHIPS (480) — chips collapse to one pill
+    const model = tinyModel();
+    const { store, actions } = makeStore({ model, lens: "calls", coupling: true });
+    currentStore = store;
+    render(<StatusBar />);
+
+    fireEvent.click(screen.getByTitle("2 active modes"));
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(isChipsPopoverOpen()).toBe(true);
+
+    // Fired on `document` for the same reason as the lens-popover test above.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(isChipsPopoverOpen()).toBe(false);
+    expect(actions.setLens).not.toHaveBeenCalled();
+    expect(actions.toggleCoupling).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    // "lens" is topmost (deriveModeChips orders lens before coupling).
+    expect(actions.setLens).toHaveBeenCalledWith("all");
+    expect(actions.toggleCoupling).not.toHaveBeenCalled();
+  });
+});
+
+describe("StatusBar — responsive degradation (fix round 1, #2)", () => {
+  it("controls stay reachable and the repo name is never dropped at 360px", () => {
+    setViewportWidth(360);
+    const model = tinyModel();
+    const { store } = makeStore({ model, lens: "calls" });
+    currentStore = store;
+    render(<StatusBar />);
+
+    expect(screen.getByTestId("statusbar-repo-name").textContent).toBe(model.repoId);
+    // Every control is still present in the DOM (reachable — worst case via
+    // the footer's own horizontal scroll), none of them removed for width.
+    expect(screen.getByTitle("Switch lens")).toBeTruthy();
+    expect(screen.getByTitle("Hide minimap")).toBeTruthy(); // default state has it shown
+    expect(screen.getByTitle("Capture a PNG screenshot of the current view")).toBeTruthy();
+    expect(screen.getByTitle("Frame all — refit the camera to what's currently on screen")).toBeTruthy();
+  });
+
+  it("hides the staleness label below 768px, keeping counts and repo name", () => {
+    const model = tinyModel({
+      commitSha: "abcdef1234567890",
+      builtAt: "2020-01-01T00:00:00Z",
+      repoUrl: "https://github.com/acme/repo",
+      pagesUrl: null,
+    });
+    const { store } = makeStore({ model });
+    currentStore = store;
+
+    setViewportWidth(900);
+    const view = render(<StatusBar />);
+    expect(screen.getByText(/graph @ abcdef1/)).toBeTruthy();
+    view.unmount();
+
+    setViewportWidth(700);
+    render(<StatusBar />);
+    expect(screen.queryByText(/graph @ abcdef1/)).toBeNull();
+    expect(screen.getByText(`${model.counts.nodes} nodes · ${model.counts.edges} edges`)).toBeTruthy();
+    expect(screen.getByTestId("statusbar-repo-name")).toBeTruthy();
+  });
+
+  it("hides node/edge counts below 640px, keeping only the repo name on the left", () => {
+    const model = tinyModel();
+    const { store } = makeStore({ model });
+    currentStore = store;
+
+    setViewportWidth(600);
+    render(<StatusBar />);
+    expect(screen.queryByText(`${model.counts.nodes} nodes · ${model.counts.edges} edges`)).toBeNull();
+    expect(screen.getByTestId("statusbar-repo-name").textContent).toBe(model.repoId);
+  });
+
+  it("collapses mode chips into one 'N modes' popover chip below 480px", () => {
+    const model = tinyModel();
+    const { store } = makeStore({ model, lens: "calls", coupling: true });
+    currentStore = store;
+
+    setViewportWidth(768);
+    const wide = render(<StatusBar />);
+    expect(screen.getByText("Lens: Call graph")).toBeTruthy();
+    expect(screen.getByText("Coupling")).toBeTruthy();
+    expect(screen.queryByTitle("2 active modes")).toBeNull();
+    wide.unmount();
+
+    setViewportWidth(400);
+    render(<StatusBar />);
+    expect(screen.getByTitle("2 active modes")).toBeTruthy();
+    expect(screen.queryByText("Lens: Call graph")).toBeNull();
+  });
+
+  it("collapses the breadcrumb to a middle-ellipsis chain as the bar narrows, before the left section drops anything", () => {
+    const model = tinyModel();
+    const { store } = makeStore({ model, selected: "rs1:acmerepo:sym:lib/a.ts#run@0" });
+    currentStore = store;
+
+    // Wide: the full chain is visible, nothing collapsed.
+    setViewportWidth(1280);
+    const wide = render(<StatusBar />);
+    expect(screen.queryByText("…")).toBeNull();
+    expect(screen.getByTitle("lib")).toBeTruthy();
+    wide.unmount();
+
+    // Narrow enough to collapse the breadcrumb (>=768, so staleness/counts
+    // are untouched — the breadcrumb gives ground FIRST).
+    setViewportWidth(800);
+    render(<StatusBar />);
+    expect(screen.getByText("…")).toBeTruthy();
+    expect(screen.getByText(`${model.counts.nodes} nodes · ${model.counts.edges} edges`)).toBeTruthy();
+  });
+});
+

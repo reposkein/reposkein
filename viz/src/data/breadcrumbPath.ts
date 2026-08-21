@@ -72,3 +72,42 @@ export function resolveBreadcrumb(
     : cameraCrumbs(model, nearestClusterKey);
   return crumbs.length > 0 ? crumbs : [{ key: model.rootKey, label: model.repoId, clickable: false }];
 }
+
+/** A synthetic, inert "…" crumb — never clickable, never confused with a real
+ *  cluster key (the `__` wrapping keeps it out of real key-space). */
+const ELLIPSIS_KEY = "__ellipsis__";
+
+/** Middle-ellipsis collapse for narrow bars ("breadcrumb truncates first" —
+ *  REP-18 fix round 1, `#2`): once the chain has more segments than
+ *  `maxVisible`, keep the FIRST crumb (repo root — orientation) and the last
+ *  `maxVisible - 2` crumbs (where you are now), replacing everything between
+ *  with one inert "…" crumb. `maxVisible` values below 3 have no room for
+ *  head + ellipsis + >=1 tail crumb, so they clamp up to 3 rather than
+ *  collapsing to something nonsensical. Pass `Infinity` (or anything >=
+ *  `crumbs.length`) for "don't collapse" — the natural `<=` comparison
+ *  handles it with no special-casing. */
+export function collapseCrumbsForDisplay(crumbs: Crumb[], maxVisible: number): Crumb[] {
+  if (crumbs.length <= maxVisible) return crumbs;
+  const visible = Math.max(3, maxVisible);
+  if (crumbs.length <= visible) return crumbs; // clamping up may have made it a no-op
+  const tailCount = visible - 2;
+  const head = crumbs[0]!;
+  const tail = crumbs.slice(crumbs.length - tailCount);
+  return [head, { key: ELLIPSIS_KEY, label: "…", clickable: false }, ...tail];
+}
+
+/** How many breadcrumb segments to show at a given bar (== viewport) width,
+ *  in px. The bar is `fixed inset-x-0`, so viewport width IS the bar's
+ *  width — no ResizeObserver needed. Wide bars show the whole chain; narrow
+ *  ones collapse progressively (paired with `collapseCrumbsForDisplay`
+ *  above). Deliberately generous at the wide end (breadcrumb truncation is
+ *  the FIRST thing to give ground as the bar narrows, before the left
+ *  section drops anything — its threshold (1024) is wider than the left
+ *  section's widest drop threshold (768) — see StatusBar.tsx's tier
+ *  comment). */
+export function breadcrumbMaxVisibleForWidth(width: number): number {
+  if (width >= 1024) return Infinity;
+  if (width >= 640) return 4;
+  return 3;
+}
+

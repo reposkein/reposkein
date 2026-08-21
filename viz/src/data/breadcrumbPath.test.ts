@@ -3,7 +3,7 @@ import { buildModel } from "./model";
 import { fromWorker, type ClientModel } from "./clientModel";
 import type { WorkerResult } from "./worker/graph.worker";
 import type { RawGraph } from "./types";
-import { cameraCrumbs, resolveBreadcrumb, selectionCrumbs } from "./breadcrumbPath";
+import { cameraCrumbs, resolveBreadcrumb, selectionCrumbs, collapseCrumbsForDisplay, breadcrumbMaxVisibleForWidth, type Crumb } from "./breadcrumbPath";
 
 /** Nested repo → dir "src" → dir "src/util" → file "src/util/a.ts" → symbol
  *  "run", so ancestor chains have real depth to assert on. Mirrors the
@@ -154,5 +154,53 @@ describe("resolveBreadcrumb (the status bar's single entry point)", () => {
     const crumbs = resolveBreadcrumb(model, null, null);
     expect(crumbs.length).toBeGreaterThan(0);
     expect(crumbs[0]!.key).toBe(model.rootKey);
+  });
+});
+
+function crumb(label: string, clickable = true): Crumb {
+  return { key: label, label, clickable };
+}
+
+describe("collapseCrumbsForDisplay (fix round 1, #2 — breadcrumb truncates first, middle-ellipsis)", () => {
+  it("returns the chain unchanged when it already fits", () => {
+    const chain = [crumb("a"), crumb("b"), crumb("c")];
+    expect(collapseCrumbsForDisplay(chain, 4)).toBe(chain); // same reference — no allocation when it fits
+    expect(collapseCrumbsForDisplay(chain, Infinity)).toBe(chain);
+  });
+
+  it("keeps the head and the tail, replacing the middle with one inert '…' crumb", () => {
+    const chain = [crumb("root"), crumb("a"), crumb("b"), crumb("c"), crumb("leaf")];
+    const collapsed = collapseCrumbsForDisplay(chain, 4);
+    expect(collapsed.map((c) => c.label)).toEqual(["root", "…", "c", "leaf"]);
+    expect(collapsed[1]!.clickable).toBe(false);
+    expect(collapsed[1]!.key).not.toBe("a"); // a real cluster key would collide with the ellipsis marker
+  });
+
+  it("clamps maxVisible below 3 up to 3 (head + ellipsis + >=1 tail, never fewer)", () => {
+    const chain = [crumb("root"), crumb("a"), crumb("b"), crumb("c"), crumb("leaf")];
+    const collapsed = collapseCrumbsForDisplay(chain, 1);
+    expect(collapsed.map((c) => c.label)).toEqual(["root", "…", "leaf"]);
+  });
+
+  it("a chain exactly at the clamped size is left alone (no pointless collapse)", () => {
+    const chain = [crumb("root"), crumb("a"), crumb("leaf")];
+    expect(collapseCrumbsForDisplay(chain, 1)).toBe(chain);
+  });
+});
+
+describe("breadcrumbMaxVisibleForWidth (fix round 1, #2)", () => {
+  it("shows the full chain at wide widths", () => {
+    expect(breadcrumbMaxVisibleForWidth(1280)).toBe(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(1024)).toBe(Infinity);
+  });
+
+  it("starts collapsing below 1024 — WIDER than the left section's widest drop threshold (768), so it gives ground first", () => {
+    expect(breadcrumbMaxVisibleForWidth(1023)).toBeLessThan(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(800)).toBe(4);
+  });
+
+  it("collapses further at the narrowest widths", () => {
+    expect(breadcrumbMaxVisibleForWidth(639)).toBe(3);
+    expect(breadcrumbMaxVisibleForWidth(360)).toBe(3);
   });
 });
