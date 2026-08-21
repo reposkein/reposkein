@@ -13,6 +13,7 @@ import {
   subscribeCoachMark,
 } from "./coachMarkState";
 import { resetLayers, showLayer } from "./layerState";
+import { pushToast, resetToasts } from "./toastState";
 
 // This project's jsdom test environment doesn't expose `window.localStorage`
 // out of the box (Node's own experimental `localStorage` global shadows it
@@ -43,6 +44,7 @@ afterEach(() => {
   cleanup();
   resetCoachMark();
   resetLayers();
+  resetToasts();
 });
 
 describe("coachMarkState — persistence", () => {
@@ -122,6 +124,22 @@ describe("CoachMark — lifecycle (show / dismiss / persist)", () => {
     expect(isCoachMarkDismissed()).toBe(false);
 
     act(() => resetLayers());
+    expect(screen.getByTestId("coach-mark")).toBeTruthy();
+  });
+
+  /** Fix round 1: CoachMark (bottom-9, z-101) and Toasts (bottom-10, z-150)
+   *  sit close enough vertically that a toast box genuinely overlaps the
+   *  hint's pill — the brief required no collision. Same pattern as the
+   *  layer-hide case above: hide (never dismiss) while a toast is visible. */
+  it("hides (without dismissing) while a toast is visible, reappears once it clears", () => {
+    render(<CoachMark />);
+    expect(screen.getByTestId("coach-mark")).toBeTruthy();
+
+    act(() => pushToast("Screenshot saved", { duration: 0 }));
+    expect(screen.queryByTestId("coach-mark")).toBeNull();
+    expect(isCoachMarkDismissed()).toBe(false);
+
+    act(() => resetToasts());
     expect(screen.getByTestId("coach-mark")).toBeTruthy();
   });
 

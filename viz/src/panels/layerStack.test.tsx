@@ -58,10 +58,19 @@ const { setCommandPaletteOpen, isCommandPaletteOpen, requestCommandPalette } = a
 const { CommandPalette } = await import("./CommandPalette");
 const { handleGlobalKey } = await import("./globalKeys");
 
+const ORIGINAL_INNER_WIDTH = window.innerWidth;
+/** Sets `window.innerWidth` and fires a resize event — `useViewportWidth`
+ *  (shared by `LayerShell`/`Inspector`/`StatusBar`) listens for exactly this. */
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
+  fireEvent(window, new Event("resize"));
+}
+
 afterEach(() => {
   cleanup();
   resetLayers();
   setCommandPaletteOpen(false);
+  setViewportWidth(ORIGINAL_INNER_WIDTH);
 });
 
 function mockActions(): Actions {
@@ -136,6 +145,11 @@ function makeStore(overrides: Partial<Store> = {}): { store: Store; actions: Act
  *  suite, which has to distinguish "a node is selected" from "the drawer is
  *  really on screen". */
 const SYM = "rs1:r:sym:a.ts#run@0";
+
+/** The exact class `layerPlacement` emits when `reserveInspectorColumn` is
+ *  true — no `md:` (or any) media-query prefix any more (fix round 1, review
+ *  finding #1). Named here so a typo in one assertion doesn't silently pass. */
+const INSPECTOR_COLUMN_RIGHT = "right-[calc(360px+0.75rem)]";
 
 function symbolModel(): ClientModel {
   const g: RawGraph = {
@@ -404,23 +418,42 @@ describe("status bar pills drive the layer singleton", () => {
  *  LOWER z-index (110 vs 120) — so selecting a node and opening the legend
  *  painted the sheet over the drawer's pinned Impact / Focus action row and made
  *  it unreachable. The fix reserves the drawer's column; these assert the
- *  geometry, since jsdom computes no layout to measure. */
+ *  geometry, since jsdom computes no layout to measure.
+ *
+ *  REGRESSION 2 (REP-22 fix round 1, review finding #1): the column
+ *  reservation used to fire off a hardcoded Tailwind `md:` (768px) prefix
+ *  while Inspector.tsx independently switches drawer→sheet at
+ *  `BP_INSPECTOR_SHEET` (900px) — two breakpoints answering the same
+ *  question. Between 768–899px with a selection, the Inspector had already
+ *  become a bottom sheet (no column to avoid) while the `md:` class still
+ *  fired here, needlessly shifting/narrowing every layer. `layerPlacement`
+ *  now takes a plain `reserveInspectorColumn` boolean — no media query — so
+ *  the same `BP_INSPECTOR_SHEET` constant drives both modules. */
 describe("layer placement never collides with the Inspector", () => {
-  it("layerPlacement reserves the Inspector's column at md and up", () => {
+  it("layerPlacement reserves the Inspector's column when reserveInspectorColumn is true", () => {
     for (const dock of ["right", "center"] as const) {
       const closed = layerPlacement(dock, false);
       const open = layerPlacement(dock, true);
 
       // Closed: hugs the right gutter, clamped only by the viewport.
       expect(closed).toContain("right-3");
-      expect(closed).not.toMatch(/md:right-/);
+      expect(closed).not.toContain(INSPECTOR_COLUMN_RIGHT);
 
       // Open: shifted left by the drawer's full width + a gutter…
-      expect(open).toContain("md:right-[calc(360px+0.75rem)]");
+      expect(open).toContain(INSPECTOR_COLUMN_RIGHT);
       // …and clamped so a wide layer can't overflow back across it.
-      expect(open).toContain("md:max-w-[calc(100vw-360px-0.75rem*3)]");
-      // Below md the drawer is near-full-width; overlaying is correct there.
-      expect(open).toContain("right-3");
+      expect(open).toContain("max-w-[calc(100vw-360px-0.75rem*3)]");
+    }
+  });
+
+  // No `md:` (or any other) media-query prefix anywhere in the output — the
+  // whole point of the fix is that ONE JS-computed boolean, not a second CSS
+  // breakpoint, decides this.
+  it("never emits a media-query-prefixed class (the bug this replaces)", () => {
+    for (const dock of ["right", "center"] as const) {
+      for (const reserve of [false, true]) {
+        expect(layerPlacement(dock, reserve)).not.toMatch(/\bmd:/);
+      }
     }
   });
 
@@ -429,7 +462,7 @@ describe("layer placement never collides with the Inspector", () => {
     const open = layerPlacement("center", true);
     expect(open).toContain("left-3");
     expect(open).toContain("mx-auto");
-    expect(open).toContain("md:right-[calc(360px+0.75rem)]");
+    expect(open).toContain(INSPECTOR_COLUMN_RIGHT);
   });
 
   it("every layer offsets while a node is selected, and none does otherwise", () => {
@@ -442,9 +475,12 @@ describe("layer placement never collides with the Inspector", () => {
       summon(id);
       const unselected = screen.getByTestId(`layer-${id}`);
       expect(unselected.getAttribute("data-inspector-open")).toBe("false");
-      expect(unselected.className).not.toMatch(/md:right-/);
+      expect(unselected.getAttribute("data-reserve-inspector-column")).toBe("false");
+      expect(unselected.className).not.toContain(INSPECTOR_COLUMN_RIGHT);
 
-      // Selection on a node that really exists → column reserved.
+      // Selection on a node that really exists, at a width wide enough that
+      // the Inspector is actually a drawer (jsdom's default is 1024) →
+      // column reserved.
       cleanup();
       resetLayers();
       currentStore = makeStore({
@@ -456,8 +492,9 @@ describe("layer placement never collides with the Inspector", () => {
       summon(id);
       const selected = screen.getByTestId(`layer-${id}`);
       expect(selected.getAttribute("data-inspector-open")).toBe("true");
+      expect(selected.getAttribute("data-reserve-inspector-column")).toBe("true");
       expect(selected.className, `layer ${id} does not clear the inspector`).toContain(
-        "md:right-[calc(360px+0.75rem)]",
+        INSPECTOR_COLUMN_RIGHT,
       );
     }
   });
@@ -500,6 +537,92 @@ describe("layer placement never collides with the Inspector", () => {
   });
 });
 
+/** THE BAND THE MISMATCH LIVED IN (fix round 1, review finding #1): 768–899px
+ *  is exactly where the OLD `md:` (768px) breakpoint would have reserved the
+ *  drawer's column while Inspector.tsx (900px) had already switched it to a
+ *  bottom sheet. Both sides of the shared `BP_INSPECTOR_SHEET` (900) boundary
+ *  are asserted too, so a future change to either constant without the other
+ *  shows up here first. */
+describe("layer placement across the Inspector's drawer/sheet boundary (BP_INSPECTOR_SHEET=900)", () => {
+  it("does NOT reserve a column at 800px with a selection — the Inspector is a bottom sheet there, not a drawer", () => {
+    currentStore = makeStore({
+      model: symbolModel(),
+      selected: SYM,
+      status: { kind: "ready" },
+    }).store;
+    setViewportWidth(800);
+    render(<LayerHost />);
+    summon("legend");
+    const el = screen.getByTestId("layer-legend");
+    expect(el.getAttribute("data-inspector-open")).toBe("true"); // selected, and the Inspector IS mounted…
+    expect(el.getAttribute("data-reserve-inspector-column")).toBe("false"); // …just not as a drawer
+    expect(el.className).not.toContain(INSPECTOR_COLUMN_RIGHT);
+    expect(el.className).toContain("right-3"); // the plain, unshifted position
+  });
+
+  it("still does not reserve a column anywhere in the 768–899 band (the old md: breakpoint's range)", () => {
+    for (const width of [768, 820, 899]) {
+      cleanup();
+      resetLayers();
+      currentStore = makeStore({
+        model: symbolModel(),
+        selected: SYM,
+        status: { kind: "ready" },
+      }).store;
+      setViewportWidth(width);
+      render(<LayerHost />);
+      summon("legend");
+      expect(
+        screen.getByTestId("layer-legend").getAttribute("data-reserve-inspector-column"),
+        `width=${width}`,
+      ).toBe("false");
+    }
+  });
+
+  it("reserves the column starting exactly at 900px (the same boundary Inspector.tsx switches on)", () => {
+    currentStore = makeStore({
+      model: symbolModel(),
+      selected: SYM,
+      status: { kind: "ready" },
+    }).store;
+    setViewportWidth(900);
+    render(<LayerHost />);
+    summon("legend");
+    const el = screen.getByTestId("layer-legend");
+    expect(el.getAttribute("data-reserve-inspector-column")).toBe("true");
+    expect(el.className).toContain(INSPECTOR_COLUMN_RIGHT);
+  });
+
+  it("does not reserve a column one pixel below the boundary (899px)", () => {
+    currentStore = makeStore({
+      model: symbolModel(),
+      selected: SYM,
+      status: { kind: "ready" },
+    }).store;
+    setViewportWidth(899);
+    render(<LayerHost />);
+    summon("legend");
+    expect(screen.getByTestId("layer-legend").getAttribute("data-reserve-inspector-column")).toBe(
+      "false",
+    );
+  });
+
+  it("without a selection, no column is reserved anywhere across the boundary either", () => {
+    for (const width of [800, 900, 1024]) {
+      cleanup();
+      resetLayers();
+      currentStore = makeStore({ model: symbolModel(), selected: null }).store;
+      setViewportWidth(width);
+      render(<LayerHost />);
+      summon("legend");
+      expect(
+        screen.getByTestId("layer-legend").getAttribute("data-reserve-inspector-column"),
+        `width=${width}`,
+      ).toBe("false");
+    }
+  });
+});
+
 /** Astrolabe V5 §2 (responsive <640px): every summoned layer becomes a
  *  full-width bottom sheet below `BP_LAYER_FULL_WIDTH`, regardless of its
  *  normal dock/width — there is no room left over for a docked 184px–30rem
@@ -518,13 +641,6 @@ describe("layer placement — full-width bottom sheet under 640px (Astrolabe V5 
   it("is opt-in: the default (no third argument) is the normal docked placement", () => {
     expect(layerPlacement("right", false)).not.toContain("max-w-none");
   });
-
-  const ORIGINAL_INNER_WIDTH = window.innerWidth;
-  function setViewportWidth(width: number) {
-    Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
-    fireEvent(window, new Event("resize"));
-  }
-  afterEach(() => setViewportWidth(ORIGINAL_INNER_WIDTH));
 
   it("a mounted LayerShell drops the sheet below 640px, marking itself via data-full-width-sheet", () => {
     currentStore = makeStore({ model: tinyModel() }).store;

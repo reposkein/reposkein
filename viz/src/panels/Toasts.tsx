@@ -48,7 +48,7 @@ export function Toasts() {
           <span className="min-w-0 flex-1">
             <span className="block">{t.text}</span>
             {t.hint && (
-              <span className="mt-0.5 block text-[11px] text-[var(--color-brand-cream)] opacity-55">
+              <span className="mt-0.5 block text-[11px] text-[var(--color-brand-cream)] opacity-70">
                 {t.hint}
               </span>
             )}
@@ -57,7 +57,7 @@ export function Toasts() {
             type="button"
             onClick={() => dismissToast(t.id)}
             aria-label="Dismiss notification"
-            className="shrink-0 text-[var(--color-brand-cream)] opacity-50 hover:opacity-100"
+            className="shrink-0 text-[var(--color-brand-cream)] opacity-70 hover:opacity-100"
           >
             ✕
           </button>

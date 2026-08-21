@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { dismissCoachMark, isCoachMarkDismissed } from "./coachMarkState";
 import { useOpenLayer } from "./layerState";
+import { useToasts } from "./toastState";
 
 /** First-run coach mark (Astrolabe V5 §1). A SINGLE dismissible hint — not a
  *  multi-step onboarding tour (the brief is explicit about that boundary) —
@@ -16,17 +17,20 @@ import { useOpenLayer } from "./layerState";
  *
  *  Mounted by Root only once the graph is `ready` (there is nothing to
  *  navigate to before then), and hides itself — without dismissing — while a
- *  summoned layer is open, so it can never paint over the Help overlay it is
- *  itself pointing a viewer toward. */
+ *  summoned layer OR a toast is on screen (fix round 1: bottom-9 z-101 vs.
+ *  Toasts' bottom-10 z-150 sit close enough to genuinely overlap), so it can
+ *  never paint under the Help overlay or a toast it is itself pointing a
+ *  viewer toward. */
 export function CoachMark() {
   const [visible, setVisible] = useState(false);
   const layerOpen = useOpenLayer() !== null;
+  const toastVisible = useToasts().length > 0;
 
   useEffect(() => {
     if (!isCoachMarkDismissed()) setVisible(true);
   }, []);
 
-  if (!visible || layerOpen) return null;
+  if (!visible || layerOpen || toastVisible) return null;
 
   function dismiss() {
     dismissCoachMark();
@@ -47,7 +51,7 @@ export function CoachMark() {
         type="button"
         onClick={dismiss}
         aria-label="Dismiss hint"
-        className="shrink-0 opacity-60 hover:opacity-100"
+        className="shrink-0 opacity-70 hover:opacity-100"
       >
         ✕
       </button>

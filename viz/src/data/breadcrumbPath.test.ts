@@ -243,3 +243,34 @@ describe("breadcrumbMaxVisibleForWidth (fix round 1, #2)", () => {
     expect(breadcrumbMaxVisibleForWidth(360)).toBe(3);
   });
 });
+
+/** `inspectorOpen=true` (fix round 2 / REP-22 polish, review finding #5 —
+ *  previously untested directly, only exercised indirectly through
+ *  StatusBar.test.tsx's integration test). Reserves the Inspector's own
+ *  360px column + 3 gutters (396px) before doing the same width-tier lookup,
+ *  so the SAME width collapses one tier sooner whenever the drawer is open. */
+describe("breadcrumbMaxVisibleForWidth — inspectorOpen reserves the drawer's column", () => {
+  it("the exact scenario this fixed: 1280px shows everything with no selection, but tiers down to 4 with one", () => {
+    expect(breadcrumbMaxVisibleForWidth(1280)).toBe(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(1280, true)).toBe(4);
+  });
+
+  it("the SAME raw width can land in a different tier purely based on inspectorOpen", () => {
+    expect(breadcrumbMaxVisibleForWidth(1024, false)).toBe(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(1024, true)).toBe(3); // 1024-396=628, below the 640 tier
+  });
+
+  it("still reaches Infinity once the raw width is wide enough to absorb the reservation", () => {
+    expect(breadcrumbMaxVisibleForWidth(1419, true)).toBeLessThan(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(1420, true)).toBe(Infinity); // 1420-396=1024
+  });
+
+  it("the 640-tier boundary shifts by exactly the reservation too", () => {
+    expect(breadcrumbMaxVisibleForWidth(1035, true)).toBe(3); // 1035-396=639
+    expect(breadcrumbMaxVisibleForWidth(1036, true)).toBe(4); // 1036-396=640
+  });
+
+  it("defaults to false (inspectorOpen is optional) — same as never passing it", () => {
+    expect(breadcrumbMaxVisibleForWidth(1280)).toBe(breadcrumbMaxVisibleForWidth(1280, false));
+  });
+});

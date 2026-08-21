@@ -378,7 +378,7 @@ export function CommandPalette() {
         className="fixed left-1/2 top-[12%] z-[201] flex max-h-[70vh] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 flex-col overflow-hidden rounded-[10px] border border-[rgba(148,163,207,0.14)] bg-[color-mix(in_srgb,var(--color-brand-navy)_96%,white_4%)] text-[13px] text-[var(--color-brand-cream)] shadow-[0_16px_48px_-12px_rgba(0,0,0,0.55)] backdrop-blur-md"
       >
         <div className="flex shrink-0 items-center gap-2 border-b border-[rgba(148,163,207,0.14)] px-3 py-2.5">
-          <span aria-hidden="true" className="text-[13px] opacity-50">
+          <span aria-hidden="true" className="text-[13px] opacity-70">
             ⌘K
           </span>
           <label htmlFor={`${uid}-input`} className="sr-only">
@@ -463,7 +463,7 @@ export function CommandPalette() {
           {statusMessage}
         </div>
 
-        <div className="flex h-9 shrink-0 items-center gap-3 border-t border-[rgba(148,163,207,0.14)] px-3 text-[11px] opacity-55">
+        <div className="flex h-9 shrink-0 items-center gap-3 border-t border-[rgba(148,163,207,0.14)] px-3 text-[11px] opacity-70">
           <span className="hidden items-center gap-1 sm:inline-flex">
             <Kbd>↑</Kbd>
             <Kbd>↓</Kbd> navigate
@@ -563,7 +563,7 @@ function Row({
       >
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium">{row.cmd.label}</span>
-          {subtitle && <span className="block truncate text-[11px] opacity-55">{subtitle}</span>}
+          {subtitle && <span className="block truncate text-[11px] opacity-70">{subtitle}</span>}
         </span>
         {row.cmd.kbd && <Kbd>{row.cmd.kbd}</Kbd>}
       </div>
@@ -593,7 +593,7 @@ function Row({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium">{row.name}</span>
         {row.filePath && (
-          <span className="block truncate font-mono text-[11px] opacity-55">{row.filePath}</span>
+          <span className="block truncate font-mono text-[11px] opacity-70">{row.filePath}</span>
         )}
       </span>
       {confidence < 1 && <ConfidenceBadge value={confidence} />}

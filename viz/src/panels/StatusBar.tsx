@@ -277,7 +277,7 @@ function StatusBarCenter({ crumbs }: { crumbs: Crumb[] }) {
     <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden whitespace-nowrap px-2">
       {crumbs.map((crumb, i) => (
         <span key={`${crumb.key}-${i}`} className="flex min-w-[2ch] shrink items-center">
-          {i > 0 && <span className="mx-1.5 shrink-0 opacity-35">·</span>}
+          {i > 0 && <span aria-hidden="true" className="mx-1.5 shrink-0 opacity-35">·</span>}
           {crumb.clickable ? (
             <button
               type="button"
