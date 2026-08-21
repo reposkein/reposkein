@@ -35,16 +35,15 @@ function mockActions(): Actions & Record<keyof Actions, ReturnType<typeof vi.fn>
     resetExpansion: vi.fn(),
     setBundleBeta: vi.fn(),
     setIdleDrift: vi.fn(),
-    toggleMinimap: vi.fn(),
-    toggleLegend: vi.fn(),
+    retryLoad: vi.fn(),
     toggleLabels: vi.fn(),
     hover: vi.fn(),
     setEdgeStats: vi.fn(),
   };
 }
 
-function mockEnv(): PaletteEnv & { screenshot: ReturnType<typeof vi.fn>; copyLink: ReturnType<typeof vi.fn> } {
-  return { screenshot: vi.fn(), copyLink: vi.fn() };
+function mockEnv(): PaletteEnv & Record<keyof PaletteEnv, ReturnType<typeof vi.fn>> {
+  return { screenshot: vi.fn(), copyLink: vi.fn(), toggleLayer: vi.fn() };
 }
 
 /** A tiny ready ClientModel, for the commands (start-tour) that check `model`. */
@@ -214,16 +213,35 @@ describe("buildCommandRegistry — completeness (every REP-13-listed store actio
     expect(env.copyLink).toHaveBeenCalledOnce();
   });
 
-  it("the minimap/legend/labels/drift toggles call their store actions", () => {
+  it("the labels/drift toggles call their store actions", () => {
     const actions = mockActions();
-    find("toggle-minimap").run(actions, notSelected, mockEnv());
-    find("toggle-legend").run(actions, notSelected, mockEnv());
     find("toggle-labels").run(actions, notSelected, mockEnv());
     find("toggle-drift").run(actions, stateWith({ idleDrift: false }), mockEnv());
-    expect(actions.toggleMinimap).toHaveBeenCalledOnce();
-    expect(actions.toggleLegend).toHaveBeenCalledOnce();
     expect(actions.toggleLabels).toHaveBeenCalledOnce();
     expect(actions.setIdleDrift).toHaveBeenCalledWith(true);
+  });
+
+  /** V3 moved layer visibility out of the reducer into `panels/layerState.ts`
+   *  (one nullable id, so two layers can never be open). The commands that used
+   *  to call `actions.toggleMinimap()` / `actions.toggleLegend()` now go through
+   *  `env.toggleLayer` — the same env channel `screenshot` uses for a scene-side
+   *  singleton. This keeps the completeness guarantee intact and extends it to
+   *  the two layers V2 had no command for at all. */
+  it("every summoned layer is reachable through env.toggleLayer", () => {
+    const cases: [string, string][] = [
+      ["toggle-minimap", "minimap"],
+      ["toggle-legend", "legend"],
+      ["toggle-filters", "filters"],
+      ["toggle-help", "help"],
+    ];
+    for (const [id, layer] of cases) {
+      const env = mockEnv();
+      const actions = mockActions();
+      find(id).run(actions, notSelected, env);
+      expect(env.toggleLayer).toHaveBeenCalledExactlyOnceWith(layer);
+      // A layer toggle must NOT be a reducer transition any more.
+      for (const fn of Object.values(actions)) expect(fn).not.toHaveBeenCalled();
+    }
   });
 });
 

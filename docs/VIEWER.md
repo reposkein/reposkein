@@ -15,7 +15,8 @@ The map is **deterministic**: a seeded force layout means the same graph always 
 - **Legible** — per-edge-type colors + legend, importance-sized stars, adaptive labels, breadcrumb, per-language galaxy coloring, depth fog / bloom / nebula halos.
 - **Edges encode resolution** — color = edge type (`CALLS`/`IMPORTS`/`INHERITS`/`IMPLEMENTS`/`INSTANTIATES`), opacity = confidence (`exact`/`name_match`/`ambiguous`), and flow particles show call direction.
 - **Analytical** — one-click lenses (call graph / type hierarchy / imports / tests), an impact overlay (transitive callers + covering tests), a confidence-audit mode (see where the type-free resolver guesses), and a temporal-coupling overlay (git co-change).
-- **Explorable** — ranked search-to-fly, N-hop neighborhood focus, source peek in the detail panel (a path-guarded read-only file slice + an "Open in editor" `vscode://` link), keyboard nav (`/` search, `f` frame-all, arrows to hop neighbors, `Esc` back), a minimap, and PNG screenshot export.
+- **Explorable** — a ⌘K (or `/`) command palette that searches symbols, files and directories and runs every command; N-hop neighborhood focus; a source peek in the Inspector (a path-guarded read-only file slice + an "Open in editor" `vscode://` link); keyboard nav (`f` frame-all, arrows to hop neighbors, `m` map, `?` keymap, `Esc` back); a viewport-aware minimap; and PNG screenshot export.
+- **One chrome strip** — a 28px status bar is the only always-on surface (repo identity, counts, breadcrumb, active-mode chips). The Inspector appears when you select a star; the legend, map, filters and keymap are **summoned layers**, one at a time, each dismissed with `Esc`.
 - **Guided tour** — a cinematic, deterministically-derived flythrough (overview → largest modules → busiest hub → type hierarchy → entry point) with captions.
 
 ```sh

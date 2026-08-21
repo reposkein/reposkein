@@ -2,26 +2,31 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { buildTour, type TourStop } from "../data/tour";
 import { tourExpandKeys } from "../data/tourApply";
-import { BRAND } from "../scene/encoding";
 import { isCommandPaletteOpen } from "./paletteOpenState";
+import { hideLayer } from "./layerState";
 
 /** Dwell (ms) parked on each stop before auto-advancing while playing. Tuned a
  *  touch above the camera's idle-drift threshold (Controls.IDLE_AFTER_MS=4000)
  *  so the view gets a beat of gentle auto-rotation while you read the caption. */
 const DWELL_MS = 5500;
 
-/** Guided cinematic tour (design P1).
+/** Guided CINEMATIC tour (Astrolabe V3 §3).
  *
- *  Lives OUTSIDE the Canvas as an HUD overlay. It derives a deterministic stop
- *  list from the model (data/tour.buildTour) and, on each stop, drives the
- *  EXISTING store mechanisms — expand-ancestors, select, focusTarget (fit/fly),
- *  and neighborhood focus — so it inherits the same smooth CameraControls fly
- *  and idle auto-rotate. It owns no camera code of its own.
+ *  Unchanged from V2: it derives a deterministic stop list from the model
+ *  (data/tour.buildTour) and drives the EXISTING store mechanisms per stop —
+ *  expand-ancestors, select, focusTarget (fit/fly), neighborhood focus — so it
+ *  inherits the same smooth CameraControls fly. It owns no camera code.
  *
- *  Renders nothing but a "Tour" launch button until active; while active it
- *  shows a brand-styled caption card (bottom-center), a progress indicator, and
- *  Play/Pause · Prev · Next · Exit controls. Esc also exits (handled here so it
- *  takes precedence over the global collapse-level Esc binding). */
+ *  Changed in V3: this component is now the OVERLAY ONLY (caption + transport),
+ *  mounted by Root outside the chrome-fade group. V2 rendered it inside the
+ *  status bar's right region, which meant "cinematic mode" could not actually
+ *  fade the bar — the caption would have faded with it. The launch pill it used
+ *  to render when inactive is now `TourLaunchButton`, which stays in the bar
+ *  (and fades with it, correctly: while touring you don't need a Tour button).
+ *
+ *  Esc: exits the tour, but only once the palette has had its say (the newest
+ *  overlay wins Esc — see paletteOpenState's docstring). Summoned layers defer
+ *  to the tour, so the order overall is palette > tour > layer > chip. */
 export function TourController() {
   const store = useStore();
   const model = store.model;
@@ -31,44 +36,22 @@ export function TourController() {
 
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(true);
-  // Caption fade: re-trigger the fade-in on every stop change.
   const [shown, setShown] = useState(false);
 
-  // Apply a single stop as one fixed, deterministic sequence (replaces the old
-  // per-kind switch). Each stop is self-isolated: step 1 wipes ALL prior
-  // expansion/overlays, so there is no cross-stop accumulation and the sequence
-  // is idempotent. Dispatches are reduced sequentially against the evolving
-  // state (not the render snapshot), so `select` strictly before `toggleFocus`
-  // (which reads store.selected) behaves predictably.
   const applyStop = useCallback(
     (stop: TourStop) => {
       if (!model) return;
-      // 1. CLEAN SLATE — kills cross-stop accumulation (expanded := {root},
-      //    clears focus/selection/impact).
       if (stop.collapsePrevious) store.resetExpansion();
-      // 2. LENS — per-stop single lens (no fitNonce bump → won't yank the camera).
       store.setLens(stop.lens);
-      // 3. EXPAND (bounded), as ONE transition with no camera consequence — the
-      //    stop frames itself in step 5, so a refit per expansion would yank the
-      //    camera mid-sequence. The keys are computed against the INTENDED
-      //    post-reset expansion (resetExpansion sets expanded := {root}, but
-      //    store.expanded here is still the stale pre-reset render snapshot) —
-      //    see tourExpandKeys. Module: open expandKeys one level (files). Node:
-      //    reveal the focus node's ancestor chain.
       store.revealWithoutRefit(tourExpandKeys(model, stop, store.expanded));
-      // 4. FOCUS / ISOLATE — select strictly before toggleFocus.
       if (stop.focusNodeId) {
         store.select(stop.focusNodeId);
         store.toggleFocus();
       } else {
         store.select(null);
       }
-      // 5. FIT — bumps fitNonce → Controls flies + frames the target (cluster
-      //    key OR node id; setFocusTarget resolves both).
       store.setFocusTarget(stop.targetKey);
     },
-    // store identity changes each render (useMemo over state); we intentionally
-    // read the latest via closure and only re-create when model changes.
     [model, store],
   );
 
@@ -82,10 +65,14 @@ export function TourController() {
     [stops, applyStop],
   );
 
-  // On entering the tour: reset to stop 0 and apply it.
   const prevActive = useRef(false);
   useEffect(() => {
     if (active && !prevActive.current) {
+      // Entering cinematic mode: put away any summoned layer, so "all chrome
+      // fades except the caption and transport" is true of the layers too — a
+      // legend sheet left open would otherwise sit there through the flythrough
+      // (it lives outside the fade group's opacity, being z-above it).
+      hideLayer();
       setIndex(0);
       setPlaying(true);
       if (stops.length > 0) applyStop(stops[0]!);
@@ -93,7 +80,6 @@ export function TourController() {
     prevActive.current = active;
   }, [active, stops, applyStop]);
 
-  // Caption fade-in on each stop change.
   useEffect(() => {
     if (!active) return;
     setShown(false);
@@ -101,7 +87,6 @@ export function TourController() {
     return () => clearTimeout(t);
   }, [index, active]);
 
-  // Auto-advance while playing. Stops at the last stop (no loop) and pauses.
   useEffect(() => {
     if (!active || !playing) return;
     const t = setTimeout(() => {
@@ -111,51 +96,20 @@ export function TourController() {
     return () => clearTimeout(t);
   }, [active, playing, index, stops.length, goTo]);
 
-  // Esc exits the tour (takes precedence over the global collapse-level Esc).
-  // Stacking rule: the newest overlay wins Esc. While the command palette is
-  // open, step aside entirely (don't stopImmediatePropagation, don't exit the
-  // tour) so the SAME Esc closes the palette instead — otherwise this
-  // capture-phase, window-level listener fires before the palette ever sees
-  // the keydown and swallows it, exiting the tour while the palette stays
-  // open (REP-13 fix-round #3).
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (isCommandPaletteOpen()) return;
-        // Stop the global collapse-level Esc handler (also on window) from also
-        // firing for this keypress.
         e.stopImmediatePropagation();
         store.exitTour();
       }
     };
-    // Capture phase so we run before Root's window keydown listener.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [active, store]);
 
-  if (!model || stops.length === 0) return null;
-
-  if (!active) {
-    return (
-      <button
-        onClick={() => store.startTour()}
-        title="Take a guided cinematic tour of the constellation"
-        style={{
-          padding: "2px 10px",
-          fontSize: 11,
-          borderRadius: 5,
-          border: `1px solid ${BRAND.teal}66`,
-          background: `${BRAND.teal}1f`,
-          color: BRAND.cream,
-          cursor: "pointer",
-          letterSpacing: 0.3,
-        }}
-      >
-        ▶ Tour
-      </button>
-    );
-  }
+  if (!model || stops.length === 0 || !active) return null;
 
   const stop = stops[index]!;
   const atStart = index === 0;
@@ -163,80 +117,30 @@ export function TourController() {
 
   return (
     <>
-      {/* Caption card — bottom-center, brand-styled, fades in/out per stop. */}
+      {/* Caption card — bottom-center, above the transport. */}
       <div
-        style={{
-          position: "fixed",
-          bottom: 88,
-          left: "50%",
-          transform: `translateX(-50%) translateY(${shown ? 0 : 8}px)`,
-          width: "min(520px, calc(100vw - 48px))",
-          opacity: shown ? 1 : 0,
-          transition: "opacity 0.45s ease, transform 0.45s ease",
-          pointerEvents: "none",
-          zIndex: 40,
-          textAlign: "center",
-        }}
+        data-testid="tour-caption"
+        className={`pointer-events-none fixed inset-x-0 bottom-[88px] z-[140] mx-auto w-[min(520px,calc(100vw-3rem))] text-center transition-opacity duration-500 motion-reduce:transition-none ${
+          shown ? "opacity-100" : "opacity-0"
+        }`}
       >
-        <div
-          style={{
-            display: "inline-block",
-            maxWidth: "100%",
-            padding: "14px 22px",
-            borderRadius: 12,
-            background: "rgba(8,11,22,0.86)",
-            border: `1px solid ${BRAND.amber}44`,
-            boxShadow: `0 8px 32px rgba(0,0,0,0.5), 0 0 28px ${BRAND.amber}1a`,
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <div
-            style={{
-              fontSize: 10,
-              letterSpacing: 2,
-              textTransform: "uppercase",
-              color: BRAND.teal,
-              opacity: 0.85,
-              marginBottom: 6,
-            }}
-          >
+        <div className="inline-block max-w-full rounded-[12px] border border-[color-mix(in_srgb,var(--color-brand-amber)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-navy)_88%,transparent)] px-5 py-3.5 shadow-[0_8px_32px_rgba(0,0,0,0.5)] backdrop-blur-md">
+          <p className="mb-1.5 text-[11px] uppercase tracking-[0.16em] text-[var(--color-brand-teal)] opacity-85">
             Guided tour · stop {index + 1} / {stops.length}
-          </div>
-          <div
-            style={{
-              fontSize: 19,
-              fontWeight: 600,
-              color: BRAND.cream,
-              letterSpacing: 0.3,
-              wordBreak: "break-word",
-            }}
-          >
+          </p>
+          <p className="break-words text-[19px] font-semibold leading-snug text-[var(--color-brand-cream)]">
             {stop.caption.title}
-          </div>
-          <div style={{ fontSize: 13, color: "rgba(200,210,235,0.82)", marginTop: 4 }}>
+          </p>
+          <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-brand-cream)] opacity-80">
             {stop.caption.body}
-          </div>
+          </p>
         </div>
       </div>
 
-      {/* Transport controls — bottom-center, below the caption. Clears the
-          28px persistent status bar (REP-18) + a matching gap. */}
+      {/* Transport — the only interactive chrome left during cinematic mode. */}
       <div
-        style={{
-          position: "fixed",
-          bottom: 40,
-          left: "50%",
-          transform: "translateX(-50%)",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "6px 10px",
-          borderRadius: 999,
-          background: "rgba(8,11,22,0.9)",
-          border: "1px solid rgba(90,120,180,0.35)",
-          backdropFilter: "blur(10px)",
-          zIndex: 41,
-        }}
+        data-testid="tour-transport"
+        className="pointer-events-auto fixed inset-x-0 bottom-10 z-[141] mx-auto flex w-fit items-center gap-2 rounded-full border border-[rgba(148,163,207,0.3)] bg-[color-mix(in_srgb,var(--color-brand-navy)_92%,transparent)] px-2.5 py-1.5 backdrop-blur-md"
       >
         <TourBtn label="⟨ Prev" disabled={atStart} onClick={() => goTo(index - 1)} />
         <TourBtn
@@ -252,24 +156,38 @@ export function TourController() {
             goTo(index + 1);
           }}
         />
-        {/* Progress dots */}
-        <div style={{ display: "flex", gap: 4, margin: "0 6px" }}>
+        <span className="mx-1.5 flex gap-1" aria-hidden="true">
           {stops.map((s, i) => (
             <span
               key={s.id}
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: i === index ? BRAND.amber : "rgba(255,255,255,0.25)",
-                transition: "background 0.3s",
-              }}
+              className={`h-1.5 w-1.5 rounded-full transition-colors ${
+                i === index ? "bg-[var(--color-brand-amber)]" : "bg-white/25"
+              }`}
             />
           ))}
-        </div>
+        </span>
         <TourBtn label="✕ Exit" onClick={() => store.exitTour()} />
       </div>
     </>
+  );
+}
+
+/** The status bar's "▶ Tour" pill. Separate from the overlay above so the bar
+ *  can fade during cinematic mode without taking the caption with it. */
+export function TourLaunchButton() {
+  const store = useStore();
+  const model = store.model;
+  const stops = useMemo<TourStop[]>(() => (model ? buildTour(model) : []), [model]);
+  if (!model || stops.length === 0 || store.tour) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => store.startTour()}
+      title="Take a guided cinematic tour of the constellation"
+      className="min-h-6 min-w-6 rounded-full border border-[color-mix(in_srgb,var(--color-brand-teal)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-teal)_12%,transparent)] px-2 py-1 text-[11px] text-[var(--color-brand-cream)] hover:opacity-85"
+    >
+      ▶ Tour
+    </button>
   );
 }
 
@@ -286,19 +204,14 @@ function TourBtn({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
-      style={{
-        padding: "4px 12px",
-        fontSize: 12,
-        borderRadius: 999,
-        border: `1px solid ${primary ? BRAND.amber + "88" : "rgba(255,255,255,0.18)"}`,
-        background: primary ? `${BRAND.amber}26` : "rgba(255,255,255,0.05)",
-        color: disabled ? "rgba(255,255,255,0.3)" : primary ? BRAND.cream : "rgba(230,235,245,0.85)",
-        cursor: disabled ? "default" : "pointer",
-        letterSpacing: 0.3,
-        whiteSpace: "nowrap",
-      }}
+      className={`whitespace-nowrap rounded-full border px-3 py-1 text-[13px] transition-colors disabled:cursor-default disabled:opacity-35 ${
+        primary
+          ? "border-[color-mix(in_srgb,var(--color-brand-amber)_55%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-amber)_16%,transparent)] text-[var(--color-brand-cream)]"
+          : "border-[rgba(148,163,207,0.22)] bg-white/5 text-[var(--color-brand-cream)] opacity-85 hover:opacity-100"
+      }`}
     >
       {label}
     </button>

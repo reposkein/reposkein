@@ -13,6 +13,7 @@
 
 import type { Actions, State } from "./store";
 import { LENS_ORDER, LENS_PRESETS } from "../data/lens";
+import type { LayerId } from "../panels/layerState";
 
 export interface PaletteEnv {
   /** Capture a PNG of the current view (scene/Screenshot.ts singleton). */
@@ -20,6 +21,16 @@ export interface PaletteEnv {
   /** Best-effort copy of the current URL (already kept in sync with
    *  `selected` by Root.tsx's navigate effect) to the clipboard. */
   copyLink(): void;
+  /** Summon or dismiss a layer (panels/layerState.ts singleton).
+   *
+   *  These used to be `actions.toggleMinimap()` / `actions.toggleLegend()`
+   *  reducer transitions. V3 moved layer visibility out of the reducer — it is
+   *  ONE nullable id now, so exclusivity is structural — which makes toggling a
+   *  layer a side effect on a module singleton, exactly like `screenshot`. It
+   *  belongs in the env for the same reason those do: this module stays free of
+   *  imports from `panels/` (only the `LayerId` type crosses, erased at
+   *  compile time), so every command remains testable against a fake env. */
+  toggleLayer(id: LayerId): void;
 }
 
 export interface CommandItem {
@@ -45,8 +56,9 @@ const NEEDS_SELECTION = "Select a node first";
 /** The full command registry, in display order. Every store action named in
  *  the REP-13 brief (lenses, impact, focus + depth, coupling, audit, edge
  *  bundling, frame all, clean slate, tour, screenshot, copy link, and the
- *  minimap/legend/labels/drift toggles) has exactly one command that reaches
- *  it — asserted by `commands.test.ts`'s completeness check. */
+ *  labels/drift toggles) plus every V3 summoned layer (map, legend, filters,
+ *  help — through `env.toggleLayer`) has exactly one command that reaches it —
+ *  asserted by `commands.test.ts`'s completeness check. */
 export function buildCommandRegistry(): CommandItem[] {
   const lensCommands: CommandItem[] = LENS_ORDER.map((id, i) => ({
     id: `lens-${id}`,
@@ -167,19 +179,37 @@ export function buildCommandRegistry(): CommandItem[] {
     },
     {
       id: "toggle-minimap",
-      label: "Toggle minimap",
-      subtitle: "Show or hide the overview inset",
+      label: "Toggle map",
+      subtitle: "Overview of the clusters currently on screen",
+      kbd: "M",
       group: "commands",
       disabled: () => false,
-      run: (actions) => actions.toggleMinimap(),
+      run: (_actions, _state, env) => env.toggleLayer("minimap"),
     },
     {
       id: "toggle-legend",
       label: "Toggle legend",
-      subtitle: "Show or hide the color legend",
+      subtitle: "What every color and line weight means",
       group: "commands",
       disabled: () => false,
-      run: (actions) => actions.toggleLegend(),
+      run: (_actions, _state, env) => env.toggleLayer("legend"),
+    },
+    {
+      id: "toggle-filters",
+      label: "Toggle filters",
+      subtitle: "Symbol kinds, relationships, confidence, edge bundling",
+      group: "commands",
+      disabled: () => false,
+      run: (_actions, _state, env) => env.toggleLayer("filters"),
+    },
+    {
+      id: "toggle-help",
+      label: "Keyboard shortcuts",
+      subtitle: "The full keymap",
+      kbd: "?",
+      group: "commands",
+      disabled: () => false,
+      run: (_actions, _state, env) => env.toggleLayer("help"),
     },
     {
       id: "toggle-labels",

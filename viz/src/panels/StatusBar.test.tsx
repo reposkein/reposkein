@@ -76,8 +76,7 @@ function mockActions(): Actions {
     resetExpansion: vi.fn(),
     setBundleBeta: vi.fn(),
     setIdleDrift: vi.fn(),
-    toggleMinimap: vi.fn(),
-    toggleLegend: vi.fn(),
+    retryLoad: vi.fn(),
     toggleLabels: vi.fn(),
     hover: vi.fn(),
     setEdgeStats: vi.fn(),
@@ -360,7 +359,12 @@ describe("StatusBar — responsive degradation (fix round 1, #2)", () => {
     // Every control is still present in the DOM (reachable — worst case via
     // the footer's own horizontal scroll), none of them removed for width.
     expect(screen.getByTitle("Switch lens")).toBeTruthy();
-    expect(screen.getByTitle("Hide minimap")).toBeTruthy(); // default state has it shown
+    // Every summoned-layer pill is present (V3 replaced the minimap/legend
+    // booleans with the layerState singleton, and added Filters + ?).
+    expect(screen.getByText("Map")).toBeTruthy();
+    expect(screen.getByText("Legend")).toBeTruthy();
+    expect(screen.getByText("Filters")).toBeTruthy();
+    expect(screen.getByText("?")).toBeTruthy();
     expect(screen.getByTitle("Capture a PNG screenshot of the current view")).toBeTruthy();
     expect(screen.getByTitle("Frame all — refit the camera to what's currently on screen")).toBeTruthy();
   });

@@ -10,7 +10,9 @@ import {
   type ReactNode,
 } from "react";
 import { useStore } from "../state/store";
-import { setCommandPaletteOpen } from "./paletteOpenState";
+import { registerPaletteOpener, setCommandPaletteOpen } from "./paletteOpenState";
+import { toggleLayer } from "./layerState";
+import { pushToast } from "./toastState";
 import { buildCommandRegistry, pushRecent, type CommandItem, type RecentEntry } from "../state/commands";
 import { rankSearch, searchBucket, type SearchBucket } from "../data/search";
 import { buildMinConfidenceIndex, nodeConfidence } from "../data/nodeConfidence";
@@ -59,15 +61,22 @@ function isRowDisabled(row: Row): boolean {
   return row.kind === "command" && row.disabled;
 }
 
-/** ⌘K / Ctrl+K command palette (REP-13). Ships BESIDE the existing
- *  SearchPanel/panels — this component owns its own open state, its own
- *  global hotkey listener, and its own query — nothing here reaches into the
- *  reducer until a row is actually executed. That's the whole perf contract:
- *  every keystroke is a LOCAL setState, so it re-renders only this
- *  component's own subtree, never the R3F scene consumers living inside
- *  <Canvas> (see the "perf (keystrokes stay local, never dispatch)" describe
- *  block in `CommandPalette.test.tsx` for a spy-based proof — no store action
- *  fires while typing or arrow-key traversing).
+/** ⌘K / Ctrl+K / `/` command palette (REP-13, extended in Astrolabe V3). It
+ *  owns its own open state, its own global hotkey listener, and its own query —
+ *  nothing here reaches into the reducer until a row is actually executed.
+ *  That's the whole perf contract: every keystroke is a LOCAL setState, so it
+ *  re-renders only this component's own subtree, never the R3F scene consumers
+ *  living inside <Canvas> (see the "perf (keystrokes stay local, never
+ *  dispatch)" describe block in `CommandPalette.test.tsx` for a spy-based proof
+ *  — no store action fires while typing or arrow-key traversing).
+ *
+ *  V3: the standalone SearchPanel is gone and this palette absorbed it. `/` now
+ *  summons the palette (via `registerPaletteOpener` — Root's key handler used to
+ *  focus the retired search input by DOM id), which is why the placeholder reads
+ *  "Search or type > for commands". Nothing was lost in that migration: the
+ *  palette ranks with the same `rankSearch` over the same records, keeps the
+ *  same 2-character floor, and additionally groups by symbol/file/directory,
+ *  shows confidence badges, and offers ⌘↵ reveal-without-flying.
  *
  *  Skeleton informed by the licensed React Bits Pro `command-menu-1` App UI
  *  block (Ultimate tier — REACTBITS_LICENSE_KEY is configured): its listbox
@@ -121,9 +130,15 @@ export function CommandPalette() {
   // test teardown), don't leave the singleton stuck reporting "open" forever.
   useEffect(() => () => setCommandPaletteOpen(false), []);
 
-  // Global ⌘K / Ctrl+K — works regardless of what currently has focus
-  // (including the old SearchPanel's input), independent of Root.tsx's own
-  // keydown effect (which leaves '/' bound to the old search this phase).
+  // Publish the imperative opener so Root's `/` binding can summon the palette
+  // without the palette's open state having to live in the reducer.
+  useEffect(() => {
+    registerPaletteOpener(openPalette);
+    return () => registerPaletteOpener(null);
+  }, [openPalette]);
+
+  // Global ⌘K / Ctrl+K — works regardless of what currently has focus,
+  // independent of Root.tsx's own keydown effect (which owns `/`).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -231,14 +246,23 @@ export function CommandPalette() {
 
   const env = useMemo(
     () => ({
-      screenshot: () => captureScreenshot(),
+      screenshot: () => {
+        captureScreenshot();
+        // The capture itself is fire-and-forget inside the scene (a canvas
+        // toBlob + anchor click), so there is no promise to await — the toast
+        // reports that the download was STARTED, which is the honest claim.
+        pushToast("Screenshot saved", { tone: "accent", dedupeKey: "screenshot" });
+      },
       copyLink: () => {
         try {
           void navigator.clipboard?.writeText(window.location.href);
+          pushToast("Link copied", { tone: "accent", dedupeKey: "copy-link" });
         } catch {
           /* best-effort — clipboard permission or API absence is not fatal. */
+          pushToast("Couldn't copy the link", { tone: "warn", dedupeKey: "copy-link" });
         }
       },
+      toggleLayer,
     }),
     [],
   );

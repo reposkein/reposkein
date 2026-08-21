@@ -193,3 +193,21 @@ export const NODE_KIND_META: { kind: string; color: string; label: string }[] = 
   { kind: "Enum",      color: "#7ce08a", label: "Enum" },
   { kind: "Variable",  color: "#9aa0a8", label: "Variable" },
 ];
+
+/** The three STRUCTURAL entries of NODE_KIND_META (cluster representatives, not
+ *  symbols). Named here so the filters layer can derive "symbol kinds only"
+ *  from the same table instead of re-listing hues (the retired FilterHUD carried
+ *  its own hard-coded One-Dark palette, which is exactly the drift this table
+ *  exists to prevent). */
+export const STRUCTURAL_KINDS: readonly string[] = ["galaxy", "dir", "file"];
+
+/** NODE_KIND_META minus the structural rows: the symbol kinds a viewer can
+ *  filter on. `filterKey` is the LOWER-CASE form the reducer's
+ *  `filters.kinds` set stores (see scene/StarField.tsx, which compares
+ *  `symbolKind.toLowerCase()`). */
+export const SYMBOL_KIND_META: { kind: string; filterKey: string; color: string; label: string }[] =
+  NODE_KIND_META.filter((m) => !STRUCTURAL_KINDS.includes(m.kind)).map((m) => ({
+    ...m,
+    filterKey: m.kind.toLowerCase(),
+  }));
+
