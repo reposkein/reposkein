@@ -657,6 +657,88 @@ describe("serve --http — a read-only token never triggers an index build", () 
   });
 });
 
+describe("serve --http — a failure during initialize must not leak a session slot", () => {
+  let root: string;
+  let app: ServeApp;
+  let server: Server;
+  let base: string;
+  let clock = 1_000_000;
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), "reposkein-serve-initthrow-"));
+    writeRepo(root, REPO_ID);
+    app = createServeApp({
+      repoPath: root,
+      repoId: REPO_ID,
+      tokens: TOKENS,
+      maxSessions: 2,
+      idleMs: 60_000,
+      now: () => clock,
+      // The SDK `await`s onsessioninitialized WITHOUT guarding it, and our
+      // callback logs immediately AFTER registering the session with
+      // inFlight:1 — so a throwing logger is the closest reachable analogue of
+      // "everything after registration unwinds".
+      //
+      // Honest caveat: with SDK 1.30 this does NOT make `handleRequest`
+      // reject, because the Node wrapper runs the transport inside
+      // @hono/node-server's request listener, which catches and answers 500
+      // itself. So this asserts the INVARIANT (a failed initialize never
+      // leaves an unreleasable slot) rather than discriminating the
+      // finally-vs-inline diff. See the `finally` comment in serve.ts.
+      log: (m) => {
+        if (m.includes("mcp session opened")) throw new Error("simulated post-registration failure");
+      },
+    });
+    ({ server, base } = await listen(app.handler));
+  });
+  afterAll(async () => {
+    await app.close();
+    await close(server);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("leaves no session pinned in flight, and the slots stay reusable", async () => {
+    const res = await fetch(base + MCP_PATH, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${READ_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "t", version: "0" },
+        },
+      }),
+    });
+    // However the failure surfaces to the client, the server must not be left
+    // holding an unreleasable slot.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+
+    // Either the session never survived registration, or it did and its
+    // in-flight claim was released — in which case the reaper collects it.
+    clock += 120_000;
+    app.sweepIdleSessions();
+    expect(app.sessionCount()).toBe(0);
+
+    // The slot is genuinely reusable: both of maxSessions can still be filled,
+    // which also proves the reserved slot was released.
+    const a = await connect(base, READ_TOKEN).catch(() => null);
+    const b = await connect(base, READ_TOKEN).catch(() => null);
+    try {
+      expect(app.sessionCount()).toBe(2);
+    } finally {
+      await a?.close().catch(() => undefined);
+      await b?.close().catch(() => undefined);
+    }
+  });
+});
+
 describe("serve --http — /api/* parity with `view`", () => {  let root: string;
   let app: ServeApp;
   let serveServer: Server;

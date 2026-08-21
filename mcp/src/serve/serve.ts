@@ -409,6 +409,14 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
     }
     // Reserved synchronously, in the same tick as the check above.
     reservedSlots++;
+    // Set by `onsessioninitialized` the moment the session is registered with
+    // `inFlight: 1` (this request). Held out here, not read back off the
+    // transport, so the `finally` can release the count on EVERY exit path.
+    // If anything after registration throws — the SDK `await`s our callback
+    // and does not guard it, and the response write can fail — an inline
+    // decrement is skipped, and a session stuck at `inFlight: 1` is one the
+    // reaper will never touch: a slot leaked until restart.
+    let registeredId: string | undefined;
 
     try {
       // A NEW connection: its own McpServer, its own RepoSession. Nothing in
@@ -432,6 +440,7 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
         // instant) on a long-running shared process.
         enableJsonResponse: true,
         onsessioninitialized: (id: string) => {
+          registeredId = id;
           sessions.set(id, {
             transport,
             server,
@@ -455,12 +464,22 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
       };
       await server.connect(transport);
       await transport.handleRequest(req, res, body.value);
-      const id = transport.sessionId;
-      if (id) {
-        const created = sessions.get(id);
+    } finally {
+      // Mirrors the existing-session branch: this request's own `inFlight`
+      // claim is released HERE, not inline after `handleRequest`, so no exit
+      // path can skip it.
+      //
+      // Defense in depth as of SDK 1.30: the Node wrapper runs the transport
+      // inside `@hono/node-server`'s request listener, which catches handler
+      // errors and answers 500 itself — so a throw after registration does not
+      // currently reject `handleRequest`. That is a library implementation
+      // detail we don't control, and it is the only thing that was keeping an
+      // inline decrement correct. Structurally, nothing may sit between the
+      // request completing and the claim being released.
+      if (registeredId !== undefined) {
+        const created = sessions.get(registeredId);
         if (created) created.inFlight--;
       }
-    } finally {
       reservedSlots--;
     }
   }
