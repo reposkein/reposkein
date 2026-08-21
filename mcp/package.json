@@ -54,12 +54,13 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "neo4j-driver": "^6.1.0",
+    "undici": "^8.10.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vitest": "^4.1.9",
     "@types/node": "^24.0.0",
-    "tsx": "^4.0.0"
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.9"
   }
 }
