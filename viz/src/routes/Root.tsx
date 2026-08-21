@@ -81,7 +81,7 @@ function View() {
    *  incoming params from live `search` would mean the write-back clears them
    *  first and the restore then finds nothing to do. Snapshotting on first
    *  render is what makes a cold deep link survive its own round trip. */
-  const initialView = useRef(parseViewSearch(search)).current;
+  const [initialView] = useState(() => parseViewSearch(search));
   /** Set once the initial view has been applied (or found to be empty). Until
    *  then the write-back holds off, for the reason above. */
   const restored = useRef(isDefaultView(initialView));
