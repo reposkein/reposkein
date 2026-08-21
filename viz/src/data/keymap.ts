@@ -41,7 +41,7 @@ export const KEYMAP: KeymapGroup[] = [
       { keys: ["←", "→", "↑", "↓"], description: "Hop to the next / previous neighbor", binding: null },
       { keys: ["Tab", "⇧Tab"], description: "Hop neighbors (same as the arrows)", binding: "Tab" },
       { keys: ["f"], description: "Frame all — refit the camera to what's on screen", binding: "f" },
-      { keys: ["Esc"], description: "Back out one level: overlay → layer → mode → expansion", binding: "Escape" },
+      { keys: ["Esc"], description: "Back out one step: palette → layer → mode → selection", binding: "Escape" },
     ],
   },
   {

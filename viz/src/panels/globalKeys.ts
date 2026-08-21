@@ -25,6 +25,17 @@ export interface GlobalKeyEnv {
   openPalette(): void;
   /** Summon or dismiss a layer (panels/layerState.toggleLayer). */
   toggleLayer(id: LayerId): void;
+  /** Is the ⌘K palette on screen (panels/paletteOpenState.isCommandPaletteOpen)?
+   *
+   *  The palette is MODAL, and it is the top of the Esc stack — but unlike the
+   *  summoned layers and the status bar's chip handler, it cannot announce that
+   *  by consuming the event: its Esc lives in a React `onKeyDown` on the dialog,
+   *  and a synthetic event bubbles all the way to the window listener that calls
+   *  this function. Through V3 that meant closing the palette with Esc ALSO ran
+   *  the global Esc step (then: collapse a level — so dismissing the palette
+   *  silently rearranged the scene). Asking the singleton is what makes "the
+   *  palette wins" true rather than aspirational. */
+  paletteOpen(): boolean;
 }
 
 /** Spread onto any widget that binds Arrow / Home / End / Tab FOR ITSELF, to
@@ -80,10 +91,19 @@ function inKeyScope(e: GlobalKeyEventLike): boolean {
 
 /** Handles one keydown. Returns true when the key was consumed.
  *
- *  Escape is the LAST resort in the Esc stack (palette > tour > layer > chip >
- *  here): every surface above consumes the event with
+ *  Escape is the LAST resort in the Esc stack (palette > tour > summoned layer >
+ *  topmost mode chip > here): every surface above consumes the event with
  *  `stopImmediatePropagation`, so reaching this function means nothing was open
- *  and Esc should back out one level of expansion. */
+ *  and Esc should clear the selection.
+ *
+ *  ESC NEVER COLLAPSES (Astrolabe V4 §1). V3's final step was
+ *  `collapseLevel()` — shut the globally-deepest expanded cluster — which made
+ *  Esc a destructive, non-obvious edit to the scene at the exact moment the
+ *  reader was trying to back out of something. The final step is now DESELECT,
+ *  and when there is nothing selected either, Esc does nothing at all: the
+ *  bottom of a back-out stack should be a no-op, not a surprise. LOD collapse
+ *  is reachable only through `x` / `⇧x`, a breadcrumb click, or a cluster
+ *  click — all three of which name what they are about to close. */
 export function handleGlobalKey(
   e: GlobalKeyEventLike,
   state: State,
@@ -92,12 +112,16 @@ export function handleGlobalKey(
 ): boolean {
   // The guided tour owns the keyboard while it runs (its own handler exits it).
   if (state.tour) return false;
+  // The palette is modal AND cannot consume the event itself — see
+  // `GlobalKeyEnv.paletteOpen`. Nothing global fires behind it.
+  if (env.paletteOpen()) return false;
 
   const typing = isTyping(e);
 
   if (e.key === "Escape") {
     if (typing) return false;
-    actions.collapseLevel();
+    if (!state.selected) return false; // bottom of the stack: a genuine no-op
+    actions.select(null);
     return true;
   }
   if (typing) return false;

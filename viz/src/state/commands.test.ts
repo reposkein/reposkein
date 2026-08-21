@@ -12,7 +12,6 @@ import type { RawGraph } from "../data/types";
 function mockActions(): Actions & Record<keyof Actions, ReturnType<typeof vi.fn>> {
   return {
     toggleExpand: vi.fn(),
-    collapseLevel: vi.fn(),
     collapseBranch: vi.fn(),
     collapseToFileLevel: vi.fn(),
     select: vi.fn(),

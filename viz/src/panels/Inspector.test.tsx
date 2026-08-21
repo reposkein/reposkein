@@ -42,7 +42,6 @@ afterEach(cleanup);
 function mockActions(): Actions {
   return {
     toggleExpand: vi.fn(),
-    collapseLevel: vi.fn(),
     collapseBranch: vi.fn(),
     collapseToFileLevel: vi.fn(),
     select: vi.fn(),
@@ -457,7 +456,10 @@ describe("Inspector — opaque, not blurred (V3 §6)", () => {
  *  wired the way `routes/Root.tsx` wires it, and asserts the two coexist. */
 describe("Inspector + Root's global keys mounted together (the seam)", () => {
   /** Exactly what Root's effect installs. */
-  function mountGlobalKeys(store: Store, env = { openPalette: vi.fn(), toggleLayer: vi.fn() }) {
+  function mountGlobalKeys(
+    store: Store,
+    env = { openPalette: vi.fn(), toggleLayer: vi.fn(), paletteOpen: () => false },
+  ) {
     const onKey = (e: KeyboardEvent) => handleGlobalKey(e, store, store, env);
     window.addEventListener("keydown", onKey);
     return {

@@ -24,7 +24,7 @@ import { ModeToasts } from "../panels/ModeToasts";
 import { LoadingScreen } from "../panels/LoadingScreen";
 import { ErrorScreen } from "../panels/ErrorScreen";
 import { toggleLayer } from "../panels/layerState";
-import { requestCommandPalette } from "../panels/paletteOpenState";
+import { isCommandPaletteOpen, requestCommandPalette } from "../panels/paletteOpenState";
 import { handleGlobalKey } from "../panels/globalKeys";
 import { handlePointerMissed } from "../scene/pointerMissed";
 import { resolveNodeFallback } from "../data/nodeFallback";
@@ -50,7 +50,11 @@ function View() {
   // renders, can be diffed against them. This effect is just the listener.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) =>
-      handleGlobalKey(e, store, store, { openPalette: requestCommandPalette, toggleLayer });
+      handleGlobalKey(e, store, store, {
+        openPalette: requestCommandPalette,
+        toggleLayer,
+        paletteOpen: isCommandPaletteOpen,
+      });
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [store]);

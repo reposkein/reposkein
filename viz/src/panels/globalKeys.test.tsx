@@ -39,7 +39,6 @@ afterEach(() => {
 function mockActions(): Actions {
   return {
     toggleExpand: vi.fn(),
-    collapseLevel: vi.fn(),
     collapseBranch: vi.fn(),
     collapseToFileLevel: vi.fn(),
     select: vi.fn(),
@@ -72,7 +71,7 @@ function mockActions(): Actions {
 }
 
 function mockEnv(): GlobalKeyEnv & Record<keyof GlobalKeyEnv, ReturnType<typeof vi.fn>> {
-  return { openPalette: vi.fn(), toggleLayer: vi.fn() };
+  return { openPalette: vi.fn(), toggleLayer: vi.fn(), paletteOpen: vi.fn(() => false) };
 }
 
 const SEL = "rs1:r:sym:a.ts#run@0";
@@ -156,6 +155,25 @@ describe("handleGlobalKey — '/' summons the palette", () => {
   });
 });
 
+/** The palette is modal AND cannot consume the event itself (its Esc is a React
+ *  handler on the dialog, so the synthetic event bubbles all the way to the
+ *  window listener). Through V3 that meant Esc-to-close-the-palette also ran
+ *  the global Esc step — then a collapse — so dismissing the palette silently
+ *  rearranged the scene. */
+describe("handleGlobalKey — nothing global fires behind an open palette", () => {
+  it("declines every binding, Escape included", () => {
+    const state = stateWith({ model: tinyModel(), selected: SEL });
+    for (const k of ["Escape", "x", "X", "f", "m", "?", "/", "ArrowRight"]) {
+      const actions = mockActions();
+      const env = { ...mockEnv(), paletteOpen: vi.fn(() => true) };
+      expect(handleGlobalKey(key(k), state, actions, env), `leaked: ${k}`).toBe(false);
+      for (const fn of Object.values(actions)) expect(fn).not.toHaveBeenCalled();
+      expect(env.openPalette).not.toHaveBeenCalled();
+      expect(env.toggleLayer).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("handleGlobalKey — layer shortcuts", () => {
   it("'?' toggles the help layer", () => {
     const env = mockEnv();
@@ -191,17 +209,31 @@ describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
     expect(actions.resetView).toHaveBeenCalledOnce();
   });
 
-  it("Esc collapses one level — the last resort in the Esc stack", () => {
+  it("Esc DESELECTS — the last resort in the Esc stack (V4 §1: it never collapses)", () => {
     const actions = mockActions();
-    expect(handleGlobalKey(key("Escape"), stateWith(), actions, mockEnv())).toBe(true);
-    expect(actions.collapseLevel).toHaveBeenCalledOnce();
+    const state = stateWith({ model: tinyModel(), selected: SEL });
+    expect(handleGlobalKey(key("Escape"), state, actions, mockEnv())).toBe(true);
+    expect(actions.select).toHaveBeenCalledExactlyOnceWith(null);
+    // V3 called collapseLevel() here, which silently rearranged the scene at
+    // the exact moment the reader was trying to back out of something.
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+    expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
+    expect(actions.resetView).not.toHaveBeenCalled();
+  });
+
+  it("Esc with nothing selected is a genuine no-op, NOT consumed", () => {
+    const actions = mockActions();
+    const state = stateWith({ model: tinyModel(), selected: null });
+    expect(handleGlobalKey(key("Escape"), state, actions, mockEnv())).toBe(false);
+    expect(actions.select).not.toHaveBeenCalled();
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
   });
 
   it("Esc is left alone while typing (the field's own handler owns it)", () => {
     const actions = mockActions();
     const e = key("Escape", { target: { tagName: "INPUT" } });
-    expect(handleGlobalKey(e, stateWith(), actions, mockEnv())).toBe(false);
-    expect(actions.collapseLevel).not.toHaveBeenCalled();
+    expect(handleGlobalKey(e, stateWith({ selected: SEL }), actions, mockEnv())).toBe(false);
+    expect(actions.select).not.toHaveBeenCalled();
   });
 
   it("arrows and Tab hop to a neighbor, forwards and backwards", () => {

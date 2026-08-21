@@ -121,7 +121,6 @@ export type Action =
   | { t: "ready"; model: ClientModel }
   | { t: "error"; message: string }
   | { t: "toggleExpand"; key: string }
-  | { t: "collapseLevel" }
   | { t: "collapseBranch" }
   | { t: "collapseToFileLevel" }
   | { t: "select"; id: string | null }
@@ -149,8 +148,9 @@ export type Action =
   | { t: "retryLoad" }
   | { t: "toggleLabels" };
 
-/** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
- *  shut the deepest-expanded branch first ("one level up"). */
+/** Depth of a cluster key in the tree (root galaxy = 0). Lets
+ *  `revealAndSelect`'s `collapseDeeper` tell "below the target" from "at or
+ *  above it" when a breadcrumb crumb walks back up. */
 function depthOf(model: ClientModel, key: string): number {
   return (model.ancestors.get(key)?.length ?? 1) - 1;
 }
@@ -254,29 +254,6 @@ export function reducer(state: State, a: Action): State {
       if (expanded.has(a.key)) expanded.delete(a.key);
       else expanded.add(a.key);
       return { ...state, expanded, fitNonce: state.fitNonce + 1 };
-    }
-    case "collapseLevel": {
-      if (!state.model || state.expanded.size === 0) return state;
-      // Collapse the deepest currently-expanded cluster, but never the root
-      // galaxy (keeps the constellation framed).
-      let deepest: string | null = null;
-      let deepestDepth = -1;
-      for (const key of state.expanded) {
-        if (key === state.model.rootKey) continue;
-        const d = depthOf(state.model, key);
-        if (d > deepestDepth) {
-          deepestDepth = d;
-          deepest = key;
-        }
-      }
-      if (deepest === null) {
-        // Nothing but the root expanded: just clear selection.
-        if (state.selected === null) return state;
-        return { ...state, selected: null, fitNonce: state.fitNonce + 1 };
-      }
-      const expanded = new Set(state.expanded);
-      expanded.delete(deepest);
-      return { ...state, expanded, selected: null, fitNonce: state.fitNonce + 1 };
     }
     /** `x` — SCOPED collapse (Astrolabe V4 §2). Closes the deepest expanded
      *  STRICT ancestor of the selection: a selected symbol closes its file, a
@@ -569,7 +546,6 @@ export function reducer(state: State, a: Action): State {
  *  component that merely dispatches never re-renders when state changes. */
 export interface Actions {
   toggleExpand(key: string): void;
-  collapseLevel(): void;
   /** `x` — close the deepest expanded cluster ABOVE the selection (symbol →
    *  its file, file → its directory). Scoped: nothing else in the tree moves. */
   collapseBranch(): void;
@@ -723,7 +699,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const actions = useMemo<Actions>(
     () => ({
       toggleExpand: (key) => dispatch({ t: "toggleExpand", key }),
-      collapseLevel: () => dispatch({ t: "collapseLevel" }),
       collapseBranch: () => dispatch({ t: "collapseBranch" }),
       collapseToFileLevel: () => dispatch({ t: "collapseToFileLevel" }),
       select: (id) => dispatch({ t: "select", id }),

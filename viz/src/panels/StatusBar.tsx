@@ -89,9 +89,9 @@ function useViewportWidth(): number {
  *  chip), then the guided tour (it owns Esc while active — see
  *  TourController), then an open summoned layer (LayerShell consumes it), and
  *  only THEN does a topmost mode chip get dismissed.
- *  When nothing above is open and no chip is active, the event is left alone
- *  so Root's collapse-level Esc binding still runs — unchanged behavior for
- *  the common case. */
+ *  When nothing above is open and no chip is active, the event is left alone so
+ *  the global handler's final step — DESELECT (V4 §1) — still runs. Esc never
+ *  collapses LOD anywhere any more; that is `x` / `⇧x`. */
 export function StatusBar() {
   const store = useStore();
   const model = store.model;
@@ -142,7 +142,7 @@ export function StatusBar() {
       if (storeRef.current.tour) return; // the guided tour owns Esc while active
       if (openLayer() !== null) return; // a summoned layer consumes Esc first (LayerShell)
       const topmost = chipsRef.current[0];
-      if (!topmost) return; // nothing to dismiss — let collapseLevel run as before
+      if (!topmost) return; // nothing to dismiss — let the global deselect run
       e.preventDefault();
       e.stopImmediatePropagation();
       dismissModeChip(topmost.kind, storeRef.current);
