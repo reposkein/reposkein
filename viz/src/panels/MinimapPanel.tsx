@@ -108,7 +108,8 @@ export function MinimapPanel() {
       style={{
         position: "absolute",
         left: 12,
-        bottom: 12,
+        // Clears the 28px persistent status bar (REP-18) + a matching gap.
+        bottom: 40,
         background: "rgba(8,11,22,0.78)",
         border: "1px solid rgba(90,120,180,0.30)",
         borderRadius: 8,

@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from "react";
 import { useStore } from "../state/store";
 import { rankSearch, fieldLabel } from "../data/search";
 
-/** Search panel (top area, next to HeaderBar). DETERMINISTIC ranked search
+/** Search panel (top area, standalone since REP-18's status bar retired
+ *  HeaderBar). DETERMINISTIC ranked search
  *  (weighted-field scoring over name / qualified_name / file_path /
  *  semantic_summary). Results are ordered by relevance and show the matched
  *  field. Clicking a result expands its ancestor chain, selects it, and flies

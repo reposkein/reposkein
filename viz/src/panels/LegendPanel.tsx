@@ -26,7 +26,8 @@ export function LegendPanel() {
     <div
       style={{
         position: "fixed",
-        bottom: 12,
+        // Clears the 28px persistent status bar (REP-18) + a matching gap.
+        bottom: 40,
         left: 12,
         background: "rgba(20,22,28,0.88)",
         borderRadius: 8,

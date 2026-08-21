@@ -219,11 +219,12 @@ export function TourController() {
         </div>
       </div>
 
-      {/* Transport controls — bottom-center, below the caption. */}
+      {/* Transport controls — bottom-center, below the caption. Clears the
+          28px persistent status bar (REP-18) + a matching gap. */}
       <div
         style={{
           position: "fixed",
-          bottom: 26,
+          bottom: 40,
           left: "50%",
           transform: "translateX(-50%)",
           display: "flex",

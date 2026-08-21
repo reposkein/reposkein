@@ -54,7 +54,7 @@ describe("store context split", () => {
       counts.hover = useRenderCount().current;
       return <span data-testid="hovered">{hovered ?? "-"}</span>;
     }
-    /** Stands in for the HeaderBar's "showing N of M" readout. */
+    /** Stands in for the status bar's "showing N of M" readout (REP-18). */
     function StatsConsumer() {
       const { drawn, total } = useEdgeStats();
       counts.stats = useRenderCount().current;
