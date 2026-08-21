@@ -129,9 +129,13 @@ origin (hash-history routing handles any subpath).
 ## Sponsorship & support
 
 RepoSkein's hosted-constellation infra and indexer maintenance are funded in
-part by [Ko-fi](https://ko-fi.com/mongx) support. A viewer sponsorship slot
-is planned (tracked as REP-28) but not yet implemented; the placement policy
-is already decided (ADR `adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`):
+part by [Ko-fi](https://ko-fi.com/mongx) support. REP-28 implemented the
+sponsorship mechanism (opt-in, disclosed, fail-open) as a slot on an MCP
+tool-result envelope — see [`SPONSORSHIP.md`](./SPONSORSHIP.md) for the gating
+chain, exactly what leaves the machine, and why it ships **off and unratified
+for that surface**. The viewer chip below is still the only placement the
+decision record authorizes (ADR
+`adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`):
 
 - **Viewer chrome only.** A single disclosed `sponsored` chip may appear in
   the viewer's chrome — never over the 3D canvas, never inside Inspector
@@ -150,6 +154,8 @@ See the ADR (`.reposkein/decisions/`, or `reposkein-mcp adr export`) for the
 full rationale and the cross-cutting data-handling constraints (no sponsored
 data in `.reposkein/` artifacts, fixed-schema length-capped payloads, an
 immutable disclosure label).
+
+Opting out, on any surface, is one variable: `REPOSKEIN_ADS=off`.
 
 ---
 

@@ -47,3 +47,10 @@ opencode.json
 
 # Dependency dirs (mcp/ has its own; a stray npx/vitest run can create one at root).
 node_modules/
+
+# Local credentials. Sponsorship (docs/SPONSORSHIP.md) and embedding providers
+# read plain env vars; `.env.example` documents the names, a real `.env` never
+# lands in git.
+.env
+.env.*
+!.env.example

@@ -38,6 +38,46 @@ export function readConfigString(repoPath: string, section: string, key: string)
   return null;
 }
 
+/** Reads one boolean `key = true|false` from one `[section]` of
+ *  `.reposkein/config.toml`, or null when the file/section/key is absent or
+ *  the value is neither.
+ *
+ *  Mirrors `config_bool` in indexer/crates/cli/src/main.rs (bare TOML
+ *  booleans), and additionally accepts a QUOTED "true"/"false" because
+ *  `readConfigString` is what a hand-editor sees documented elsewhere in
+ *  this file — a setting that reads as on in one scanner and off in the
+ *  other would be the worst possible failure mode for an opt-in switch. */
+export function readConfigBool(repoPath: string, section: string, key: string): boolean | null {
+  const path = join(repoPath, ".reposkein", "config.toml");
+  if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  const header = `[${section}]`;
+  let inSection = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    if (line.startsWith("[")) {
+      inSection = line === header;
+      continue;
+    }
+    if (!inSection) continue;
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    if (line.slice(0, eq).trim() !== key) continue;
+    const raw = line.slice(eq + 1).split("#")[0]!.trim();
+    const unquoted = raw.replace(/^["']|["']$/g, "");
+    if (unquoted === "true") return true;
+    if (unquoted === "false") return false;
+    return null;
+  }
+  return null;
+}
+
 /** Reads `pages_url` from the `[team]` section of `.reposkein/config.toml`,
  *  or null when the file/section/key is absent (the common case — this is
  *  an opt-in field a team adds after publishing a hosted constellation, see
