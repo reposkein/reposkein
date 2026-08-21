@@ -4,7 +4,7 @@
 
 # @reposkein/mcp
 
-**Give your AI coding agent a map of your codebase — instead of letting it grep and guess.**
+**RepoSkein gives your AI coding agent a map of your codebase — so it navigates structure instead of grepping and guessing.**
 
 [![npm](https://img.shields.io/npm/v/@reposkein/mcp?style=for-the-badge&logo=npm&logoColor=EAE7DC&label=npm&labelColor=070A12&color=F2B84B)](https://www.npmjs.com/package/@reposkein/mcp)
 [![downloads](https://img.shields.io/npm/dm/@reposkein/mcp?style=for-the-badge&label=downloads&labelColor=070A12&color=2DD4BF)](https://www.npmjs.com/package/@reposkein/mcp)

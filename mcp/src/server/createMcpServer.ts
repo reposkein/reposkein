@@ -434,7 +434,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
     {
       title: "Write semantic summary",
       description: describe(
-        "Attach a 1-3 sentence plain-text business-logic summary to a node, stamped with its current content hash for staleness tracking. Plain text only (no markdown links or code fences), max 1000 chars.",
+        "Attach a 1-3 sentence plain-text summary of a node's business logic, so later agents/teammates start from what you learned instead of re-deriving it. Input: node_id and summary (plain text only, no markdown links or code fences, max 1000 chars), plus optional model. Stamps the node's current content hash for staleness tracking and returns { ok, stale_replaced }. Use after get_context_profile/impact reveal what a node actually does.",
         "write_semantic_summary"
       ),
       inputSchema: {
@@ -475,7 +475,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
     {
       title: "Reindex after editing",
       description: describe(
-        "Refresh the graph after editing a source file (pass its path). v1 performs a full reindex.",
+        "Refresh the graph after editing a source file. Input: the file's path (relative to the repo root). Runs a full reindex (v1) and returns updated node/edge/file counts. Call this before get_context_profile, impact, or semantic_find so they see your edit, not the stale graph.",
         "reindex_file"
       ),
       inputSchema: { path: z.string() },
