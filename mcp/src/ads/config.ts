@@ -36,6 +36,7 @@ export const AD_ELIGIBLE_TOOLS: readonly string[] = ["get_context_profile"];
 export type AdsOffReason =
   | "kill_switch"
   | "not_opted_in"
+  | "config_not_confirmed"
   | "no_credentials"
   | "supporter"
   | "bad_base_url";
@@ -68,9 +69,14 @@ export interface ResolveAdsOptions {
  *   1. `REPOSKEIN_ADS=off` — an unconditional kill switch that outranks
  *      config, credentials, everything. Checked first so "off" can never be
  *      overridden by a repo's committed config.
- *   2. Opt-in — `[ads] enabled = true` in `.reposkein/config.toml` OR
- *      `REPOSKEIN_ADS=on`. Absent both, ads are off. This is the default for
- *      every install: off.
+ *   2. Opt-in — `REPOSKEIN_ADS=on` in the ENVIRONMENT. A repo's
+ *      `[ads] enabled = true` declares the repo's willingness, but is not
+ *      sufficient on its own: config.toml is committed and travels with a
+ *      clone, so honouring it alone would let whoever wrote it opt in every
+ *      person who later checks the repo out. The environment is the only
+ *      place the operator running THIS process can speak for themselves, so
+ *      it must confirm. Absent the env switch, ads are off — which is the
+ *      default for every install.
  *   3. Credentials — `LULU_ADS_PUBLISHER_ID` + `LULU_ADS_API_KEY`, env only,
  *      never config, never argv, never logged. Absent either, the integration
  *      is inert: no network call is even attempted.
@@ -87,10 +93,12 @@ export function resolveAdsVerdict(opts: ResolveAdsOptions = {}): AdsVerdict {
   }
 
   const envOptIn = switchValue === "on" || switchValue === "1" || switchValue === "true";
-  const readOptIn = opts.readOptIn ?? ((p: string) => readConfigBool(p, "ads", "enabled"));
-  const configOptIn = opts.repoPath ? readOptIn(opts.repoPath) === true : false;
-  if (!envOptIn && !configOptIn) {
-    return { enabled: false, reason: "not_opted_in" };
+  if (!envOptIn) {
+    // Distinguish "a repo asked, the operator hasn't confirmed" from "nobody
+    // asked at all" — the first is a state an operator may want to notice.
+    const readOptIn = opts.readOptIn ?? ((p: string) => readConfigBool(p, "ads", "enabled"));
+    const configAsked = opts.repoPath ? readOptIn(opts.repoPath) === true : false;
+    return { enabled: false, reason: configAsked ? "config_not_confirmed" : "not_opted_in" };
   }
 
   const publisherId = (env.LULU_ADS_PUBLISHER_ID ?? "").trim();
@@ -108,7 +116,16 @@ export function resolveAdsVerdict(opts: ResolveAdsOptions = {}): AdsVerdict {
   let host: string;
   try {
     const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "https:" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
+    // Plaintext is refused for any REMOTE host: an ad request carries the
+    // publisher's API key, and the click URL comes back over the same
+    // connection, so http:// off-machine would hand both to anyone on the
+    // path. Loopback is the one exception, and only because it cannot leave
+    // the machine: it exists so a test or a local mock ad server can be
+    // pointed at without inventing TLS for it. Note the click-host allowlist
+    // is derived from this host, so a loopback base URL also means click URLs
+    // must point at loopback — a mock cannot smuggle in a real destination.
+    const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "[::1]";
+    if (parsed.protocol !== "https:" && !loopback) {
       return { enabled: false, reason: "bad_base_url" };
     }
     host = parsed.hostname;

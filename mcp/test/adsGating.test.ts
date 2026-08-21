@@ -93,36 +93,57 @@ describe("ads gating chain — the kill switch outranks everything", () => {
   });
 });
 
-describe("ads gating chain — config.toml opt-in", () => {
-  it("[ads] enabled = true (bare TOML boolean) opts in", () => {
+describe("ads gating chain — config.toml declares, the environment confirms", () => {
+  it("[ads] enabled = true alone does NOT opt in (config travels with a clone)", () => {
     const dir = repoWithConfig("[team]\npages_url = \"https://x.example\"\n\n[ads]\nenabled = true\n");
     try {
       expect(readConfigBool(dir, "ads", "enabled")).toBe(true);
-      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: dir }).enabled).toBe(true);
+      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: dir })).toEqual({
+        enabled: false,
+        reason: "config_not_confirmed",
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('[ads] enabled = "true" (quoted) opts in too — the two config scanners must agree', () => {
+  it("[ads] enabled = true plus REPOSKEIN_ADS=on opts in", () => {
+    const dir = repoWithConfig("[ads]\nenabled = true\n");
+    try {
+      expect(
+        resolveAdsVerdict({ env: { REPOSKEIN_ADS: "on", ...CREDS }, repoPath: dir }).enabled
+      ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a quoted "true" the same way the indexer\'s scanner does', () => {
     const dir = repoWithConfig('[ads]\nenabled = "true"\n');
     try {
-      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: dir }).enabled).toBe(true);
+      expect(readConfigBool(dir, "ads", "enabled")).toBe(true);
+      // Still not enough on its own — the env must confirm.
+      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: dir }).enabled).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("[ads] enabled = false does not opt in", () => {
-    const dir = repoWithConfig("[ads]\nenabled = false\n");
+  it("distinguishes a repo that asked from a repo that never asked", () => {
+    const asked = repoWithConfig("[ads]\nenabled = true\n");
+    const silent = repoWithConfig("[ads]\nenabled = false\n");
     try {
-      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: dir })).toEqual({
+      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: asked }).enabled).toBe(false);
+      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: asked })).toMatchObject({
+        reason: "config_not_confirmed",
+      });
+      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: silent })).toEqual({
         enabled: false,
         reason: "not_opted_in",
       });
-      expect(readConfigBool(dir, "ads", "enabled")).toBe(false);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(asked, { recursive: true, force: true });
+      rmSync(silent, { recursive: true, force: true });
     }
   });
 
@@ -138,7 +159,21 @@ describe("ads gating chain — config.toml opt-in", () => {
   it("a missing config.toml does not opt in", () => {
     const dir = repoWithConfig(null);
     try {
-      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: dir }).enabled).toBe(false);
+      expect(resolveAdsVerdict({ env: { ...CREDS }, repoPath: dir })).toEqual({
+        enabled: false,
+        reason: "not_opted_in",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the kill switch still outranks a confirmed opt-in", () => {
+    const dir = repoWithConfig("[ads]\nenabled = true\n");
+    try {
+      expect(
+        resolveAdsVerdict({ env: { REPOSKEIN_ADS: "off", ...CREDS }, repoPath: dir })
+      ).toEqual({ enabled: false, reason: "kill_switch" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

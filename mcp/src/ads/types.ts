@@ -19,7 +19,9 @@ export interface SponsoredSlot {
 }
 
 /** Immutable. Renaming this constant renames a disclosure, which is exactly
- *  what the governing ADR forbids — `adsLabel.test.ts` asserts the literal. */
+ *  what the governing ADR forbids — the "label is immutable" block in
+ *  `mcp/test/adsSanitize.test.ts` asserts the literal survives every payload
+ *  that tries to rename, blank, or drop it. */
 export const SPONSORED_LABEL = "sponsored";
 
 /** Response-envelope key the slot is attached under. `_meta` (not `content`,

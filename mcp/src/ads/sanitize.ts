@@ -1,4 +1,4 @@
-import { CODE_FENCE, CONTROL_CHARS, MD_LINK } from "../guard/summaryValidation.js";
+import { CODE_FENCE, MD_LINK } from "../guard/summaryValidation.js";
 import {
   BODY_MAX,
   PAYLOAD_MAX_BYTES,
@@ -19,14 +19,29 @@ const INVISIBLE_G = new RegExp(INVISIBLE_SOURCE, "g");
 /** Same class without `g`: `.test()` on a global regex is stateful. */
 const INVISIBLE = new RegExp(INVISIBLE_SOURCE);
 
-/** Line/tab whitespace that must never survive into a one-line field
- *  (includes the Unicode line/paragraph separators). */
-const LINEBREAKS = /[\r\n\t\v\f\u2028\u2029]/g;
+/** Line/tab whitespace that must never survive into a one-line field:
+ *  ASCII line/tab breaks, NEL (U+0085, the C1 newline), and the Unicode
+ *  line/paragraph separators. */
+const LINEBREAKS = /[\r\n\t\v\f\u0085\u2028\u2029]/g;
 
-/** `CONTROL_CHARS` is global (it is used with `replace` on the summary write
- *  path) and `.test()` on a global regex is stateful, so testing uses a
- *  flag-less clone of the exact same class. */
-const CONTROL_TEST = new RegExp(CONTROL_CHARS.source);
+/** Control characters, ads edition: the shared `CONTROL_CHARS` class (C0 minus
+ *  tab/newline/CR, plus DEL) EXTENDED to the whole C1 block, U+0080-U+009F.
+ *
+ *  C1 matters here in a way it doesn't for summaries: those bytes are legal in
+ *  a JSON string, invisible in most terminals, and include their own control
+ *  vocabulary (NEL at U+0085 breaks a line, and CSI at U+009B opens an escape
+ *  sequence a terminal may act on). Ad copy has no use for any of them, so
+ *  they are stripped from prose and rejected in a URL rather than passed
+ *  through. Line breaks in that range are already handled by LINEBREAKS above,
+ *  which runs first.
+ *
+ *  Written out rather than derived from `CONTROL_CHARS.source` so a future
+ *  edit to the shared class cannot silently reshape (or fail to compile) this
+ *  one; `adsSanitize.test.ts` asserts the two stay in agreement about C0. */
+const ADS_CONTROL_SOURCE = "[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\u009F]";
+const ADS_CONTROL_G = new RegExp(ADS_CONTROL_SOURCE, "g");
+/** Same class without `g`: `.test()` on a global regex is stateful. */
+const CONTROL_TEST = new RegExp(ADS_CONTROL_SOURCE);
 
 /** Shapes that are not ad copy. Defence in depth, NOT the boundary — the
  *  boundary is that a slot is fixed-schema, length-capped data in a labelled
@@ -70,7 +85,7 @@ function cleanText(value: unknown): string | null {
   const flat = value
     .replace(INVISIBLE_G, "")
     .replace(LINEBREAKS, " ")
-    .replace(CONTROL_CHARS, "")
+    .replace(ADS_CONTROL_G, "")
     .replace(/\s{2,}/g, " ")
     .trim();
   if (flat.length === 0) return null;

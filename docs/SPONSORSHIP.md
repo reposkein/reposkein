@@ -1,14 +1,16 @@
 # Sponsorship
 
-**Status: implemented and OFF by default; the MCP-result placement is recorded as `proposed`, awaiting human ratification.** Nothing in this
-document happens on an install that has not opted in *and* supplied
-credentials. See [Placement](#placement).
+**Status: built, OFF, and deliberately dormant.** The active sponsorship
+surface is the **viewer chrome chip** (REP-30's record, still unbuilt) plus
+[Ko-fi](https://ko-fi.com/mongx) support. The MCP tool-result slot this
+document describes is recorded as `proposed` and, by decision, is **not to be
+enabled now** — see [Placement](#placement). Nothing here happens on an
+install that has not opted in *and* supplied credentials.
 
-RepoSkein's infra and indexer maintenance are funded in part by
-[Ko-fi](https://ko-fi.com/mongx) support. REP-28 adds the other half of that
-story: an **opt-in, disclosed, fail-open sponsored slot** delivered by
-[Lulu Ads](https://getlulu.dev) (CPA, 70% publisher share), implemented in
-`mcp/src/ads/`.
+RepoSkein's infra and indexer maintenance are funded in part by Ko-fi support.
+REP-28 built the other half of that story: an **opt-in, disclosed, fail-open
+sponsored slot** delivered by [Lulu Ads](https://getlulu.dev) (CPA, 70%
+publisher share), implemented in `mcp/src/ads/`.
 
 ## Placement
 
@@ -16,31 +18,34 @@ Two decision records govern sponsorship, and both are live
 (`reposkein-mcp adr export`, or `.reposkein/decisions/`):
 
 - `adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`
-  — what may **never** carry ads: embed-server and the `semantic_find`
-  retrieval path, permanently and on every code path; no required ad
-  container; static exports stay ad-free with no view-time-fetch exception.
-  Plus the constraints binding every payload: no sponsored data in
+  (**accepted**) — what may **never** carry ads: embed-server and the
+  `semantic_find` retrieval path, permanently and on every code path; no
+  required ad container; static exports stay ad-free with no view-time-fetch
+  exception. Plus the constraints binding every payload: no sponsored data in
   `.reposkein/` artifacts, fixed-schema length-capped copy, an immutable
   `sponsored` label. It also authorizes a disclosed chip in the **viewer
-  chrome**, which is still unbuilt.
+  chrome** — the active surface, still unbuilt.
 - `adr:2026-08-21-mcp-tool-result-sponsored-slot-ratified-companion-to-the-vie`
-  — **ratifies the MCP tool-result slot this document describes**, under
-  exactly those constraints. It complements rather than supersedes the record
-  above (whose exclusions all remain in force) and closes a drafting gap: the
-  MCP surface was the original ask REP-28 was cut for, and the earlier
-  record's silence about it was an omission, not a refusal.
+  (**proposed, dormant**) — **records** the MCP tool-result slot this document
+  describes and proposes the terms under which it could be enabled, without
+  authorizing it. The standing ruling is not to ratify it now: a `_meta` field
+  is machine-visible, so the hosts our users actually run (plain CLI agents)
+  render it to nobody — zero revenue, and nonzero exposure from sponsor bytes
+  sitting in an agent's context. Revisit when MCP Apps rendering is common in
+  those hosts. Ratification is a human act (`set_decision_status`). Its id slug
+  says "ratified" because a first draft asserted that; the status field and its
+  body govern.
 
 Read them together: the first for what is forbidden everywhere, the second for
-this placement. Every constraint above is enforced in code and covered by
-tests — see [Invariants](#invariants-and-where-they-are-tested).
+this placement's terms and why it stays off. Every constraint is enforced in
+code and covered by tests — see
+[Invariants](#invariants-and-where-they-are-tested).
 
-One limitation is accepted on the record rather than designed around: a
-`_meta` field is **machine-visible**. Hosts that render MCP Apps surface it to
-a human; a plain CLI host does not render it at all, so there the disclosure
-reaches the model and not the person, which makes this slot commercially
-meaningful only in rendering hosts. That is *not* a licence to move sponsor
-copy into prose, an extra content block, or the tool's answer — all forbidden.
-The remedy for human-visible disclosure is the viewer chip.
+The machine-visibility limitation is recorded rather than designed around: a
+plain CLI host renders no `_meta`, so there the disclosure reaches the model
+and not the person. That is *not* a licence to move sponsor copy into prose, an
+extra content block, or the tool's answer — all forbidden. The remedy for
+human-visible disclosure is the viewer chip.
 
 ## The gating chain
 
@@ -51,8 +56,14 @@ Evaluated in this order on every eligible tool call, in
 1. **Kill switch** — `REPOSKEIN_ADS=off` (also `0`, `false`) stops everything,
    outranking config, credentials, and anything a repo committed. Checked
    first on purpose.
-2. **Opt-in** — `[ads] enabled = true` in `.reposkein/config.toml` **or**
-   `REPOSKEIN_ADS=on`. Absent both: off. This is the default everywhere.
+2. **Opt-in — the environment decides.** `REPOSKEIN_ADS=on` (also `1`, `true`)
+   is required. A repo's `[ads] enabled = true` in `.reposkein/config.toml`
+   *declares the repo's willingness* but never opts anyone in on its own:
+   config.toml is committed and travels with every clone, so honouring it alone
+   would let whoever wrote it opt in everybody who later checks the repo out.
+   The environment is the only place the operator running *this* process speaks
+   for themselves, so it has to confirm. A repo that asked without confirmation
+   reports the distinct reason `config_not_confirmed`.
 3. **Credentials** — both `LULU_ADS_PUBLISHER_ID` and `LULU_ADS_API_KEY`,
    **environment only** (never config.toml, never argv, never logged). Absent
    either: inert, no request attempted.
@@ -60,6 +71,15 @@ Evaluated in this order on every eligible tool call, in
    (`mcp/src/ads/supporter.ts`) that reports "not a supporter" for everyone;
    REP-29 (Ko-fi verification) fills it in, and the gate is wired now so the
    feature cannot ship without it.
+
+| `[ads] enabled` | `REPOSKEIN_ADS` | Credentials | Result |
+|---|---|---|---|
+| anything | `off` | any | no slot (`kill_switch`) |
+| absent/false | unset | any | no slot (`not_opted_in`) |
+| `true` | unset | any | no slot (`config_not_confirmed`) |
+| absent/false | `on` | missing | no slot (`no_credentials`) |
+| absent/false | `on` | present | slot requested |
+| `true` | `on` | present | slot requested |
 
 Plus two placement gates that are code, not configuration:
 
@@ -120,6 +140,45 @@ Timing: a hard **800ms** budget (`SLOT_TIMEOUT_MS`), enforced with an
 result beyond it. The SDK's own default (1500ms, 3000ms when the backend may
 classify) is overridden on every call.
 
+### What the request reveals even though the body is tiny
+
+The body names one tool and nothing else, but a request is still a request. The
+ad network — and anyone able to observe the connection — necessarily learns:
+
+- your **IP address**, and from it your approximate location and network;
+- the **TLS SNI / host** (`ads.getlulu.dev`), which tells a network observer
+  that this machine talks to an ad service, even though the body is encrypted;
+- the **publisher API key**, which ties every request to one publisher account;
+- the **cadence**: when calls happen and how often. Since the slot rides on
+  `get_context_profile`, that is a coarse activity signal — roughly, when
+  someone is doing code-navigation work and how intensely. Not what they were
+  looking at, but that they were looking.
+
+None of that can be removed by shrinking the payload; it is inherent to making
+a network call at all. It is one of the reasons the slot is off by default and
+the kill switch exists.
+
+### The local request audit
+
+Every outbound request appends one line to
+`.reposkein/local/ads-requests.jsonl`:
+
+```json
+{"ts":"2026-08-21T20:15:04.001Z","tool":"get_context_profile"}
+```
+
+That is the whole record: when, and which tool. No response, no ad copy, no
+URL, no credentials, no arguments — so the file can never become a place where
+sponsor-supplied bytes accumulate. The line is written *before* the call, so a
+request that then fails, times out, or is aborted still shows up. It lives
+under `.reposkein/local/` (gitignored, outside the graph, alongside session
+logs and caches), is never committed, and `doctor` never treats it as graph
+state. Delete it whenever you like; nothing reads it but you.
+
+It exists so an operator who opted in can verify the claims above after the
+fact — "did this thing phone home, when, from which tool?" — without running a
+proxy and without taking this document's word for it.
+
 ## What comes back, and what survives validation
 
 The response is untrusted input. `mcp/src/ads/sanitize.ts` projects it onto a
@@ -175,12 +234,15 @@ On the **response envelope only**, copy-on-write:
 |---|---|
 | Off by default; every gate blocks before any network call | `mcp/test/adsGating.test.ts`, `mcp/test/adsSlot.test.ts` |
 | `REPOSKEIN_ADS=off` outranks config and credentials | `mcp/test/adsGating.test.ts` |
+| Repo config alone never opts in; the environment must confirm | `mcp/test/adsGating.test.ts`, `mcp/test/adsSlot.test.ts` |
 | No credentials → zero network, byte-identical output | `mcp/test/adsSlot.test.ts` |
 | Rejecting / throwing source → byte-identical output | `mcp/test/adsSlot.test.ts` |
 | Hanging source → result within the budget, no slot, request aborted | `mcp/test/adsSlot.test.ts` |
+| Control characters (C0 **and** C1, incl. NEL) never survive into copy or a URL | `mcp/test/adsSanitize.test.ts` |
 | Malformed, oversized, off-host and instruction-shaped payloads rejected, never reaching a prose field | `mcp/test/adsSanitize.test.ts` (fuzz table, ~50 rows) |
+| One audit line per outbound request, `{ts, tool}` only, none when no request is made | `mcp/test/adsSlot.test.ts` |
 | The `sponsored` label cannot be renamed, blanked, or dropped | `mcp/test/adsSanitize.test.ts` |
-| Sponsored data never lands in `.reposkein/` (tree byte-compared, ads on vs off) | `mcp/test/adsSlot.test.ts` |
+| Sponsored data never lands in `.reposkein/` (tree byte-compared, ads on vs off; the local audit counter is the one permitted difference and carries no sponsor bytes) | `mcp/test/adsSlot.test.ts` |
 | `semantic_find`, mutating tools and error paths never carry a slot | `mcp/test/adsGating.test.ts`, `mcp/test/adsSlot.test.ts`, `mcp/test/adsWiring.test.ts` |
 
 ## The `lulu-ads` dependency
@@ -209,15 +271,21 @@ Deliberately unused:
   into prose.
 - The widget / MCP-Apps exports — no rendered ad surface is in scope.
 
-## Getting credentials (to turn it on)
+## Getting credentials (if the placement is ever ratified)
+
+The record for this placement is `proposed` and the standing ruling is not to
+enable it, so this section is a reference, not an invitation. Ratify the
+record first (`set_decision_status`), then:
 
 1. Register at <https://getlulu.dev/publishers> — the API key is shown once.
 2. Export `LULU_ADS_PUBLISHER_ID` and `LULU_ADS_API_KEY` (see
    [`.env.example`](../.env.example)). Never commit them.
-3. Opt in with `REPOSKEIN_ADS=on` or `[ads] enabled = true` in
-   `.reposkein/config.toml`.
+3. Opt in with `REPOSKEIN_ADS=on` in the environment (a repo's
+   `[ads] enabled = true` is a declaration, not an opt-in — see the gating
+   table).
 4. Verify with the dashboard's test-slot button; it is tagged as a test and
-   never counts toward stats or balance.
+   never counts toward stats or balance. Then check
+   `.reposkein/local/ads-requests.jsonl` to see the request from this side.
 
 ## See also
 

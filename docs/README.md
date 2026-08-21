@@ -11,7 +11,7 @@ the [root README's Documentation table](../README.md#documentation).
 - **Setting up a new repo, workspace, or agent config?** → [`INSTALL.md`](INSTALL.md) — written for agents to execute: a question tree (§1) covering one repo vs workspace, JSONL vs Neo4j, embeddings tier, and which agent CLIs to wire, then step-by-step setup (§2–§7) and troubleshooting (§9).
 - **Joining a repo that already has RepoSkein set up?** → [`INSTALL.md` §0](INSTALL.md#0-joining-an-existing-reposkein-repo) — the one-command `git clone && cd && npx @reposkein/mcp init` path (auto-detects and wires up your agent's config).
 - **Publishing a shareable, always-current view of the graph?** → [`HOSTING.md`](HOSTING.md) — GitHub Pages via `reposkein-mcp init --ci`, or any other static host.
-- **Sponsorship & support?** → [`SPONSORSHIP.md`](SPONSORSHIP.md) — the opt-in, disclosed, fail-open sponsored slot (off by default): the gating chain, exactly what leaves the machine, opt-out, and the invariants that keep sponsored data out of `.reposkein/`. Placement policy summary in [`HOSTING.md`](HOSTING.md#sponsorship--support).
+- **Sponsorship & support?** → [`SPONSORSHIP.md`](SPONSORSHIP.md) — the opt-in, disclosed, fail-open sponsored slot, built but **dormant by decision** (Ko-fi and the viewer chip are the active surfaces): the gating chain, exactly what leaves the machine, the local request audit, opt-out, and the invariants that keep sponsored data out of `.reposkein/`. Placement policy summary in [`HOSTING.md`](HOSTING.md#sponsorship--support).
 
 ## Using it day to day
 

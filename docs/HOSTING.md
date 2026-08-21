@@ -129,16 +129,16 @@ origin (hash-history routing handles any subpath).
 ## Sponsorship & support
 
 RepoSkein's hosted-constellation infra and indexer maintenance are funded in
-part by [Ko-fi](https://ko-fi.com/mongx) support. REP-28 implemented the
-sponsorship mechanism (opt-in, disclosed, fail-open) as a slot on an MCP
-tool-result envelope, ratified by ADR
+part by [Ko-fi](https://ko-fi.com/mongx) support. REP-28 built a sponsorship
+mechanism (opt-in, disclosed, fail-open) as a slot on an MCP tool-result
+envelope; it is **recorded as proposed and deliberately dormant** in ADR
 `adr:2026-08-21-mcp-tool-result-sponsored-slot-ratified-companion-to-the-vie`
-and **off unless an operator opts in and supplies credentials** — see
-[`SPONSORSHIP.md`](./SPONSORSHIP.md) for the gating chain and exactly what
-leaves the machine. The rulings below still stand unchanged, from the
-companion record (ADR
-`adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`);
-the viewer chip itself remains unbuilt:
+— built, off, and not to be enabled while plain CLI hosts render `_meta` to
+nobody. See [`SPONSORSHIP.md`](./SPONSORSHIP.md) for the gating chain and
+exactly what leaves the machine. The **active** sponsorship surface is the
+viewer chip below, from the accepted record (ADR
+`adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`),
+whose rulings stand unchanged; the chip itself remains unbuilt:
 
 - **Viewer chrome only.** A single disclosed `sponsored` chip may appear in
   the viewer's chrome — never over the 3D canvas, never inside Inspector

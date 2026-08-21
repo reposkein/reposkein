@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { createAdsHook } from "../src/ads/slot.js";
+import { adsAuditPath } from "../src/ads/auditLog.js";
 import { SPONSORED_META_KEY, type SponsoredSource } from "../src/ads/types.js";
 import { RepoSession } from "../src/store/repoSession.js";
 import { SessionLogger } from "../src/store/sessionLog.js";
@@ -116,7 +117,7 @@ describe("withAds — nothing happens unless the gating chain passes", () => {
     expect(out).toBe(failure);
   });
 
-  it("reads [ads] enabled from config.toml at most once per repo", async () => {
+  it("does not opt in from repo config alone, and reads that config at most once", async () => {
     const dir = repo();
     writeFileSync(join(dir, ".reposkein", "config.toml"), "[ads]\nenabled = true\n");
     try {
@@ -135,8 +136,27 @@ describe("withAds — nothing happens unless the gating chain passes", () => {
       await wrapped({});
       await wrapped({});
       await wrapped({});
+      expect(source.calls).toBe(0);
       expect(reads).toBe(1);
-      expect(source.calls).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requests a slot when the environment confirms the repo's opt-in", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, ".reposkein", "config.toml"), "[ads]\nenabled = true\n");
+    try {
+      const source = fakeSource();
+      const { withAds } = createAdsHook({
+        resolveRepoPath: () => dir,
+        env: ON,
+        source,
+        audit: () => {},
+        schedule: (fn) => fn(),
+      });
+      await withAds(TOOL, async () => toolResult())({});
+      expect(source.calls).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -277,7 +297,10 @@ describe("withAds — what the slot attaches to, and what it sends", () => {
 });
 
 /** Byte-for-byte comparison of a repo's `.reposkein/` tree, with log
- *  timestamps normalized (they are wall-clock by design). */
+ *  timestamps normalized (they are wall-clock by design). The local ads audit
+ *  file is excluded here and asserted separately: it is the ONE file an ads-on
+ *  run is allowed to differ by, and its contents are checked field by field
+ *  rather than compared. */
 function reposkeinTree(dir: string): Record<string, string> {
   const root = join(dir, ".reposkein");
   const out: Record<string, string> = {};
@@ -285,7 +308,11 @@ function reposkeinTree(dir: string): Record<string, string> {
     for (const entry of readdirSync(path).sort()) {
       const full = join(path, entry);
       if (statSync(full).isDirectory()) walk(full);
-      else out[relative(root, full)] = readFileSync(full, "utf8").replace(/"ts":"[^"]*"/g, '"ts":"T"');
+      else {
+        const rel = relative(root, full);
+        if (rel === join("local", "ads-requests.jsonl")) continue;
+        out[rel] = readFileSync(full, "utf8").replace(/"ts":"[^"]*"/g, '"ts":"T"');
+      }
     }
   };
   walk(root);
@@ -305,6 +332,10 @@ describe("determinism firewall — sponsored data never lands in .reposkein/", (
           resolveRepoPath: () => dir,
           env,
           source: fakeSource(),
+          // Run the audit append synchronously so its effect on disk is
+          // present when this test inspects the tree, instead of racing
+          // setImmediate.
+          schedule: (fn) => fn(),
         });
         // EXACTLY the composition used in createMcpServer: ads outside the
         // session logger, so the logger can never see a sponsored byte.
@@ -317,7 +348,7 @@ describe("determinism firewall — sponsored data never lands in .reposkein/", (
       // The slot really was attached in the "on" run...
       expect((onResult as { _meta: Record<string, unknown> })._meta[SPONSORED_META_KEY]).toBeTruthy();
       expect((offResult as { _meta?: unknown })._meta).toBeUndefined();
-      // ...and it changed nothing on disk.
+      // ...and it changed nothing on disk except the local audit counter.
       const off = reposkeinTree(offDir);
       const on = reposkeinTree(onDir);
       expect(Object.keys(on)).toEqual(Object.keys(off));
@@ -326,9 +357,74 @@ describe("determinism firewall — sponsored data never lands in .reposkein/", (
       // Sanity: the session log was actually written (the comparison is not
       // vacuously true over an empty tree).
       expect(Object.keys(off).some((k) => k.includes("sessions"))).toBe(true);
+
+      // The audit file exists only for the ads-on run, and carries no
+      // sponsor-supplied byte — just when, and which tool.
+      expect(existsSync(adsAuditPath(offDir))).toBe(false);
+      const lines = readFileSync(adsAuditPath(onDir), "utf8").trim().split("\n");
+      expect(lines).toHaveLength(1);
+      const record = JSON.parse(lines[0]!);
+      expect(Object.keys(record).sort()).toEqual(["tool", "ts"]);
+      expect(record.tool).toBe(TOOL);
+      expect(new Date(record.ts).toString()).not.toBe("Invalid Date");
+      expect(lines[0]).not.toMatch(/sponsored|getlulu|Widget CI|pub_|lk_/i);
     } finally {
       rmSync(offDir, { recursive: true, force: true });
       rmSync(onDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("local request audit — one line per outbound request", () => {
+  it("writes nothing when no request is made", async () => {
+    const dir = repo();
+    try {
+      const { withAds } = createAdsHook({
+        resolveRepoPath: () => dir,
+        env: { ...CREDS }, // credentials, but no opt-in
+        source: fakeSource(),
+        schedule: (fn) => fn(),
+      });
+      await withAds(TOOL, async () => toolResult())({});
+      await withAds("semantic_find", async () => toolResult())({});
+      expect(existsSync(adsAuditPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records a request that then fails, times out, or returns no fill", async () => {
+    const dir = repo();
+    try {
+      for (const behaviour of ["reject", "malformed", "payload"] as const) {
+        const { withAds } = createAdsHook({
+          resolveRepoPath: () => dir,
+          env: ON,
+          source: fakeSource(behaviour, behaviour === "malformed" ? { text: "x" } : GOOD_PAYLOAD),
+          schedule: (fn) => fn(),
+        });
+        await withAds(TOOL, async () => toolResult())({});
+      }
+      const lines = readFileSync(adsAuditPath(dir), "utf8").trim().split("\n");
+      expect(lines).toHaveLength(3);
+      for (const line of lines) {
+        expect(Object.keys(JSON.parse(line)).sort()).toEqual(["tool", "ts"]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never lets an unwritable audit path affect the tool result", async () => {
+    const source = fakeSource();
+    const { withAds } = createAdsHook({
+      resolveRepoPath: () => "/nonexistent-root-that-cannot-be-created",
+      env: ON,
+      source,
+      schedule: (fn) => fn(),
+    });
+    const out = await withAds(TOOL, async () => toolResult())({});
+    expect(source.calls).toBe(1);
+    expect((out as { _meta: Record<string, unknown> })._meta[SPONSORED_META_KEY]).toBeTruthy();
   });
 });

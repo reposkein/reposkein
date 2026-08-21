@@ -8,6 +8,7 @@ import { luluAdsSource } from "./luluSource.js";
 import { sanitizeSponsored } from "./sanitize.js";
 import { isSupporter as defaultIsSupporter } from "./supporter.js";
 import { readConfigBool } from "../store/teamConfig.js";
+import { appendAdsRequest } from "./auditLog.js";
 import { SPONSORED_META_KEY, type SlotContext, type SponsoredSlot, type SponsoredSource } from "./types.js";
 
 /** Minimal shape the hook needs from a tool result — structurally compatible
@@ -32,6 +33,10 @@ export interface AdsHookOptions {
   timeoutMs?: number;
   /** Test seam: `[ads] enabled` lookup. */
   readOptIn?: (repoPath: string) => boolean | null;
+  /** Test seams for the local request audit (`.reposkein/local/ads-requests.jsonl`).
+   *  Defaults: the real appender, deferred with `setImmediate`. */
+  audit?: (repoPath: string, record: { ts: string; tool: string }) => void;
+  schedule?: (fn: () => void) => void;
 }
 
 export interface AdsHook {
@@ -59,6 +64,8 @@ export function createAdsHook(opts: AdsHookOptions): AdsHook {
   const env = opts.env ?? process.env;
   const timeoutMs = opts.timeoutMs ?? SLOT_TIMEOUT_MS;
   const isSupporter = opts.isSupporter ?? defaultIsSupporter;
+  const audit = opts.audit ?? appendAdsRequest;
+  const schedule = opts.schedule ?? setImmediate;
 
   // The config.toml opt-in is memoized for the connection's lifetime: one
   // filesystem read per repo, never one per tool call. The env kill switch and
@@ -124,8 +131,9 @@ export function createAdsHook(opts: AdsHookOptions): AdsHook {
 
   async function maybeSlot(tool: string): Promise<SponsoredSlot | null> {
     if (!AD_ELIGIBLE_TOOLS.includes(tool)) return null;
+    const repoPath = opts.resolveRepoPath();
     const verdict = resolveAdsVerdict({
-      repoPath: opts.resolveRepoPath(),
+      repoPath,
       env,
       isSupporter,
       readOptIn,
@@ -133,6 +141,14 @@ export function createAdsHook(opts: AdsHookOptions): AdsHook {
     if (!verdict.enabled) return null;
     const src = sourceFor(verdict);
     if (!src) return null;
+    // Audit BEFORE the call, deferred off the hot path (the instrumentTool
+    // pattern): the line records that a request left this machine, so it must
+    // be written even if the request then hangs, fails, or is aborted at the
+    // deadline. Never blocks and never throws.
+    if (repoPath) {
+      const ts = new Date().toISOString();
+      schedule(() => audit(repoPath, { ts, tool }));
+    }
     return requestSlot(src, { tool }, verdict.clickHosts);
   }
 
