@@ -1,0 +1,42 @@
+/* Tailwind v4 entry — imported once from src/main.tsx.
+ *
+ * PREFLIGHT IS DELIBERATELY OMITTED. `@import "tailwindcss"` normally pulls in
+ * theme + preflight + utilities; preflight would reset `box-sizing`,
+ * `border-width`, button/input appearance and the base font on EVERY element,
+ * which would silently restyle the existing inline-styled HUD panels and the
+ * drei <Html> labels rendered inside the Canvas. This task must land with zero
+ * visual change, so we expand the import by hand and drop the base layer.
+ *
+ * When the redesign has moved a panel off inline styles, re-adding
+ *   @import "tailwindcss/preflight.css" layer(base);
+ * is a one-line flip — do it in the task that owns the last inline-styled
+ * surface, not before (shadcn components assume preflight's resets). */
+
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Self-hosted fonts (@font-face + --font-mono). */
+@import "./styles/fonts.css";
+
+/* Generated from src/scene/encoding.ts by the `reposkein-tokens` Vite plugin.
+   Git-ignored: regenerated at dev + build. See src/styles/tokens.ts. */
+@import "./styles/tokens.generated.css";
+
+/* shadcn's semantic surface tokens, DERIVED from the encoding-owned brand
+   tokens rather than shadcn's stock slate palette — so a generated component
+   inherits the constellation's colors and encoding.ts stays the only place a
+   hue is authored. `inline` (the shadcn v4 pattern) bakes the value into the
+   utility instead of emitting another indirection.
+   Only the pure brand derivations live here; the muted/border/destructive
+   family needs hues nothing owns yet, so the task that adds the first shadcn
+   component adds them (to encoding.ts first). */
+@theme inline {
+  --color-background: var(--color-brand-navy);
+  --color-foreground: var(--color-brand-cream);
+  --color-primary: var(--color-brand-amber);
+  --color-primary-foreground: var(--color-brand-navy);
+  --color-accent: var(--color-brand-teal);
+  --color-accent-foreground: var(--color-brand-navy);
+  --color-ring: var(--color-brand-amber);
+}
