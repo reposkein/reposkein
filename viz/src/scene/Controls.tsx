@@ -4,6 +4,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import CameraControlsImpl from "camera-controls";
 import { useStoreState } from "../state/store";
+import { publishCameraPose, resetCameraPose } from "../state/cameraPose";
 import { representativeFor, visibleClusters } from "../data/clientModel";
 
 /** Latest camera target (orbit pivot) in world space, published each frame so
@@ -160,7 +161,26 @@ export function Controls() {
     invalidate();
     // store.fitNonce is the explicit refit trigger (bumped on load / expand /
     // collapse / select); the other reads are intentionally not deps.
-  }, [store.fitNonce, model]);
+    }, [store.fitNonce, model]);
+
+  /** VIEW-HISTORY POSE RESTORE (V4 §4). Deliberately its own effect, keyed on
+   *  `poseNonce` and NOT on `fitNonce`: a restore must reproduce the exact frame
+   *  the reader was looking at. Routing it through the fit effect would call
+   *  `fitToSphere` on the restored visible set instead, which lands somewhere
+   *  plausible but different — the "Back took me somewhere NEAR where I was"
+   *  failure this whole mechanism exists to avoid. */
+  useEffect(() => {
+    const controls = controlsRef.current;
+    const pose = store.poseTarget;
+    if (!controls || !pose) return;
+    const [px, py, pz] = pose.position;
+    const [tx, ty, tz] = pose.target;
+    void controls.setLookAt(px, py, pz, tx, ty, tz, true);
+    lastInteractionRef.current = performance.now();
+    invalidate();
+    // poseNonce is the explicit trigger; poseTarget is read, not watched, so
+    // restoring twice to the SAME pose still moves the camera.
+  }, [store.poseNonce]);
 
   // Register the imperative recenter for the minimap; publish target on unmount.
   useEffect(() => {
@@ -177,17 +197,28 @@ export function Controls() {
       flyToWorld = null;
       cameraTarget = null;
       cameraView = null;
+      // A remounted scene must never restore into a pose from the last one.
+      resetCameraPose();
     };
   }, [invalidate]);
 
   // --- idle drift ----------------------------------------------------------
   const targetVec = useMemo(() => new THREE.Vector3(), []);
+  const posVec = useMemo(() => new THREE.Vector3(), []);
   useFrame((_, delta) => {
     const controls = controlsRef.current;
     if (!controls) return;
     // Publish the current orbit target for the minimap viewport indicator.
     controls.getTarget(targetVec);
     cameraTarget = { x: targetVec.x, y: targetVec.y, z: targetVec.z };
+    // …and the full pose (position + target) for view history, which must be
+    // able to restore the EXACT frame rather than re-derive a fit. Plain
+    // numbers, so `state/cameraPose.ts` stays free of three.js.
+    controls.getPosition(posVec);
+    publishCameraPose({
+      position: [posVec.x, posVec.y, posVec.z],
+      target: [targetVec.x, targetVec.y, targetVec.z],
+    });
     // …and the perspective params the minimap turns into a frustum rectangle.
     // Guarded: an orthographic camera has no `fov`, in which case the rect is
     // simply not drawn rather than drawn wrong.

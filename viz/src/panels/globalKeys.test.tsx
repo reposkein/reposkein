@@ -45,6 +45,8 @@ function mockActions(): Actions {
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    historyBack: vi.fn(() => false),
+    historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
     setEdgeTypeFilter: vi.fn(),
     setMinConfidence: vi.fn(),
@@ -327,6 +329,46 @@ describe("handleGlobalKey — x / ⇧x collapse", () => {
   });
 });
 
+/** VIEW HISTORY (V4 §4). The keys delegate; the stack itself is covered by
+ *  `state/viewHistory.test.ts` and its wiring by `viewHistoryWiring.test.tsx`. */
+describe("handleGlobalKey — [ and ] walk view history", () => {
+  it("'[' steps back and ']' steps forward", () => {
+    const back = mockActions();
+    vi.mocked(back.historyBack).mockReturnValue(true);
+    expect(handleGlobalKey(key("["), stateWith(), back, mockEnv())).toBe(true);
+    expect(back.historyBack).toHaveBeenCalledOnce();
+    expect(back.historyForward).not.toHaveBeenCalled();
+
+    const fwd = mockActions();
+    vi.mocked(fwd.historyForward).mockReturnValue(true);
+    expect(handleGlobalKey(key("]"), stateWith(), fwd, mockEnv())).toBe(true);
+    expect(fwd.historyForward).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the key UNCONSUMED at either end of the stack", () => {
+    // historyBack/-Forward default to returning false in mockActions().
+    const actions = mockActions();
+    expect(handleGlobalKey(key("["), stateWith(), actions, mockEnv())).toBe(false);
+    expect(handleGlobalKey(key("]"), stateWith(), actions, mockEnv())).toBe(false);
+  });
+
+  it("neither fires while typing (a '[' in the palette's query is a '[')", () => {
+    const actions = mockActions();
+    handleGlobalKey(key("[", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    handleGlobalKey(key("]", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    expect(actions.historyBack).not.toHaveBeenCalled();
+    expect(actions.historyForward).not.toHaveBeenCalled();
+  });
+
+  it("needs no model and no selection — history predates both", () => {
+    const actions = mockActions();
+    vi.mocked(actions.historyBack).mockReturnValue(true);
+    expect(
+      handleGlobalKey(key("["), stateWith({ model: null, selected: null }), actions, mockEnv()),
+    ).toBe(true);
+  });
+});
+
 /** The help overlay is only useful if it describes the app that exists. */
 describe("keymap ↔ handler agreement", () => {
   it("every global binding the keymap documents is actually handled", () => {
@@ -334,6 +376,10 @@ describe("keymap ↔ handler agreement", () => {
       if (binding === "k") continue; // ⌘K lives in CommandPalette's own listener
       if (binding === "Escape") continue; // asserted above; also owned by the Esc stack
       const actions = mockActions();
+      // `[` / `]` report whether they moved; give them a non-empty stack so
+      // "documented" is tested, not "history happens to be empty".
+      vi.mocked(actions.historyBack).mockReturnValue(true);
+      vi.mocked(actions.historyForward).mockReturnValue(true);
       const env = mockEnv();
       const handled = handleGlobalKey(
         key(binding),
@@ -347,7 +393,8 @@ describe("keymap ↔ handler agreement", () => {
 
   it("documents every binding V3 and V4 introduced or rewired", () => {
     const documented = documentedBindings();
-    for (const b of ["/", "?", "m", "f", "d", "x", "X"]) expect(documented.has(b)).toBe(true);
+    for (const b of ["/", "?", "m", "f", "d", "x", "X", "[", "]"])
+      expect(documented.has(b)).toBe(true);
   });
 
   it("the keymap has no empty group and no binding without a description", () => {

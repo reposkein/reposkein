@@ -53,6 +53,13 @@ export const KEYMAP: KeymapGroup[] = [
     ],
   },
   {
+    title: "View history",
+    bindings: [
+      { keys: ["["], description: "Back — the previous view, camera included", binding: "[" },
+      { keys: ["]"], description: "Forward again", binding: "]" },
+    ],
+  },
+  {
     title: "Summon a layer",
     bindings: [
       { keys: ["m"], description: "Map — overview of the visible clusters", binding: "m" },

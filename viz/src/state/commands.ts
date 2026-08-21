@@ -13,6 +13,7 @@
 
 import type { Actions, State } from "./store";
 import { LENS_ORDER, LENS_PRESETS } from "../data/lens";
+import { canStepBack, canStepForward } from "./viewHistory";
 import type { LayerId } from "../panels/layerState";
 
 export interface PaletteEnv {
@@ -42,7 +43,14 @@ export interface CommandItem {
    *  handler does the routing; this is not a global hotkey registration). */
   kbd?: string;
   group: "commands";
-  /** Whether this command can run right now. */
+  /** Whether this command can run right now.
+   *
+   *  Takes `State` because that is where nearly every precondition lives. The
+   *  two history rows are the exception: their precondition is the depth of the
+   *  `state/viewHistory.ts` stacks, which are deliberately NOT reducer state
+   *  (see that module's docstring — an entry holds a camera pose the reducer
+   *  does not own). They read the singleton directly, which keeps them testable
+   *  via `resetViewHistory()` and keeps the pose out of the reducer. */
   disabled(state: State): boolean;
   /** Explanatory subtitle shown INSTEAD of `subtitle` while disabled. */
   disabledReason?: string;
@@ -142,6 +150,30 @@ export function buildCommandRegistry(): CommandItem[] {
       group: "commands",
       disabled: () => false,
       run: (actions) => actions.requestFit(),
+    },
+    {
+      id: "history-back",
+      label: "Back",
+      subtitle: "The previous view — selection, expansion and camera together",
+      kbd: "[",
+      disabledReason: "Nothing to go back to",
+      group: "commands",
+      disabled: () => !canStepBack(),
+      run: (actions) => {
+        actions.historyBack();
+      },
+    },
+    {
+      id: "history-forward",
+      label: "Forward",
+      subtitle: "Undo a Back step",
+      kbd: "]",
+      disabledReason: "Nothing to go forward to",
+      group: "commands",
+      disabled: () => !canStepForward(),
+      run: (actions) => {
+        actions.historyForward();
+      },
     },
     {
       id: "collapse-branch",

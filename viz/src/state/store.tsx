@@ -1,9 +1,11 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   type ReactNode,
 } from "react";
 import GraphWorker from "../data/worker/graph.worker.ts?worker";
@@ -36,6 +38,14 @@ import {
   useNewChannel,
   type Channel,
 } from "./channel";
+import { getCameraPose, type CameraPose } from "./cameraPose";
+import {
+  pushView,
+  resetViewHistory,
+  stepBack,
+  stepForward,
+  type ViewSnapshot,
+} from "./viewHistory";
 
 type Status =
   | { kind: "loading"; phase: string }
@@ -69,6 +79,14 @@ export interface State {
   filters: Filters;
   /** Node id to fly-to: set by search, consumed by Controls. Bumps fitNonce. */
   focusTarget: string | null;
+  /** An EXACT camera pose to restore, set only by view history (V4 §4). Paired
+   *  with `poseNonce` the same way `focusTarget` is paired with `fitNonce`:
+   *  Controls' restore effect keys off the nonce, so restoring twice to the same
+   *  pose still moves the camera, and a re-render that changes nothing else
+   *  never does. Deliberately separate from the fit path — a restore reproduces
+   *  the frame the reader was looking at, it does NOT re-fit. */
+  poseTarget: CameraPose | null;
+  poseNonce: number;
   /** Active lens id (one-click filter preset). "all" = default. A manual
    *  filter edit drops the lens back to "all" so the chip never lies. */
   lens: LensId;
@@ -126,6 +144,7 @@ export type Action =
   | { t: "requestFit" }
   | { t: "revealAndSelect"; id: string; fly?: boolean; collapseDeeper?: boolean }
   | { t: "revealWithoutRefit"; keys: string[] }
+  | { t: "restoreView"; snapshot: ViewSnapshot }
   | { t: "setKindFilter"; kind: string; hidden: boolean }
   | { t: "setEdgeTypeFilter"; type: string; hidden: boolean }
   | { t: "setMinConfidence"; value: number }
@@ -392,6 +411,33 @@ export function reducer(state: State, a: Action): State {
       if (!changed) return state;
       return { ...state, expanded };
     }
+    /** `[` / `]` — restore a remembered view WHOLE (V4 §4): selection,
+     *  expansion and camera pose in ONE transition, so no intermediate frame
+     *  exists where the expansion is back but the camera isn't.
+     *
+     *  Notably it does NOT bump fitNonce. A restore reproduces the exact pose
+     *  the reader was looking at, via `poseNonce`; letting the fit effect run
+     *  as well would immediately re-frame the visible set and overwrite that
+     *  pose with a merely plausible one — "Back took me somewhere near where
+     *  I was". `focusTarget` is cleared for the same reason.
+     *
+     *  Overlays are dropped: `impact` and `focus` are anchored to a selection
+     *  and a filter set that the snapshot does not carry, so restoring them
+     *  would restore a stale computation. */
+    case "restoreView": {
+      if (!state.model) return state;
+      const { selected, expanded, pose } = a.snapshot;
+      return {
+        ...state,
+        expanded,
+        selected,
+        focusTarget: null,
+        impact: null,
+        focus: null,
+        poseTarget: pose,
+        poseNonce: state.poseNonce + 1,
+      };
+    }
     case "setKindFilter": {
       const kinds = new Set(state.filters.kinds);
       if (a.hidden) kinds.add(a.kind);
@@ -563,6 +609,11 @@ export interface Actions {
   revealAndSelect(id: string, opts?: { fly?: boolean; collapseDeeper?: boolean }): void;
   /** Open explicit cluster keys without touching selection or the camera. */
   revealWithoutRefit(keys: string[]): void;
+  /** `[` — restore the previous view (selection + expansion + exact camera
+   *  pose). No-op with an empty history; returns whether it moved. */
+  historyBack(): boolean;
+  /** `]` — the mirror of `historyBack`. */
+  historyForward(): boolean;
   setKindFilter(kind: string, hidden: boolean): void;
   setEdgeTypeFilter(type: string, hidden: boolean): void;
   setMinConfidence(value: number): void;
@@ -617,6 +668,8 @@ export function createInitialState(): State {
     fitNonce: 0,
     filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
     focusTarget: null,
+    poseTarget: null,
+    poseNonce: 0,
     lens: "all",
     emphasis: "none",
     audit: "off",
@@ -640,6 +693,44 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // React 19 dropped the 2-arg `useReducer<Reducer>` overload; the plain
   // (reducer, initialState) form infers [State, Dispatch<Action>] correctly.
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
+
+  // The latest state, readable from the action wrappers below WITHOUT making
+  // them re-create on every dispatch. `actions` is identity-stable by contract
+  // (a component that only dispatches must never re-render), and the history
+  // wrappers need to read the CURRENT selection/expansion to snapshot it — so
+  // they read it through here rather than closing over `state`.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  /** The view we are in right now, as a history entry. The camera pose comes
+   *  from the scene singleton, which is why recording can't live in the
+   *  reducer. */
+  const snapshot = useCallback(
+    (): ViewSnapshot => ({
+      selected: stateRef.current.selected,
+      expanded: stateRef.current.expanded,
+      pose: getCameraPose(),
+    }),
+    [],
+  );
+
+  /** Record the CURRENT view before a discrete navigation replaces it.
+   *
+   *  Every navigation the brief lists — a palette jump, an arrow hop, a
+   *  breadcrumb click, a cluster expand/collapse — funnels through
+   *  `revealAndSelect`, `toggleExpand` or one of the two collapses, so wrapping
+   *  those four is the whole coverage. Doing it here rather than at each of the
+   *  ~six call sites is deliberate: a new navigation UI gets history for free,
+   *  and no site can push twice or forget.
+   *
+   *  Deliberately NOT recorded: `select` (an inspect, not a move — and it is
+   *  what Esc/misclick deselection uses, which must not fill history with
+   *  identical entries), `requestFit`, and `revealWithoutRefit` (the tour drives
+   *  its own sequence; see `resetViewHistory` on tour entry). */
+  const record = useCallback(() => {
+    if (!stateRef.current.model) return; // nothing meaningful to return to yet
+    pushView(snapshot());
+  }, [snapshot]);
 
   // Pointer-rate / per-pass channels. Created once; the context value is the
   // channel OBJECT, so publishing a value never re-renders a context consumer —
@@ -697,19 +788,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // splitting dispatch from state.
   const actions = useMemo<Actions>(
     () => ({
-      toggleExpand: (key) => dispatch({ t: "toggleExpand", key }),
-      collapseBranch: () => dispatch({ t: "collapseBranch" }),
-      collapseToFileLevel: () => dispatch({ t: "collapseToFileLevel" }),
+      toggleExpand: (key) => {
+        record();
+        dispatch({ t: "toggleExpand", key });
+      },
+      collapseBranch: () => {
+        record();
+        dispatch({ t: "collapseBranch" });
+      },
+      collapseToFileLevel: () => {
+        record();
+        dispatch({ t: "collapseToFileLevel" });
+      },
       select: (id) => dispatch({ t: "select", id }),
       requestFit: () => dispatch({ t: "requestFit" }),
-      revealAndSelect: (id, opts) =>
+      revealAndSelect: (id, opts) => {
+        record();
         dispatch({
           t: "revealAndSelect",
           id,
           fly: opts?.fly,
           collapseDeeper: opts?.collapseDeeper,
-        }),
+        });
+      },
       revealWithoutRefit: (keys) => dispatch({ t: "revealWithoutRefit", keys }),
+      historyBack: () => {
+        const previous = stepBack(snapshot());
+        if (!previous) return false;
+        dispatch({ t: "restoreView", snapshot: previous });
+        return true;
+      },
+      historyForward: () => {
+        const next = stepForward(snapshot());
+        if (!next) return false;
+        dispatch({ t: "restoreView", snapshot: next });
+        return true;
+      },
       setKindFilter: (kind, hidden) => dispatch({ t: "setKindFilter", kind, hidden }),
       setEdgeTypeFilter: (type, hidden) => dispatch({ t: "setEdgeTypeFilter", type, hidden }),
       setMinConfidence: (value) => dispatch({ t: "setMinConfidence", value }),
@@ -722,10 +836,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setFocusDepth: (depth) => dispatch({ t: "setFocusDepth", depth }),
       toggleCoupling: () => dispatch({ t: "toggleCoupling" }),
       setCochange: (map) => dispatch({ t: "setCochange", map }),
-      startTour: () => dispatch({ t: "startTour" }),
+      // DECISION (V4 §8): every `cleanSlate` path CLEARS view history. A clean
+      // slate is a fresh start, so walking `[` back into a pre-reset view would
+      // resurrect exactly the expansion and overlays the reader just asked to be
+      // rid of — and would restore a camera pose framing a scene that no longer
+      // exists. Tour entry is a cleanSlate too, and the tour drives its own
+      // sequence of reveals; leaving those in history would make `[` step
+      // through a cinematic the reader already exited.
+      startTour: () => {
+        resetViewHistory();
+        dispatch({ t: "startTour" });
+      },
       exitTour: () => dispatch({ t: "exitTour" }),
-      resetView: () => dispatch({ t: "resetView" }),
-      resetExpansion: () => dispatch({ t: "resetExpansion" }),
+      resetView: () => {
+        resetViewHistory();
+        dispatch({ t: "resetView" });
+      },
+      resetExpansion: () => {
+        resetViewHistory();
+        dispatch({ t: "resetExpansion" });
+      },
       setBundleBeta: (value) => dispatch({ t: "setBundleBeta", value }),
       setIdleDrift: (on) => dispatch({ t: "setIdleDrift", on }),
       retryLoad: () => dispatch({ t: "retryLoad" }),
@@ -733,7 +863,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       hover: (id) => hovered.set(id),
       setEdgeStats: (stats) => edgeStats.set(stats),
     }),
-    [hovered, edgeStats]
+    [hovered, edgeStats, record, snapshot]
   );
 
   return (
