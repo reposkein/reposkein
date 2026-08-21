@@ -204,8 +204,15 @@ describe("ErrorScreen — actionable, with Retry", () => {
   });
 });
 
+/** NOTE ON WHAT IS ASSERTABLE HERE. jsdom 30 does not implement `inert` at all —
+ *  no IDL property, no focus blocking (probed, not assumed). So these tests
+ *  assert that the correct MECHANISM is applied (the `inert` attribute present
+ *  exactly while hidden, and `aria-hidden` deliberately absent), which is a real
+ *  improvement over the class-string assertions they replace, but the behavioural
+ *  half — a faded button genuinely refusing focus and clicks — is left to the
+ *  browser gate. Asserting focus here would only be asserting jsdom's gap. */
 describe("Cinematic mode — the tour fades all chrome but its own transport", () => {
-  it("hides the group (opacity 0, aria-hidden, unclickable) while touring", () => {
+  it("makes the group inert while touring, not merely transparent", () => {
     render(
       <ChromeGroup hidden>
         <button type="button">status bar thing</button>
@@ -213,18 +220,34 @@ describe("Cinematic mode — the tour fades all chrome but its own transport", (
     );
     const group = screen.getByTestId("chrome-group");
     expect(group.getAttribute("data-hidden")).toBe("true");
-    expect(group.getAttribute("aria-hidden")).toBe("true");
     expect(group.className).toContain("opacity-0");
-    expect(group.className).toContain("pointer-events-none");
+
+    // The real fix (round 1, I2): opacity alone leaves faded chrome clickable
+    // and Tab-focusable, and the children's own `pointer-events-auto` overrides
+    // anything the wrapper sets — so the wrapper cannot switch interactivity off
+    // on their behalf. `inert` removes pointer events, focusability and
+    // a11y-tree presence together.
+    expect(group.hasAttribute("inert")).toBe(true);
   });
 
-  it("restores it on exit — visibility is a pure function of the tour flag", () => {
+  it("aria-hidden is NOT used to hide focusable chrome (that would be an ARIA violation)", () => {
+    render(
+      <ChromeGroup hidden>
+        <button type="button">status bar thing</button>
+      </ChromeGroup>,
+    );
+    // `inert` already removes the subtree from the a11y tree; pairing it with
+    // aria-hidden over focusable controls is the anti-pattern it replaces.
+    expect(screen.getByTestId("chrome-group").hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  it("drops inert on exit, so the chrome is interactive again", () => {
     const { rerender } = render(
       <ChromeGroup hidden>
         <button type="button">status bar thing</button>
       </ChromeGroup>,
     );
-    expect(screen.getByTestId("chrome-group").className).toContain("opacity-0");
+    expect(screen.getByTestId("chrome-group").hasAttribute("inert")).toBe(true);
 
     rerender(
       <ChromeGroup hidden={false}>
@@ -233,7 +256,9 @@ describe("Cinematic mode — the tour fades all chrome but its own transport", (
     );
     const group = screen.getByTestId("chrome-group");
     expect(group.className).toContain("opacity-100");
-    expect(group.getAttribute("aria-hidden")).toBe("false");
+    // React 19 treats `inert` as a boolean prop: false must omit the attribute
+    // entirely, not render `inert="false"` (which would still be inert).
+    expect(group.hasAttribute("inert")).toBe(false);
   });
 
   it("spans the viewport, so fading cannot shift its fixed children", () => {
@@ -262,7 +287,7 @@ describe("Blur discipline (V3 §6)", () => {
   it("a transient layer MAY blur its backdrop", () => {
     currentStore = makeStore().store;
     render(
-      <LayerShell id="legend" title="Legend" placement="bottom-9 right-3" width="w-56">
+      <LayerShell id="legend" title="Legend" dock="right" width="w-56">
         <span />
       </LayerShell>,
     );
@@ -272,7 +297,7 @@ describe("Blur discipline (V3 §6)", () => {
   it("layer motion is gated on motion-safe, so reduced-motion gets no animation", () => {
     currentStore = makeStore().store;
     render(
-      <LayerShell id="help" title="Help" placement="bottom-9 right-3" width="w-56">
+      <LayerShell id="help" title="Help" dock="right" width="w-56">
         <span />
       </LayerShell>,
     );

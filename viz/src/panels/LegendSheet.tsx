@@ -37,7 +37,7 @@ export function LegendSheet() {
   const languages = useMemo(() => (model ? presentLanguages(model) : []), [model]);
 
   return (
-    <LayerShell id="legend" title="Legend" placement="bottom-9 right-3" width="w-56">
+    <LayerShell id="legend" title="Legend" dock="right" width="w-56">
       <div className="max-h-[min(60vh,26rem)] overflow-y-auto p-2.5">
         <Group label="Node kind">
           {NODE_KIND_META.map(({ kind, label }) => (

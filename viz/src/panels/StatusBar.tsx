@@ -326,18 +326,21 @@ function StatusBarRight({ chips, collapseChips }: { chips: ModeChip[]; collapseC
       <LayerToggle
         id="minimap"
         label="Map"
+        name="map"
         hint="Overview of the clusters currently on screen"
         open={layer}
       />
       <LayerToggle
         id="legend"
         label="Legend"
+        name="legend"
         hint="What every color and line weight means"
         open={layer}
       />
       <LayerToggle
         id="filters"
         label="Filters"
+        name="filters"
         hint="Symbol kinds, relationships, confidence, edge bundling"
         open={layer}
       />
@@ -361,7 +364,13 @@ function StatusBarRight({ chips, collapseChips }: { chips: ModeChip[]; collapseC
         />
       )}
       <TourLaunchButton />
-      <LayerToggle id="help" label="?" hint="Keyboard shortcuts" open={layer} />
+      <LayerToggle
+        id="help"
+        label="?"
+        name="keyboard shortcuts"
+        hint="Every key and pointer gesture"
+        open={layer}
+      />
     </div>
   );
 }
@@ -370,17 +379,25 @@ function StatusBarRight({ chips, collapseChips }: { chips: ModeChip[]; collapseC
  *  bar and the layer can never disagree about what's open — and because the
  *  singleton holds ONE id, pressing Legend visibly un-presses Map.
  *
+ *  `label` is the pill's text, `name` its prose name for the tooltip. They are
+ *  separate because the help pill's label is the glyph "?", and lower-casing a
+ *  label to build a sentence produced "Hide ? — …" (fix round 1, M6a).
+ *
  *  `data-layer-toggle` is load-bearing, not decoration: LayerShell's
  *  outside-click dismissal treats these pills as INSIDE, so the mousedown
  *  doesn't close the layer only for the following click to re-open it. */
 function LayerToggle({
   id,
   label,
+  name,
   hint,
   open,
 }: {
   id: LayerId;
+  /** The pill's visible text — may be a glyph. */
   label: string;
+  /** The prose name used in the tooltip sentence. */
+  name: string;
   hint: string;
   open: LayerId | null;
 }) {
@@ -388,7 +405,7 @@ function LayerToggle({
   return (
     <IconToggle
       label={label}
-      title={active ? `Hide ${label.toLowerCase()} — ${hint}` : `${label} — ${hint}`}
+      title={`${active ? "Hide" : "Show"} ${name} — ${hint}`}
       active={active}
       onClick={() => toggleLayer(id)}
       layerToggle

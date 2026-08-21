@@ -20,6 +20,7 @@ import { nodeKindColorVar } from "../data/encodingVars";
 import { nodeKindGlyph } from "../data/nodeGlyph";
 import { fetchSource, type SourceSlice } from "../data/api";
 import { isStaticMode } from "../data/staticMode";
+import { keyScopeProps } from "./globalKeys";
 import type { NodeRecord } from "../data/model";
 
 interface IncidentRow {
@@ -207,7 +208,12 @@ function Overview({ rec }: { rec: NodeRecord }) {
  *  rows use ROVING TABINDEX: exactly one row is in the tab order at a time,
  *  ↑/↓/Home/End move it, Enter/Space navigates. That's one Tab stop for the
  *  whole table rather than one per neighbor — the standard grid pattern, and the
- *  reason a 200-edge hub doesn't become a 200-Tab wall. */
+ *  reason a 200-edge hub doesn't become a 200-Tab wall.
+ *
+ *  The table declares `keyScopeProps` and its rows `stopPropagation`, because
+ *  those same Arrow keys are ALSO Root's global "hop to the next neighbor"
+ *  binding: without both, one ArrowDown moved the roving focus *and* jumped the
+ *  selection to an unrelated node. See `panels/globalKeys.ts`. */
 function IncidentEdges() {
   const store = useStore();
   const model = store.model!;
@@ -287,26 +293,34 @@ function IncidentEdges() {
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
+        e.stopPropagation();
         focusRow(Math.min(rows.length - 1, index + 1));
         break;
       case "ArrowUp":
         e.preventDefault();
+        e.stopPropagation();
         focusRow(Math.max(0, index - 1));
         break;
       case "Home":
         e.preventDefault();
+        e.stopPropagation();
         focusRow(0);
         break;
       case "End":
         e.preventDefault();
+        e.stopPropagation();
         focusRow(rows.length - 1);
         break;
       case "Enter":
       case " ":
         e.preventDefault();
+        e.stopPropagation();
         store.revealAndSelect(id, { fly: true });
         break;
     }
+    // Tab is deliberately NOT stopped: it must keep its normal "leave this
+    // widget" focus behaviour. The global handler declines it instead, via the
+    // `keyScopeProps` marker on the table below.
   }
 
   return (
@@ -316,6 +330,7 @@ function IncidentEdges() {
       ) : (
         <table
           data-testid="inspector-edges"
+          {...keyScopeProps}
           className="w-full border-collapse text-left text-[11px]"
         >
           <caption className="sr-only">

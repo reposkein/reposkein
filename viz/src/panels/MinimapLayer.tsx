@@ -125,7 +125,7 @@ export function MinimapLayer() {
   };
 
   return (
-    <LayerShell id="minimap" title="Map" placement="bottom-9 right-3" width="w-[184px]">
+    <LayerShell id="minimap" title="Map" dock="right" width="w-[184px]">
       <div className="p-2">
         <canvas
           ref={canvasRef}

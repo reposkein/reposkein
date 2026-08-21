@@ -20,6 +20,7 @@ import { fromWorker, type ClientModel } from "../data/clientModel";
 import type { WorkerResult } from "../data/worker/graph.worker";
 import type { RawGraph } from "../data/types";
 import { buildCommandRegistry } from "../state/commands";
+import { handleGlobalKey, keyScopeProps } from "./globalKeys";
 
 // The source peek fetches a slice; keep it out of the way (and assert the
 // static-mode degrade separately).
@@ -441,5 +442,114 @@ describe("Inspector — opaque, not blurred (V3 §6)", () => {
     currentStore = makeStore({ model: tinyModel(), selected: SEL }).store;
     render(<Inspector />);
     expect(screen.getByTestId("inspector").className).not.toMatch(/backdrop-blur/);
+  });
+});
+
+/** REGRESSION (fix round 1, C1). The edges table binds Arrow/Home/End for its
+ *  roving tabindex; Root binds the SAME arrows globally to "hop to the next
+ *  neighbor". Each was correct in isolation — which is exactly why testing them
+ *  in isolation hid the bug: one ArrowDown on a focused row moved the roving
+ *  focus AND jumped the selection to an unrelated node.
+ *
+ *  So this suite mounts the Inspector together with a real window listener
+ *  wired the way `routes/Root.tsx` wires it, and asserts the two coexist. */
+describe("Inspector + Root's global keys mounted together (the seam)", () => {
+  /** Exactly what Root's effect installs. */
+  function mountGlobalKeys(store: Store, env = { openPalette: vi.fn(), toggleLayer: vi.fn() }) {
+    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, store, store, env);
+    window.addEventListener("keydown", onKey);
+    return {
+      env,
+      teardown: () => window.removeEventListener("keydown", onKey),
+    };
+  }
+
+  it("ArrowDown on a focused row moves focus one row and leaves the selection alone", () => {
+    const { store, actions } = makeStore({ model: tinyModel(), selected: SEL });
+    currentStore = store;
+    render(<Inspector />);
+    const { teardown } = mountGlobalKeys(store);
+
+    const rows = () => screen.getAllByTestId("inspector-edge-row");
+    rows()[0]!.focus();
+    fireEvent.keyDown(rows()[0]!, { key: "ArrowDown", bubbles: true });
+
+    expect(document.activeElement).toBe(rows()[1]);
+    expect(rows()[1]!.getAttribute("tabindex")).toBe("0");
+    // THE ASSERTION THAT WAS MISSING: no selection change.
+    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+    teardown();
+  });
+
+  it("ArrowUp / Home / End are likewise consumed by the table alone", () => {
+    const { store, actions } = makeStore({ model: tinyModel(), selected: SEL });
+    currentStore = store;
+    render(<Inspector />);
+    const { teardown } = mountGlobalKeys(store);
+
+    const rows = () => screen.getAllByTestId("inspector-edge-row");
+    rows()[0]!.focus();
+    for (const key of ["End", "Home", "ArrowDown", "ArrowUp"]) {
+      fireEvent.keyDown(document.activeElement!, { key, bubbles: true });
+    }
+    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+    teardown();
+  });
+
+  it("Tab inside the table keeps normal focus behaviour instead of hopping", () => {
+    // Tab is deliberately NOT stopPropagation'd (it must be able to leave the
+    // widget), so the global handler is what has to decline it — via the
+    // table's `data-key-scope` marker.
+    const { store, actions } = makeStore({ model: tinyModel(), selected: SEL });
+    currentStore = store;
+    render(<Inspector />);
+    const { teardown } = mountGlobalKeys(store);
+
+    screen.getAllByTestId("inspector-edge-row")[0]!.focus();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", bubbles: true });
+    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+
+    // The sort buttons live inside the same scope, so Tab there is safe too.
+    screen.getByTestId("inspector-sort-neighbor").focus();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", bubbles: true });
+    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+    teardown();
+  });
+
+  it("the global hop STILL works from outside the table (the guard is scoped, not a blanket)", () => {
+    const { store, actions } = makeStore({ model: tinyModel(), selected: SEL });
+    currentStore = store;
+    render(<Inspector />);
+    const { teardown } = mountGlobalKeys(store);
+
+    // Focus the drawer's Impact button — chrome, but outside the key scope.
+    screen.getByTestId("inspector-impact").focus();
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown", bubbles: true });
+
+    expect(actions.revealAndSelect).toHaveBeenCalledOnce();
+    teardown();
+  });
+
+  it("Enter on a row navigates exactly once, not once per listener", () => {
+    const { store, actions } = makeStore({ model: tinyModel(), selected: SEL });
+    currentStore = store;
+    render(<Inspector />);
+    const { teardown } = mountGlobalKeys(store);
+
+    const row = screen.getAllByTestId("inspector-edge-row")[0]!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter", bubbles: true });
+
+    expect(actions.revealAndSelect).toHaveBeenCalledOnce();
+    teardown();
+  });
+
+  it("the table carries the key-scope marker the global handler looks for", () => {
+    currentStore = makeStore({ model: tinyModel(), selected: SEL }).store;
+    render(<Inspector />);
+    const table = screen.getByTestId("inspector-edges");
+    expect(table.hasAttribute("data-key-scope")).toBe(true);
+    // …and the marker is the one globalKeys actually exports (no drift).
+    expect(Object.keys(keyScopeProps)).toEqual(["data-key-scope"]);
   });
 });

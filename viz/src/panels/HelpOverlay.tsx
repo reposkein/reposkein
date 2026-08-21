@@ -4,17 +4,20 @@ import { LayerShell } from "./LayerShell";
 /** The help overlay (Astrolabe V3 §2), replacing V2's five-line "Keys" stub
  *  that lived inline in the status bar. Rows come from `data/keymap.ts` so the
  *  overlay and the handlers that implement the shortcuts can be checked against
- *  each other (`panels/helpOverlay.test.tsx`).
+ *  each other (`panels/chromeStates.test.tsx`).
  *
- *  Centered via `inset-x-0 mx-auto` rather than `left-1/2 -translate-x-1/2` on
- *  purpose: LayerShell's entrance animation animates `transform`, which would
- *  fight a translate-based centering and snap the panel sideways on open. */
+ *  Centered via `dock="center"` (`inset` + `mx-auto`, see `layerPlacement`)
+ *  rather than `left-1/2 -translate-x-1/2` on purpose: LayerShell's entrance
+ *  animation animates `transform`, which would fight a translate-based
+ *  centering and snap the panel sideways on open. It also means the panel
+ *  re-centers in the space left of the Inspector when a node is selected,
+ *  rather than sliding underneath it. */
 export function HelpOverlay() {
   return (
     <LayerShell
       id="help"
       title="Keyboard & pointer"
-      placement="bottom-9 inset-x-0 mx-auto"
+      dock="center"
       width="w-[min(30rem,calc(100vw-1.5rem))]"
     >
       <div className="max-h-[min(70vh,34rem)] overflow-y-auto p-3">

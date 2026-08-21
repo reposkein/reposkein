@@ -26,7 +26,7 @@
  *  Esc order (palette > tour > layer > chip) is enforced by the READERS:
  *   - `panels/LayerShell.tsx` defers to the palette and an active tour;
  *   - `panels/StatusBar.tsx`'s chip handler additionally defers to `openLayer`.
- *  See `panels/escStack.test.tsx`. */
+ *  See `panels/layerStack.test.tsx`. */
 
 import { useSyncExternalStore } from "react";
 
@@ -86,6 +86,35 @@ export function subscribeLayer(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** Whatever layer was open when the guided tour started, parked so exiting the
+ *  tour can put it back. Separate from `openId` (rather than a "suppressed"
+ *  flag) so every reader — the Esc stack, the status-bar pills, LayerHost —
+ *  agrees that NOTHING is open during cinematic mode, without any of them
+ *  needing to know a tour is running. */
+let stashed: LayerId | null = null;
+
+/** Closes the open layer, remembering it. Called on tour entry: cinematic mode
+ *  fades all chrome, and a legend sheet sitting through the flythrough is
+ *  exactly what that mode exists to prevent. */
+export function stashLayer(): void {
+  stashed = openId;
+  hideLayer();
+}
+
+/** Re-opens the layer `stashLayer` parked, if any, and forgets it. Called on
+ *  tour exit, so the tour is a genuine round trip rather than a way to silently
+ *  lose the panel you had open. */
+export function restoreStashedLayer(): void {
+  const next = stashed;
+  stashed = null;
+  if (next) showLayer(next);
+}
+
+/** Test/introspection hook: what `restoreStashedLayer` would re-open. */
+export function stashedLayer(): LayerId | null {
+  return stashed;
+}
+
 /** React binding. Only chrome subscribes — never anything inside <Canvas>. */
 export function useOpenLayer(): LayerId | null {
   return useSyncExternalStore(subscribeLayer, openLayer, openLayer);
@@ -94,5 +123,6 @@ export function useOpenLayer(): LayerId | null {
 /** Test hook: drop back to "nothing open" without going through a component. */
 export function resetLayers(): void {
   openId = null;
+  stashed = null;
   emit();
 }

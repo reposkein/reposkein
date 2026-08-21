@@ -3,7 +3,7 @@ import { useStore } from "../state/store";
 import { buildTour, type TourStop } from "../data/tour";
 import { tourExpandKeys } from "../data/tourApply";
 import { isCommandPaletteOpen } from "./paletteOpenState";
-import { hideLayer } from "./layerState";
+import { restoreStashedLayer, stashLayer } from "./layerState";
 
 /** Dwell (ms) parked on each stop before auto-advancing while playing. Tuned a
  *  touch above the camera's idle-drift threshold (Controls.IDLE_AFTER_MS=4000)
@@ -68,14 +68,19 @@ export function TourController() {
   const prevActive = useRef(false);
   useEffect(() => {
     if (active && !prevActive.current) {
-      // Entering cinematic mode: put away any summoned layer, so "all chrome
-      // fades except the caption and transport" is true of the layers too — a
-      // legend sheet left open would otherwise sit there through the flythrough
-      // (it lives outside the fade group's opacity, being z-above it).
-      hideLayer();
+      // Entering cinematic mode: park any summoned layer. It has to actually
+      // CLOSE, not merely fade — LayerHost renders inside Root's ChromeGroup, so
+      // fading the group does hide it, but a layer left open would also keep
+      // consuming Esc (LayerShell's handler outranks the chip stack), and Esc
+      // during a tour must exit the tour. `stashLayer` remembers it so the exit
+      // below is a genuine round trip.
+      stashLayer();
       setIndex(0);
       setPlaying(true);
       if (stops.length > 0) applyStop(stops[0]!);
+    } else if (!active && prevActive.current) {
+      // Leaving cinematic mode: put back whatever was open before it started.
+      restoreStashedLayer();
     }
     prevActive.current = active;
   }, [active, stops, applyStop]);

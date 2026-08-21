@@ -2,9 +2,11 @@
  *
  *  V2 shipped a five-line "Keys" stub inside the status bar. The full keymap now
  *  lives here rather than as JSX so it is one list that both the help overlay
- *  renders and `panels/helpOverlay.test.tsx` checks against the bindings Root
- *  actually registers — a shortcut added to the key handler but not to the
- *  overlay (or vice versa) is a visible drift, not a silent one.
+ *  renders and the tests check against the bindings Root actually registers —
+ *  a shortcut added to the key handler but not to the overlay (or vice versa) is
+ *  a visible drift, not a silent one. `panels/chromeStates.test.tsx` asserts the
+ *  overlay renders every row; `panels/globalKeys.test.tsx` asserts every row's
+ *  `binding` is really handled.
  *
  *  `keys` are display strings (`"⌘K"`, `"←→"`); `binding` is the literal
  *  `KeyboardEvent.key` Root/the palette listen for, or null for pointer gestures

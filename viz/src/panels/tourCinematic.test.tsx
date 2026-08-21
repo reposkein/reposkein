@@ -38,7 +38,7 @@ const { TourController, TourLaunchButton } = await import("./TourController");
 const { StatusBar } = await import("./StatusBar");
 const { LayerHost } = await import("./LayerHost");
 const { ChromeGroup } = await import("./ChromeGroup");
-const { openLayer, resetLayers, showLayer } = await import("./layerState");
+const { openLayer, hideLayer, resetLayers, showLayer, stashedLayer } = await import("./layerState");
 
 afterEach(() => {
   cleanup();
@@ -200,18 +200,85 @@ describe("the tour overlay renders only the caption and the transport", () => {
   });
 });
 
-describe("entering the tour clears any summoned layer", () => {
-  it("an open legend is put away when the tour starts", () => {
-    // Inactive first, so the mount effect sees the false→true transition.
-    const inactive = makeStore({ model: tourableModel(), tour: false });
-    currentStore = inactive.store;
+describe("entering the tour clears any summoned layer — and exiting puts it back", () => {
+  /** Renders TourController inactive, then flips `tour` on (and optionally off),
+   *  which is how Root drives it. The false→true / true→false transitions are
+   *  what the save/restore effect keys on, so the initial inactive render is
+   *  load-bearing, not ceremony. */
+  function tourLifecycle() {
+    currentStore = makeStore({ model: tourableModel(), tour: false }).store;
     const view = render(<TourController />);
+    return {
+      enter: () => {
+        currentStore = makeStore({ model: tourableModel(), tour: true }).store;
+        act(() => view.rerender(<TourController />));
+      },
+      exit: () => {
+        currentStore = makeStore({ model: tourableModel(), tour: false }).store;
+        act(() => view.rerender(<TourController />));
+      },
+    };
+  }
+
+  it("an open legend is put away when the tour starts", () => {
+    const tour = tourLifecycle();
     act(() => showLayer("legend"));
     expect(openLayer()).toBe("legend");
 
-    currentStore = makeStore({ model: tourableModel(), tour: true }).store;
-    act(() => view.rerender(<TourController />));
+    tour.enter();
 
+    expect(openLayer()).toBeNull();
+  });
+
+  /** REGRESSION (fix round 1, I3). The tour used to call a bare `hideLayer()`,
+   *  so taking a tour silently threw away whichever layer you had open — while
+   *  ChromeGroup's docstring claimed the opposite. It is a round trip now. */
+  it("restores the SAME layer on exit", () => {
+    const tour = tourLifecycle();
+    act(() => showLayer("filters"));
+
+    tour.enter();
+    expect(openLayer()).toBeNull();
+    expect(stashedLayer()).toBe("filters");
+
+    tour.exit();
+    expect(openLayer()).toBe("filters");
+    expect(stashedLayer()).toBeNull(); // the stash is consumed, not sticky
+  });
+
+  it("restores nothing when nothing was open (the common case)", () => {
+    const tour = tourLifecycle();
+    expect(openLayer()).toBeNull();
+
+    tour.enter();
+    tour.exit();
+
+    expect(openLayer()).toBeNull();
+  });
+
+  it("a second tour doesn't resurrect the first tour's layer", () => {
+    const tour = tourLifecycle();
+    act(() => showLayer("legend"));
+
+    tour.enter();
+    tour.exit();
+    expect(openLayer()).toBe("legend");
+
+    // Dismiss it by hand, then tour again: nothing to restore.
+    act(() => {
+      hideLayer();
+    });
+    tour.enter();
+    tour.exit();
+    expect(openLayer()).toBeNull();
+  });
+
+  it("the layer is genuinely closed during the tour, so Esc belongs to the tour", () => {
+    // Not merely faded: a live layer would keep consuming Esc via LayerShell's
+    // capture handler, and Esc during a tour has to exit the tour.
+    const tour = tourLifecycle();
+    act(() => showLayer("help"));
+    tour.enter();
     expect(openLayer()).toBeNull();
   });
 });
@@ -232,12 +299,9 @@ describe("the fade group is what actually hides the chrome", () => {
 
     const group = screen.getByTestId("chrome-group");
     expect(group.className).toContain("opacity-0");
-    expect(group.className).toContain("pointer-events-none");
-    // The status bar is inside the (now invisible) group. `hidden: true` is
-    // required to find it at all — which is itself the assertion that
-    // `aria-hidden` took the whole group out of the accessibility tree.
-    expect(screen.queryByRole("contentinfo")).toBeNull();
-    const bar = screen.getByRole("contentinfo", { hidden: true });
+    expect(group.hasAttribute("inert")).toBe(true);
+    // The status bar is inside the (now inert) group…
+    const bar = screen.getByRole("contentinfo");
     expect(group.contains(bar)).toBe(true);
     // …while the caption and transport are outside it.
     expect(group.contains(screen.getByTestId("tour-caption"))).toBe(false);

@@ -29,7 +29,7 @@ export function FiltersPopover() {
     audit !== "off";
 
   return (
-    <LayerShell id="filters" title="Filters" placement="bottom-9 right-3" width="w-[264px]">
+    <LayerShell id="filters" title="Filters" dock="right" width="w-[264px]">
       <div className="max-h-[min(70vh,32rem)] overflow-y-auto p-2.5">
         <Field label="Symbol kinds" hint="Dim a kind to hide those stars">
           <div className="flex flex-wrap gap-1">

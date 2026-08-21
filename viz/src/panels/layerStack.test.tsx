@@ -38,6 +38,7 @@ vi.mock("../state/store", async () => {
 });
 
 const { LayerHost } = await import("./LayerHost");
+const { layerPlacement } = await import("./LayerShell");
 const { StatusBar } = await import("./StatusBar");
 const {
   hideLayer,
@@ -118,6 +119,41 @@ function makeStore(overrides: Partial<Store> = {}): { store: Store; actions: Act
   const actions = mockActions();
   const store = { ...createInitialState(), ...actions, ...overrides } as Store;
   return { store, actions };
+}
+
+/** A symbol the Inspector will actually render for — needed by the placement
+ *  suite, which has to distinguish "a node is selected" from "the drawer is
+ *  really on screen". */
+const SYM = "rs1:r:sym:a.ts#run@0";
+
+function symbolModel(): ClientModel {
+  const g: RawGraph = {
+    nodes: [
+      { id: "rs1:r:repo:.", labels: ["Repository"], props: { name: "r" } },
+      { id: "rs1:r:file:a.ts", labels: ["File"], props: { name: "a.ts", path: "a.ts" } },
+      {
+        id: SYM,
+        labels: ["Function"],
+        props: { name: "run", file_path: "a.ts", content_hash: "h" },
+      },
+    ],
+    edges: [],
+  };
+  const m = buildModel(g);
+  const result: WorkerResult = {
+    type: "result",
+    repoId: m.tree.repoId,
+    rootKey: m.tree.rootKey,
+    clusters: [...m.tree.byKey.values()],
+    keys: m.layout.keys,
+    positions: m.layout.positions,
+    drawEdges: m.drawEdges,
+    records: [...m.records.entries()],
+    fingerprint: m.fingerprint,
+    counts: { nodes: g.nodes.length, edges: g.edges.length },
+    repoRoot: null,
+  };
+  return fromWorker(result);
 }
 
 let restoreEl: HTMLButtonElement;
@@ -281,6 +317,137 @@ describe("status bar pills drive the layer singleton", () => {
     fireEvent.mouseDown(filters());
     fireEvent.click(filters());
     expect(openLayer()).toBe("filters");
+  });
+
+  /** Fix round 1, M6a: the tooltip was built by lower-casing the pill's LABEL,
+   *  which reads fine for "Map"/"Legend"/"Filters" and produces the nonsense
+   *  "Hide ? — …" for the help pill, whose label is a glyph. */
+  it("tooltips read as sentences, including for the glyph-labelled help pill", () => {
+    const { store } = makeStore({ model: tinyModel() });
+    currentStore = store;
+    render(
+      <>
+        <StatusBar />
+        <LayerHost />
+      </>,
+    );
+    const help = () => screen.getByRole("button", { name: "?" });
+
+    expect(help().getAttribute("title")).toBe(
+      "Show keyboard shortcuts — Every key and pointer gesture",
+    );
+    expect(screen.getByRole("button", { name: "Map" }).getAttribute("title")).toBe(
+      "Show map — Overview of the clusters currently on screen",
+    );
+
+    fireEvent.mouseDown(help());
+    fireEvent.click(help());
+    expect(help().getAttribute("title")).toBe(
+      "Hide keyboard shortcuts — Every key and pointer gesture",
+    );
+    // The label itself is never case-mangled.
+    expect(help().textContent).toBe("?");
+  });
+});
+
+/** REGRESSION (fix round 1, I1). Every right-docked layer used a flat
+ *  `right-3`, and the Inspector is a 360px drawer pinned to the same edge at a
+ *  LOWER z-index (110 vs 120) — so selecting a node and opening the legend
+ *  painted the sheet over the drawer's pinned Impact / Focus action row and made
+ *  it unreachable. The fix reserves the drawer's column; these assert the
+ *  geometry, since jsdom computes no layout to measure. */
+describe("layer placement never collides with the Inspector", () => {
+  it("layerPlacement reserves the Inspector's column at md and up", () => {
+    for (const dock of ["right", "center"] as const) {
+      const closed = layerPlacement(dock, false);
+      const open = layerPlacement(dock, true);
+
+      // Closed: hugs the right gutter, clamped only by the viewport.
+      expect(closed).toContain("right-3");
+      expect(closed).not.toMatch(/md:right-/);
+
+      // Open: shifted left by the drawer's full width + a gutter…
+      expect(open).toContain("md:right-[calc(360px+0.75rem)]");
+      // …and clamped so a wide layer can't overflow back across it.
+      expect(open).toContain("md:max-w-[calc(100vw-360px-0.75rem*3)]");
+      // Below md the drawer is near-full-width; overlaying is correct there.
+      expect(open).toContain("right-3");
+    }
+  });
+
+  it("a centered layer re-centers in the region left of the drawer", () => {
+    // Both insets set + mx-auto = centered inside whatever is left over.
+    const open = layerPlacement("center", true);
+    expect(open).toContain("left-3");
+    expect(open).toContain("mx-auto");
+    expect(open).toContain("md:right-[calc(360px+0.75rem)]");
+  });
+
+  it("every layer offsets while a node is selected, and none does otherwise", () => {
+    for (const id of LAYER_IDS) {
+      // No selection → no reserved column.
+      cleanup();
+      resetLayers();
+      currentStore = makeStore({ model: symbolModel(), selected: null }).store;
+      render(<LayerHost />);
+      summon(id);
+      const unselected = screen.getByTestId(`layer-${id}`);
+      expect(unselected.getAttribute("data-inspector-open")).toBe("false");
+      expect(unselected.className).not.toMatch(/md:right-/);
+
+      // Selection on a node that really exists → column reserved.
+      cleanup();
+      resetLayers();
+      currentStore = makeStore({
+        model: symbolModel(),
+        selected: SYM,
+        status: { kind: "ready" },
+      }).store;
+      render(<LayerHost />);
+      summon(id);
+      const selected = screen.getByTestId(`layer-${id}`);
+      expect(selected.getAttribute("data-inspector-open")).toBe("true");
+      expect(selected.className, `layer ${id} does not clear the inspector`).toContain(
+        "md:right-[calc(360px+0.75rem)]",
+      );
+    }
+  });
+
+  it("does NOT reserve a column when the drawer isn't actually mounted", () => {
+    // A stale deep-link id leaves `selected` set with no drawer on screen…
+    currentStore = makeStore({
+      model: symbolModel(),
+      selected: "rs1:r:sym:ghost@0",
+      status: { kind: "ready" },
+    }).store;
+    render(<LayerHost />);
+    summon("legend");
+    expect(screen.getByTestId("layer-legend").getAttribute("data-inspector-open")).toBe("false");
+    cleanup();
+    resetLayers();
+
+    // …and neither does a selection made before the model is ready.
+    currentStore = makeStore({
+      model: symbolModel(),
+      selected: SYM,
+      status: { kind: "loading", phase: "parsing" },
+    }).store;
+    render(<LayerHost />);
+    summon("legend");
+    expect(screen.getByTestId("layer-legend").getAttribute("data-inspector-open")).toBe("false");
+  });
+
+  it("the layer still sits above the drawer in z-order (it just no longer overlaps it)", () => {
+    currentStore = makeStore({
+      model: symbolModel(),
+      selected: SYM,
+      status: { kind: "ready" },
+    }).store;
+    render(<LayerHost />);
+    summon("filters");
+    // z-120 vs the Inspector's z-110: intentional, so a layer summoned over the
+    // drawer's own edge is never clipped by it.
+    expect(screen.getByTestId("layer-filters").className).toContain("z-[120]");
   });
 });
 

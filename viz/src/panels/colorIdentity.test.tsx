@@ -191,6 +191,23 @@ describe("legend sheet is generated from encoding.ts META only", () => {
       const varName = edgeTypeVarName(meta.type);
       expect(el.getAttribute("data-color-var")).toBe(`var(${varName})`);
       expect(tokens.get(varName)).toBe(meta.color);
+      expect(el.style.backgroundColor).toBe(`var(${varName})`);
+    }
+  });
+
+  it("language swatches name their token too, and reach CSS the same way", () => {
+    currentStore = makeStore({ model: tinyModel() });
+    render(<LegendSheet />);
+    const tokens = generatedTokens();
+
+    // Only the two languages this fixture actually contains — asserted the same
+    // way as kinds and edges rather than by mere presence.
+    for (const lang of ["typescript", "python"]) {
+      const el = screen.getByTestId(`legend-swatch-lang-${lang}`);
+      const varName = languageVarName(lang, true);
+      expect(el.getAttribute("data-color-var")).toBe(`var(${varName})`);
+      expect(el.style.backgroundColor).toBe(`var(${varName})`);
+      expect(tokens.get(varName)).toBe(LANGUAGE_HEX[lang]);
     }
   });
 
