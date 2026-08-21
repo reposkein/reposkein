@@ -126,6 +126,33 @@ origin (hash-history routing handles any subpath).
 
 ---
 
+## Sponsorship & support
+
+RepoSkein's hosted-constellation infra and indexer maintenance are funded in
+part by [Ko-fi](https://ko-fi.com/mongx) support. A viewer sponsorship slot
+is planned (tracked as REP-28) but not yet implemented; the placement policy
+is already decided (ADR `adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`):
+
+- **Viewer chrome only.** A single disclosed `sponsored` chip may appear in
+  the viewer's chrome — never over the 3D canvas, never inside Inspector
+  data. It's opt-out via `REPOSKEIN_ADS=off` and hidden entirely for
+  verified supporters. **Static exports (this doc's §1–§3) never carry it** —
+  a baked, self-contained export stays ad-free with no view-time-fetch
+  exception, full stop.
+- **No ads in embed-server, ever.** embed-server backs `semantic_find`'s
+  retrieval tier; sponsored content there would contaminate results and the
+  determinism/trust story, so it's permanently excluded, not deferred.
+- **No ad container.** Any future delivery mechanism ships as an in-process,
+  fail-open SDK bundled with the viewer — never a required container, which
+  would break the zero-infra invariant.
+
+See the ADR (`.reposkein/decisions/`, or `reposkein-mcp adr export`) for the
+full rationale and the cross-cutting data-handling constraints (no sponsored
+data in `.reposkein/` artifacts, fixed-schema length-capped payloads, an
+immutable disclosure label).
+
+---
+
 ## See also
 
 - [`INSTALL.md`](./INSTALL.md) — installing the MCP server + indexer.

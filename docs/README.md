@@ -11,6 +11,7 @@ the [root README's Documentation table](../README.md#documentation).
 - **Setting up a new repo, workspace, or agent config?** → [`INSTALL.md`](INSTALL.md) — written for agents to execute: a question tree (§1) covering one repo vs workspace, JSONL vs Neo4j, embeddings tier, and which agent CLIs to wire, then step-by-step setup (§2–§7) and troubleshooting (§9).
 - **Joining a repo that already has RepoSkein set up?** → [`INSTALL.md` §0](INSTALL.md#0-joining-an-existing-reposkein-repo) — the one-command `git clone && cd && npx @reposkein/mcp init` path (auto-detects and wires up your agent's config).
 - **Publishing a shareable, always-current view of the graph?** → [`HOSTING.md`](HOSTING.md) — GitHub Pages via `reposkein-mcp init --ci`, or any other static host.
+- **Sponsorship & support?** → [`HOSTING.md` — Sponsorship & support](HOSTING.md#sponsorship--support) — the decided placement policy (viewer chip only, deferred to REP-28; no embed-server ads; no ad containers).
 
 ## Using it day to day
 
