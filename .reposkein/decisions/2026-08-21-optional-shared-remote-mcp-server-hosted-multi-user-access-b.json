@@ -1,0 +1,61 @@
+{
+  "id": "adr:2026-08-21-optional-shared-remote-mcp-server-hosted-multi-user-access-b",
+  "alternatives": "Keep the non-goal and tell teams to run the stdio server behind their own socket bridge (mcp-proxy, ssh): no auth story, no per-caller identity, and the process-global select_repo makes two callers actively unsafe. Ship SSE transport instead of Streamable HTTP: deprecated in the MCP spec and it would need the same auth work. Add OAuth/OIDC via the SDK's auth router: correct for a real SaaS, disproportionate for an operator running one process against one checkout, and it drags in an identity provider — a zero-infra violation in spirit. Read-write by default with an opt-out: inverts the safe default for a networked service. Re-index on a filesystem watcher instead of a HEAD poll: fires on every editor save, and the indexer's idempotence guarantee is defined against committed state, not scratch edits. Serve `/api/*` from a second process next to the MCP server: two graphs, two staleness stories, and the viewer and the agent drift apart — the exact failure sharing view.ts's handler factory prevents.",
+  "anchors": [
+    {
+      "hash": "42bd60b11ac0e0e42d309f8d2d33ecd44096a7f32bb70dfb11d9a8aaf79e8a8e",
+      "kind": "File",
+      "name": "index.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/index.ts",
+      "path": "mcp/src/index.ts"
+    },
+    {
+      "hash": "591883190ce68e5b7b0dece441dbe589320cfe0a58abea6f385c7a01d4031f1d",
+      "kind": "File",
+      "name": "view.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/cli/view.ts",
+      "path": "mcp/src/cli/view.ts"
+    },
+    {
+      "hash": "f2197f68327fa84e53e018805f5374143bb4b5094a76791998052b3201cef3a4",
+      "kind": "File",
+      "name": "repoSession.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/store/repoSession.ts",
+      "path": "mcp/src/store/repoSession.ts"
+    },
+    {
+      "hash": "b5c29ff8f37ca2d986ad8c83e68e5e4e90e11574603e88a2580f0081c1906375",
+      "kind": "File",
+      "name": "writeSemanticSummary.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/tools/writeSemanticSummary.ts",
+      "path": "mcp/src/tools/writeSemanticSummary.ts"
+    },
+    {
+      "hash": "d7243b9f1e85ff5249b58ee958d8644c3df5cb53449334c5b3032df6b0a7f920",
+      "kind": "File",
+      "name": "recordDecision.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/tools/recordDecision.ts",
+      "path": "mcp/src/tools/recordDecision.ts"
+    }
+  ],
+  "body_hash": "41b84e5b88fd19407cef6e0836112b849a6f54ed4c90b5dee85662b2292dd72a",
+  "consequences": "RepoSkein gains a second deployment shape, and with it a threat model it did not have: a mode where an attacker who reaches the port and holds a token can read every file the served repo contains (`/api/source` serves arbitrary in-repo slices) and, with a write token, mutate the sidecar and the decision log. That risk is bounded by the mode being opt-in, auth-mandatory, read-only by default, and single-checkout, but it now has to be documented and maintained. Extracting the tool registration into a per-connection factory is the structural cost: `main()` no longer owns the McpServer, and any new tool must declare whether it mutates so the capability gate stays honest — a checklist item that did not exist before. Attribution improves everywhere, including stdio, because identity became an explicit parameter instead of an ambient env read. The watch loop makes the server's graph a moving target: a caller can see nodes appear between two tool calls, which the stdio path (indexed once at startup) never did.",
+  "context": "The PRD lists a hosted, multi-user deployment as a non-goal, and the code was built to match: the server is launched over stdio by one agent on one machine, its RepoSession/select_repo state and store cache are process-global singletons, the `view` HTTP server binds 127.0.0.1 with no auth because a loopback-only server already trusts its caller, and every write is attributed to REPOSKEIN_AGENT or, when nobody sets it, the literal string \"agent\". Two pressures argue against keeping that non-goal absolute. First, teams that adopted committed summaries and ADRs as shared memory have no way to hand the graph to an agent that is not sitting on a clone of the checkout — a CI job, a hosted coding agent, a reviewer without the repo — short of installing the indexer and cloning everywhere. Second, the anonymity of writes is a real defect for a knowledge base with more than one author: `summary_by` and `decided_by` are almost always \"agent\", so the ADR log cannot say who decided anything. A remote mode with named bearer tokens fixes attribution as a side effect of solving access. The user approved this phase explicitly in the session that produced this record.",
+  "decided_at": "2026-08-21",
+  "decided_by": "marcus (approved in session, recorded by claude)",
+  "decision": "Hosted, multi-user access is now IN scope, but only as a strictly optional operator-run mode: `reposkein-mcp serve --http [--port N] [--host H]`. The following boundaries are part of the decision, not implementation detail. (1) stdio remains the default and the only supported path for a single developer: `reposkein-mcp` with no subcommand behaves exactly as before, and no socket is bound unless `serve` is invoked. (2) The mode is auth-mandatory. `serve` refuses to start with no tokens configured; tokens come from `[serve] tokens` in `.reposkein/config.toml` or `REPOSKEIN_SERVE_TOKENS` as `name:token[:write]` entries; every MCP and `/api/*` request must carry `Authorization: Bearer <token>`; comparison is timing-safe; token values are never logged. (3) The toolset is read-only by default. write_semantic_summary, record_decision, set_decision_status, reaffirm_decision, reindex_file, and init_cpg_skeleton require a token carrying the `write` capability; a read-only token calling one gets a structured refusal naming the tool and the missing capability, never a partial write. (4) Session state is per connection. Each MCP session owns its RepoSession, tool logger, and repo-context cache, so one caller's select_repo cannot move another caller's active repo. (5) The token's NAME is the writer identity for its connection: it lands in `summary_by`/`decided_by` and selects the per-agent sidecar file, overriding REPOSKEIN_AGENT. (6) The checkout stays the source of truth. The server polls `git rev-parse HEAD` (default 30s, `--watch-interval`, 0 disables) and re-indexes only when HEAD differs from the `.reposkein/local/indexed-at` marker, so the deterministic indexer keeps its idempotence and `doctor`'s staleness view stays coherent. (7) One process serves exactly one checkout, and the same process serves the viewer: `/api/*` comes from view.ts's own handler factory (shared, not duplicated) so the hosted viewer and the remote MCP can never disagree about the graph. (8) TLS termination, network exposure, and token distribution are the operator's job; RepoSkein speaks plain HTTP and docs/REMOTE.md says so plainly. (9) Explicitly NOT lifted by this record and still out of scope: user accounts, OAuth/OIDC, per-path or per-repo authorization, rate limiting, audit trails beyond the existing session log, multi-tenancy, and any RepoSkein-operated hosted service. Zero-infra is untouched — no database, no Docker, no new runtime dependency beyond what the MCP SDK already ships. This record is written directly as `accepted` rather than record_decision's default `proposed` because the user ratified the direction explicitly in session; that approval is the same signal set_decision_status exists to capture, so recording it as proposed would understate what happened.",
+  "paths": [
+    "mcp/src/serve/",
+    "mcp/src/server/",
+    "mcp/src/index.ts",
+    "mcp/src/cli/view.ts",
+    "mcp/src/store/repoSession.ts",
+    "docs/REMOTE.md"
+  ],
+  "status": "accepted",
+  "supersedes": [],
+  "title": "Optional shared remote MCP server: hosted multi-user access behind per-token capabilities",
+  "trigger": {
+    "kind": "manual"
+  }
+}
