@@ -6,6 +6,60 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-21
+
+### Added
+
+- **Zero-config repo resolution.** `reposkein-mcp` no longer needs
+  `REPOSKEIN_REPO_PATH` set up front: it walks up to the nearest ancestor
+  `.reposkein/`, or (workspace mode) walks down two levels for a single
+  unambiguous hit. New `list_repos` / `select_repo` MCP tools let an agent
+  enumerate and switch the session-active repo mid-connection — the fix for
+  "can't switch repos without a restart." (#44)
+- **Per-session usage stats.** Every MCP tool call is now logged to
+  `.reposkein/local/sessions/<session-id>.jsonl`, and `reposkein-mcp stats
+  [--last | --session <id> | --all] [--json]` reports calls by tool, top
+  queried nodes/files, ADRs/summaries written, and an estimated
+  context-tokens-saved-vs-grep figure. (#45)
+- **Merge-smooth summaries.** Committed summaries move from one
+  `summaries.jsonl` to sharded storage at `.reposkein/summaries/<xx>.jsonl`
+  (keyed by content hash), so two branches summarising different nodes no
+  longer collide on the same file. Tolerant readers survive merge conflict
+  markers and cross-source divergence, preserving the losing summary rather
+  than dropping it. The layout migration runs automatically the next time a
+  repo is indexed — no manual step. `reposkein-mcp doctor` gained checks for
+  unsplit legacy files and `.gitignore` rules that silently mask shards. (#46)
+- **Hosted constellation.** A reusable `publish-pages.yml` workflow
+  downloads a released `reposkein-indexer` binary instead of building from
+  source, asserts binary/repo schema compatibility via a new
+  `--schema-version` flag, and exports a staleness badge and durable deep
+  links (survives a federated `repo_id` change) into the published viewer.
+  `reposkein-mcp init --ci` writes the workflow template into a consuming
+  repo. (#47)
+- **One-command team join.** `reposkein-mcp init` now detects a fresh clone
+  of an already-`.reposkein`-committed repo and writes MCP config for
+  whichever agent(s) it finds (Claude Code, opencode, Cursor) instead of
+  printing a snippet to copy by hand. `doctor --ci` promotes drift checks to
+  a failing exit code for CI use, and the binary fetch is now proxy-aware
+  (`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`). (#48)
+- **⌘K command palette.** The viewer gains a keyboard-driven palette over
+  nodes and commands, fully keyboard-navigable and accessibility-correct.
+  (#51)
+
+### Changed
+
+- **Viewer stack: React 19 + React Three Fiber v9.** The Astrolabe redesign's
+  foundation — `@react-three/drei` v10, `@react-three/postprocessing` v3,
+  `three` 0.185, a `frameloop="demand"` render loop (every frame now has an
+  explicit trigger), and a store split so pointer-rate state no longer
+  re-renders the whole HUD. Verified pixel-equivalent against the previous
+  build; zero intended visual change. (#50)
+
+### Docs
+
+- **README and docs overhaul.** The README becomes a front door; `docs/`
+  gets a task-oriented index. (#49)
+
 ## [0.3.0] - 2026-08-20
 
 ### Added
