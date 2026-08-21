@@ -109,12 +109,61 @@ describe("writeAgentConfigs — .mcp.json (claude, no CLI)", () => {
     expect(results[0]!.action).toBe("unchanged");
   });
 
-  it("recovers from a corrupt existing .mcp.json instead of crashing", () => {
-    writeFileSync(join(dir, ".mcp.json"), "{ not json");
+  it("never rewrites a corrupt existing .mcp.json — backs it up and reports an error instead", () => {
+    const corrupt = "{ not json";
+    writeFileSync(join(dir, ".mcp.json"), corrupt);
     const results = writeAgentConfigs(dir, { agents: ["claude"], exec: noCliExec() });
-    expect(results[0]!.action).toBe("updated");
-    const doc = JSON.parse(readFileSync(join(dir, ".mcp.json"), "utf8"));
-    expect(doc.mcpServers.reposkein.command).toBe("reposkein-mcp");
+    const r = results[0]!;
+    expect(r.action).toBe("error");
+    // The never-corrupt constraint: the original file is left exactly as it
+    // was (no reposkein-only doc silently clobbering whatever else was there).
+    expect(readFileSync(join(dir, ".mcp.json"), "utf8")).toBe(corrupt);
+    // Backed up so the (already-corrupt) original isn't lost either.
+    expect(r.backupPath).toBeDefined();
+    expect(existsSync(r.backupPath!)).toBe(true);
+    expect(readFileSync(r.backupPath!, "utf8")).toBe(corrupt);
+    // Actionable message: names the file, the parse problem, and next steps.
+    expect(r.message).toContain(".mcp.json");
+    expect(r.message).toMatch(/fix the json|delete the file/i);
+  });
+
+  it("dry-run on a corrupt existing file reports the error without writing a backup", () => {
+    const corrupt = "{ not json";
+    writeFileSync(join(dir, ".mcp.json"), corrupt);
+    const results = writeAgentConfigs(dir, { agents: ["claude"], dryRun: true, exec: noCliExec() });
+    const r = results[0]!;
+    expect(r.action).toBe("error");
+    expect(r.backupPath).toBeUndefined();
+    expect(readFileSync(join(dir, ".mcp.json"), "utf8")).toBe(corrupt);
+    const filesAfter = readdirSync(dir);
+    expect(filesAfter.filter((f: string) => f.endsWith(".bak")).length).toBe(0);
+  });
+
+  it("continues with other agents when one has a corrupt file (init doesn't abort the whole run)", () => {
+    writeFileSync(join(dir, ".mcp.json"), "{ not json");
+    const results = writeAgentConfigs(dir, { agents: ["claude", "opencode", "cursor"], exec: noCliExec() });
+    const byAgent = new Map(results.map((r) => [r.agent, r]));
+    expect(byAgent.get("claude")!.action).toBe("error");
+    expect(byAgent.get("opencode")!.action).toBe("created");
+    expect(byAgent.get("cursor")!.action).toBe("created");
+    expect(existsSync(join(dir, "opencode.json"))).toBe(true);
+    expect(existsSync(join(dir, ".cursor", "mcp.json"))).toBe(true);
+  });
+});
+
+describe("writeAgentConfigs — stale entry + --dry-run leaves no backup", () => {
+  it("an existing, different reposkein entry under --dry-run reports 'dry-run' and creates no .bak", () => {
+    writeFileSync(
+      join(dir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { reposkein: { command: "reposkein-mcp", env: { REPOSKEIN_REPO_PATH: "/stale/path" } } } }, null, 2),
+    );
+    const before = readFileSync(join(dir, ".mcp.json"), "utf8");
+    const results = writeAgentConfigs(dir, { agents: ["claude"], dryRun: true, exec: noCliExec() });
+    expect(results[0]!.action).toBe("dry-run");
+    expect(results[0]!.backupPath).toBeUndefined();
+    expect(readFileSync(join(dir, ".mcp.json"), "utf8")).toBe(before); // untouched
+    const filesAfter = readdirSync(dir);
+    expect(filesAfter.filter((f: string) => f.endsWith(".bak")).length).toBe(0);
   });
 });
 

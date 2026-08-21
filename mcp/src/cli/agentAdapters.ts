@@ -134,8 +134,10 @@ const CURSOR_JSON_SPEC: JsonAdapterSpec = {
 
 /** Idempotently upserts `doc[topKey].reposkein = entry` in a JSON config
  *  file, preserving every other key untouched (other MCP servers, `$schema`,
- *  etc.). Unparseable existing JSON is treated as empty (still backed up
- *  before being overwritten) rather than crashing `init`. */
+ *  etc.). Never guesses at a corrupt/hand-edited existing file — see the
+ *  early return below: it backs the file up (real run only) and reports an
+ *  "error" result instead of overwriting it with a reposkein-only doc,
+ *  which would silently destroy whatever else was in there. */
 function upsertJsonAdapter(
   repoPath: string,
   spec: JsonAdapterSpec,
@@ -146,10 +148,38 @@ function upsertJsonAdapter(
   const exists = existsSync(path);
   let doc: Record<string, unknown> = {};
   if (exists) {
+    let raw: string;
     try {
-      doc = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    } catch {
-      doc = {}; // corrupt/hand-edited JSON — don't guess; overwrite (after backup)
+      raw = readFileSync(path, "utf8");
+    } catch (err) {
+      return {
+        path,
+        action: "error",
+        message: `could not read ${spec.relPath}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    try {
+      doc = JSON.parse(raw) as Record<string, unknown>;
+    } catch (err) {
+      const parseMessage = err instanceof Error ? err.message : String(err);
+      if (dryRun) {
+        return {
+          path,
+          action: "error",
+          message:
+            `${spec.relPath} is not valid JSON (${parseMessage}) — left untouched. ` +
+            "Fix the JSON and re-run, or delete the file.",
+        };
+      }
+      const backupPath = backupFile(path, now);
+      return {
+        path,
+        action: "error",
+        backupPath,
+        message:
+          `${spec.relPath} is not valid JSON (${parseMessage}) — left untouched, backed up to ${backupPath}. ` +
+          "Fix the JSON and re-run, or delete the file.",
+      };
     }
   }
   const section = (doc[spec.topKey] as Record<string, unknown> | undefined) ?? {};

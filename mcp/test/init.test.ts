@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { skillTargetPath, mcpConfigSnippet, ciWorkflowTargetPath, ciWorkflowTemplate, writeCiWorkflow, detectJoinMode, runInit } from "../src/cli/init.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { skillTargetPath, mcpConfigSnippet, ciWorkflowTargetPath, ciWorkflowTemplate, writeCiWorkflow, detectJoinMode, runInit, ensureLocalConfigGitignored } from "../src/cli/init.js";
 import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync as wf, readdirSync } from "node:fs";
 import { tmpdir as osTmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
@@ -18,6 +18,50 @@ describe("init helpers", () => {
     const snip = JSON.parse(mcpConfigSnippet("/repo"));
     expect(snip.mcpServers.reposkein.command).toBe("reposkein-mcp");
     expect(snip.mcpServers.reposkein.env.REPOSKEIN_REPO_PATH).toBe("/repo");
+  });
+});
+
+describe("ensureLocalConfigGitignored", () => {
+  it("creates .gitignore with .mcp.json, opencode.json and .cursor/mcp.json when absent", () => {
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-gitignore-"));
+    try {
+      ensureLocalConfigGitignored(dir);
+      const gitignore = readFileSync(pathJoin(dir, ".gitignore"), "utf8");
+      expect(gitignore).toContain(".mcp.json");
+      expect(gitignore).toContain("opencode.json");
+      expect(gitignore).toContain(".cursor/mcp.json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("appends only the missing entries to an existing .gitignore, preserving its content", () => {
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-gitignore-"));
+    try {
+      wf(pathJoin(dir, ".gitignore"), "node_modules\n.mcp.json\n");
+      ensureLocalConfigGitignored(dir);
+      const gitignore = readFileSync(pathJoin(dir, ".gitignore"), "utf8");
+      expect(gitignore).toContain("node_modules");
+      expect(gitignore).toContain("opencode.json");
+      expect(gitignore).toContain(".cursor/mcp.json");
+      // Only one .mcp.json line (already present before the call).
+      expect(gitignore.split("\n").filter((l) => l.trim() === ".mcp.json").length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is idempotent — a second call adds nothing new", () => {
+    const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-gitignore-"));
+    try {
+      ensureLocalConfigGitignored(dir);
+      const after1 = readFileSync(pathJoin(dir, ".gitignore"), "utf8");
+      ensureLocalConfigGitignored(dir);
+      const after2 = readFileSync(pathJoin(dir, ".gitignore"), "utf8");
+      expect(after2).toBe(after1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -130,10 +174,23 @@ describe("runInit — unsupported platform continues instead of failing", () => 
 });
 
 describe("runInit — join mode agent config + dry-run + backup", () => {
-  it("--dry-run plans a write without touching disk, then a real run creates it", async () => {
+  const origPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const origArch = Object.getOwnPropertyDescriptor(process, "arch")!;
+  const savedBin = process.env.REPOSKEIN_INDEXER_BIN;
+
+  beforeEach(() => {
     delete process.env.REPOSKEIN_INDEXER_BIN;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     Object.defineProperty(process, "arch", { value: "x64", configurable: true }); // unsupported → no bin needed
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", origPlatform);
+    Object.defineProperty(process, "arch", origArch);
+    if (savedBin === undefined) delete process.env.REPOSKEIN_INDEXER_BIN;
+    else process.env.REPOSKEIN_INDEXER_BIN = savedBin;
+  });
+
+  it("--dry-run plans a write without touching disk, then a real run creates it", async () => {
     const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-init-dry-"));
     try {
       const dry = await runInit(dir, { join: true, agents: ["claude"], dryRun: true, agentWriteOpts: { exec: noCliExec } });
@@ -148,9 +205,6 @@ describe("runInit — join mode agent config + dry-run + backup", () => {
   });
 
   it("is idempotent end-to-end: a second real run reports the file as already up to date (no duplicate/second .bak)", async () => {
-    delete process.env.REPOSKEIN_INDEXER_BIN;
-    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-    Object.defineProperty(process, "arch", { value: "x64", configurable: true });
     const dir = mkdtempSync(pathJoin(osTmpdir(), "rs-init-idem-"));
     try {
       await runInit(dir, { join: true, agents: ["claude", "opencode"], agentWriteOpts: { exec: noCliExec } });
@@ -233,5 +287,17 @@ gated("reposkein-mcp init (smoke)", () => {
     if (existsSync(bundledSkillPath())) {
       e2(existsSync(stp(dir))).toBe(true);
     }
+  });
+
+  it2("real join-mode run: hooksOk gitignores the per-machine MCP config files", async () => {
+    // A second init on the same dir, forced into join mode, exercises the
+    // ensureLocalConfigGitignored() call on the actual hooksOk===true path
+    // (not just the unit-tested function in isolation).
+    const code = await runInit(dir, { join: true, agents: ["claude"], agentWriteOpts: { exec: () => ({ status: 1, stdout: "", stderr: "" }) } });
+    e2(code).toBe(0);
+    const gitignore = readFileSync(pathJoin(dir, ".gitignore"), "utf8");
+    e2(gitignore).toContain(".mcp.json");
+    e2(gitignore).toContain("opencode.json");
+    e2(gitignore).toContain(".cursor/mcp.json");
   });
 });
