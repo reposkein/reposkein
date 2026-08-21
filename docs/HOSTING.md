@@ -94,9 +94,12 @@ reposkein-mcp view --export ./_site . \
   --repo-url "https://github.com/<org>/<repo>"
 ```
 
-`./_site` is now a self-contained folder: open `./_site/index.html` directly
-(`file://` works — hash-based routing, no server needed) or upload it
-anywhere static files are served.
+`./_site` is now a self-contained folder — hash-based routing, no backend, no
+external requests — so it can be uploaded anywhere static files are served. It
+does need an `http(s)` origin: the entry is an ES module and browsers block
+module scripts loaded from `file://`, so opening `index.html` off disk shows a
+blank page. For a local look, serve the folder (`python3 -m http.server` inside
+`./_site`, or just `reposkein-mcp view .`).
 
 ---
 
@@ -113,8 +116,9 @@ Because the export is fully self-contained, `./_site` can be hosted
   different CI glue (adapt `publish-pages.yml`'s steps to a `.gitlab-ci.yml`
   job; the `reposkein-mcp view --export` step is host-agnostic).
 - **A local file share / open locally** — for a quick one-off, `reposkein-mcp
-  view --export ./_site .` and hand someone the folder; `_site/index.html`
-  opens directly from `file://`.
+  view --export ./_site .` and hand someone the folder; they serve it with any
+  one-line static server (`python3 -m http.server` inside `_site`). Double-
+  clicking `index.html` will not work — module scripts are blocked on `file://`.
 
 None of these require any change to the export itself — `runExport` never
 makes network calls and never depends on being served from a particular

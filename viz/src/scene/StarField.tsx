@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type ThreeEvent, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { useStore } from "../state/store";
+import { useActions, useHovered, useSetHovered, useStoreState } from "../state/store";
 import { representativeFor, visibleClusters, hoverHighlightReps } from "../data/clientModel";
 import { nodeColor, nodeSize, BRAND_RGB, applyNodeFloor } from "./encoding";
 import { isTestNode } from "../data/classify";
@@ -35,11 +35,13 @@ const ENTRANCE_SEC = 1.1;
  *  expanded clusters render their children). Click → select/expand;
  *  hover → highlight the 1-hop neighborhood and dim the rest. */
 export function StarField() {
-  const store = useStore();
+  const store = useStoreState();
+  const actions = useActions();
   const model = store.model!;
   const pointsRef = useRef<THREE.Points>(null);
   const materialRef = useRef<THREE.PointsMaterial>(null);
-  const hovered = store.hovered;
+  const hovered = useHovered();
+  const setHovered = useSetHovered();
 
   const visible = useMemo(
     () => [...visibleClusters(model, store.expanded)],
@@ -381,6 +383,11 @@ export function StarField() {
       let t = 1;
       if (start !== null) {
         t = Math.min(1, (performance.now() - start) / 1000 / ENTRANCE_SEC);
+        // frameloop="demand": the entrance fade animates a MATERIAL, so nothing
+        // else in the scene graph changes — without this the very first frame
+        // would freeze the stars at 30% size/opacity. Keep asking for frames
+        // until the ease completes, then stop (t===1 → nothing to animate).
+        if (t < 1) invalidate();
         // ease-out cubic
         t = 1 - Math.pow(1 - t, 3);
       }
@@ -478,22 +485,23 @@ export function StarField() {
     if (!c) return;
     if (c.kind === "symbol") {
       // Frame the star + open the detail panel.
-      store.select(c.nodeId ?? key);
+      actions.select(c.nodeId ?? key);
     } else {
       // Expand/collapse cluster, select its backing node if any. toggleExpand
       // bumps fitNonce so the camera refits to the new children.
-      store.toggleExpand(key);
-      if (c.nodeId) store.select(c.nodeId);
+      actions.toggleExpand(key);
+      if (c.nodeId) actions.select(c.nodeId);
     }
   };
 
-  // rAF-coalesced hover dispatch. A single mouse drag fires onPointerMove many
-  // times per frame; each store.hover() changes `hovered`, which re-runs the
-  // star recolor AND (in EdgeLines / FlowParticles) the entire edge roll-up +
-  // bundle tessellation. We coalesce to at MOST one dispatch per animation
-  // frame: handlers stash the latest target in a ref and schedule one rAF that
-  // commits it (skipping no-op repeats), so a drag costs one rebuild per frame
-  // instead of one per pointer event. (Deterministic build path untouched — this
+  // rAF-coalesced hover publish. A single mouse drag fires onPointerMove many
+  // times per frame; each hover change re-runs the star recolor AND (in
+  // EdgeLines / FlowParticles) the entire edge roll-up + bundle tessellation. We
+  // coalesce to at MOST one publish per animation frame: handlers stash the
+  // latest target in a ref and schedule one rAF that commits it (skipping no-op
+  // repeats), so a drag costs one rebuild per frame instead of one per pointer
+  // event. Since the split, hover rides its own channel — the HUD chrome no
+  // longer re-renders at all for it. (Deterministic build path untouched — this
   // only rate-limits a UI event, no Math.random / no geometry math here.)
   const pendingHoverRef = useRef<string | null>(null);
   const hoverRafRef = useRef<number | null>(null);
@@ -517,7 +525,7 @@ export function StarField() {
       const next = pendingHoverRef.current;
       if (next === lastHoverRef.current) return; // no-op: nothing changed this frame
       lastHoverRef.current = next;
-      store.hover(next);
+      setHovered(next);
     });
   };
 

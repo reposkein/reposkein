@@ -4,8 +4,9 @@
  *  `graph-data.js` that assigns `window.__REPOSKEIN_GRAPH__` BEFORE the app
  *  bundle loads. When that global is present we skip ALL network fetches and
  *  build the model on the MAIN thread from the inlined JSONL text, so the
- *  viewer works from `file://` and from any static host subpath (GitHub Pages
- *  /repo/, etc.) with no server.
+ *  viewer needs no backend of any kind and runs from any static host subpath
+ *  (GitHub Pages /repo/, etc.). It still needs an http(s) origin — the entry is
+ *  a module script, which browsers block on `file://`.
  *
  *  This module is the single source of truth for "are we static?" and provides
  *  a main-thread model build mirroring the worker's pipeline. Pure aside from

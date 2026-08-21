@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "./index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createRootRoute,
@@ -33,7 +34,7 @@ const routeTree = rootRoute.addChildren([indexRoute]);
 // Static export (`view --export`) is hosted at an unknown subpath (e.g. GitHub
 // Pages `/<repo>/`), where browser-history path routing wouldn't match `/` and
 // the router would render Not Found. Hash history is path-independent, so the
-// baked site works at any subpath / from file://. The local `view` server is
+// baked site works at any subpath. The local `view` server is
 // served at `/`, so it keeps clean browser-history URLs.
 const router = createRouter({
   routeTree,

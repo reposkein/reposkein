@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import { useStore } from "../state/store";
+import { useHovered, useSetEdgeStats, useStoreState } from "../state/store";
 import {
   selectVisibleEdges,
   repOf,
@@ -35,9 +35,10 @@ function setHasAny(a: Set<string>, b: Set<string>): boolean {
  *  routes each bundle along its hierarchy LCA path as a Holten-bundled curve.
  *  bundleBeta=0 reproduces today's straight lines. One draw call. */
 export function EdgeLines() {
-  const store = useStore();
+  const store = useStoreState();
   const model = store.model!;
-  const hovered = store.hovered;
+  const hovered = useHovered();
+  const setEdgeStats = useSetEdgeStats();
 
   const { geometry, drawn, total } = useMemo(() => {
     // STAGE A — selection + LOD roll-up. activeNodes (selected ∪ hovered ∪
@@ -129,10 +130,12 @@ export function EdgeLines() {
   // old GPU buffer leaks on every expand / filter / hover-driven rebuild.
   useEffect(() => () => geometry.dispose(), [geometry]);
 
-  // Post-commit (never during render): publish the "showing N of M" readout.
+  // Post-commit (never during render): publish the "showing N of M" readout on
+  // its own channel, so recounting re-renders the HeaderBar readout alone
+  // instead of every reducer consumer.
   useEffect(() => {
-    store.setEdgeStats({ drawn, total });
-  }, [drawn, total]); // intentional: only republish when the stats change
+    setEdgeStats({ drawn, total });
+  }, [drawn, total, setEdgeStats]);
 
   const material = useMemo(
     () =>

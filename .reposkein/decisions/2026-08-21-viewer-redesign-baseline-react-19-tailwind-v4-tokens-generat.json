@@ -1,0 +1,54 @@
+{
+  "id": "adr:2026-08-21-viewer-redesign-baseline-react-19-tailwind-v4-tokens-generat",
+  "alternatives": "Keep inline styles and add a JS token module (no cascade, no variants, no dark-mode story, and every panel keeps re-implementing a button); CSS modules (solves colocation but not the missing token/variant layer, and shadcn assumes Tailwind); stay on React 18 and fork/pin drei v9 (freezes the viewer on an unmaintained R3F line and blocks postprocessing v3); check tokens.generated.css into git (immediately stale, and reviewers cannot tell whether encoding.ts or the CSS won); enable Tailwind preflight now and accept the restyle (violates the zero-visual-change requirement of the foundation task).",
+  "anchors": [
+    {
+      "hash": "499d4ea70bdc886ea16e38a29451a3e61178f7f12eba9dbff68e5880cf6ccc66",
+      "kind": "File",
+      "name": "AGENTS.md",
+      "node_id": "rs1:e1e153794891:file:viz/AGENTS.md",
+      "path": "viz/AGENTS.md"
+    },
+    {
+      "hash": "a62e9c4597186901003139b62c100e5902da6c4fa0ed5f6e6637df2de0469e2c",
+      "kind": "File",
+      "name": "encoding.ts",
+      "node_id": "rs1:e1e153794891:file:viz/src/scene/encoding.ts",
+      "path": "viz/src/scene/encoding.ts"
+    },
+    {
+      "hash": "47e5f7a56dd2d5748dc57fc99ac5c387fb3d2a1485ac369221d07ca0941cdc25",
+      "kind": "File",
+      "name": "store.tsx",
+      "node_id": "rs1:e1e153794891:file:viz/src/state/store.tsx",
+      "path": "viz/src/state/store.tsx"
+    },
+    {
+      "hash": "b4d042c608030933705413c8bac23c9bea12fbc2ad8f53b0cbf2200b55a55902",
+      "kind": "File",
+      "name": "vite.config.ts",
+      "node_id": "rs1:e1e153794891:file:viz/vite.config.ts",
+      "path": "viz/vite.config.ts"
+    }
+  ],
+  "body_hash": "8fe49c96355e65426f3e6b6f95b0a3266a93b53c8b0a0deae52929cb39b80b67",
+  "consequences": "Chrome can finally be composed and themed instead of hand-styled, and a color can only be changed in encoding.ts. Costs: two styling systems coexist until the last inline-styled panel is migrated, and shadcn components generated before that point may need preflight's resets (border-width, box-sizing) restated locally. Tailwind v4 scans prose for class candidates, so the CSS bundle carries a few kB of inert utilities until real classes replace them. React 19 pins the R3F/drei/postprocessing/three versions together — none can be bumped alone. Under frameloop=\"demand\" any new useFrame animation that forgets invalidate() will silently run for one frame; the audit table is the guard. Two decorative animators (drei <Stars> twinkle, flow particles) still request frames unconditionally, so the loop only truly idles once they sit behind a motion preference.",
+  "context": "viz/AGENTS.md forbade Tailwind and mandated CSS-in-.css-files-alongside-components, which in practice became inline style objects on every HUD panel: ~2500 lines of unshareable style, no token layer, and colors re-typed as literals next to the scene/encoding.ts tables that are supposed to be the single source of truth. The Astrolabe redesign needs a real component surface (shadcn) across seven tasks, which needs Tailwind; drei v10 / @react-three/postprocessing v3 only ship for React Three Fiber v9, which requires React 19; and the viewer must keep working as a static export opened over file:// with zero network access, so a CDN-hosted font or stylesheet is not an option. Nothing may change visually in the foundation task itself.",
+  "decided_at": "2026-08-21",
+  "decided_by": "marcus (design approved in session, recorded by claude)",
+  "decision": "Tailwind v4 (via @tailwindcss/vite) plus shadcn/ui are permitted in viz/ and supersede the CSS-alongside-components rule; new chrome is written with token-driven utilities, not inline styles. The runtime baseline is React 19 + @react-three/fiber v9 + @react-three/drei v10 + @react-three/postprocessing v3 + three 0.185. Tailwind's preflight is deliberately NOT imported (the CSS entry expands @import \"tailwindcss\" by hand and omits the base layer) so the surviving inline-styled panels and drei <Html> labels are untouched; the task that removes the last inline-styled surface flips it on. scene/encoding.ts stays the single source of truth for every hue: a build-time bridge (src/styles/tokens.ts, run by the reposkein-tokens Vite plugin at dev and build) renders BRAND / NODE_KIND_META / EDGE_TYPE_META / LANGUAGE_HEX into a deterministic @theme static block at src/styles/tokens.generated.css, which is git-ignored so it cannot become a second source of truth. Fonts are self-hosted woff2 under src/assets/fonts (no external requests, relative URLs under base \"./\"). The Canvas renders with frameloop=\"demand\": every useFrame animator must invalidate() while active (scene/frameloop.ts holds the audit), and idle camera drift is opt-in. The one-reducer rule holds for state with semantics, but pointer-rate and per-frame values (hover, edge draw counts) move to dedicated useSyncExternalStore channels, and dispatch is a separate context from state — this is not an exception to \"no state library\", it is how the single reducer stays affordable.",
+  "paths": [
+    "viz/AGENTS.md",
+    "viz/src/styles/",
+    "viz/src/index.css",
+    "viz/vite.config.ts",
+    "viz/src/state/store.tsx",
+    "viz/src/scene/frameloop.ts"
+  ],
+  "status": "accepted",
+  "supersedes": [],
+  "title": "Viewer redesign baseline: React 19, Tailwind v4 tokens generated from encoding.ts",
+  "trigger": {
+    "kind": "manual"
+  }
+}

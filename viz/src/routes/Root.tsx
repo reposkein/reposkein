@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { Stars } from "@react-three/drei";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { StoreProvider, useStore } from "../state/store";
+import { StoreProvider, useEdgeStats, useStore } from "../state/store";
 import { StarField } from "../scene/StarField";
+import { BackgroundStars } from "../scene/BackgroundStars";
 import { NebulaHalos } from "../scene/NebulaHalos";
 import { ConstellationLines } from "../scene/ConstellationLines";
 import { EdgeLines } from "../scene/EdgeLines";
@@ -22,7 +22,6 @@ import { MinimapPanel } from "../panels/MinimapPanel";
 import { TourController } from "../panels/TourController";
 import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
-import { revealChainFor } from "../data/clientModel";
 import { resolveNodeFallback } from "../data/nodeFallback";
 import { badgeInfo, teamConstellationHref } from "../data/badge";
 import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
@@ -88,12 +87,8 @@ function View() {
       e.preventDefault();
       const next = pickNeighbor(model.drawEdges, store.selected, dir);
       if (!next) return;
-      // Reveal (expand ancestors) → select → fly to it.
-      for (const ak of revealChainFor(model, next)) {
-        if (!store.expanded.has(ak)) store.toggleExpand(ak);
-      }
-      store.select(next);
-      store.setFocusTarget(next);
+      // Reveal (expand ancestors) → select → fly to it, as ONE transition.
+      store.revealAndSelect(next, { fly: true });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -118,11 +113,7 @@ function View() {
       id = fallback;
     }
     setNodeNotice(null);
-    for (const ak of revealChainFor(model, id)) {
-      if (!store.expanded.has(ak)) store.toggleExpand(ak);
-    }
-    store.select(id);
-    store.setFocusTarget(id);
+    store.revealAndSelect(id, { fly: true });
   }, [store.model, nodeFromUrl]); // intentional: only re-run when model or URL node changes
 
   // Lazily fetch the temporal co-change map the first time the Coupling overlay
@@ -161,6 +152,12 @@ function View() {
       />
       <Canvas
         camera={{ position: [0, 0, 160], fov: 55, near: 0.1, far: 6000 }}
+        // Render on demand, not on a wall-clock loop: every frame now has a
+        // reason. R3F invalidates for React commits + pointer events and drei's
+        // CameraControls for every camera transition; each useFrame animator
+        // asks for its own frames while it runs (see scene/frameloop.ts for the
+        // full audit — that file is the contract, keep it accurate).
+        frameloop="demand"
         // preserveDrawingBuffer keeps the back buffer readable so the PNG export
         // (CaptureBridge) can serialize the composited frame. Small perf cost,
         // acceptable for a viewer (design: share & scale §P1).
@@ -180,7 +177,7 @@ function View() {
         <fogExp2 attach="fog" args={[0x070a12, 0.0016]} />
         <ambientLight intensity={0.6} />
         {/* Background starfield for depth (decorative, behind the graph). */}
-        <Stars radius={600} depth={120} count={2600} factor={6} saturation={0} fade speed={0.6} />
+        <BackgroundStars />
         {store.status.kind === "ready" && store.model && (
           <>
             <NebulaHalos />
@@ -304,15 +301,7 @@ function HeaderBar() {
         </div>
       )}
       {store.model && <StalenessBadge />}
-      {store.model && store.edgeStats.total > 0 && (
-        <div
-          style={{ fontSize: 11, opacity: 0.6, marginTop: 1 }}
-          title="Edge bundles currently drawn / total bundles before the render cap"
-        >
-          showing {store.edgeStats.drawn} of {store.edgeStats.total} connections
-          {store.edgeStats.drawn < store.edgeStats.total ? " (capped)" : ""}
-        </div>
-      )}
+      {store.model && <EdgeStatsReadout />}
       <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>
         scroll = zoom · drag = orbit · click cluster = expand · click star = inspect · Esc / click space = back
       </div>
@@ -320,6 +309,27 @@ function HeaderBar() {
         keys: / search · f frame all · ←→ / Tab hop neighbor
       </div>
       {store.model && <SearchPanel />}
+    </div>
+  );
+}
+
+/** "showing N of M connections" — its own component precisely so it can
+ *  subscribe to the edgeStats CHANNEL. EdgeLines republishes the counters on
+ *  every render pass (expand, filter, hover-driven rebuild); when they lived in
+ *  the reducer that re-rendered the whole HUD for a number nothing else reads.
+ *  The inline style is the HeaderBar row's, moved verbatim to keep this task at
+ *  zero visual change; it migrates to Tailwind with the rest of HeaderBar in
+ *  REP-18. */
+function EdgeStatsReadout() {
+  const { drawn, total } = useEdgeStats();
+  if (total <= 0) return null;
+  return (
+    <div
+      style={{ fontSize: 11, opacity: 0.6, marginTop: 1 }}
+      title="Edge bundles currently drawn / total bundles before the render cap"
+    >
+      showing {drawn} of {total} connections
+      {drawn < total ? " (capped)" : ""}
     </div>
   );
 }
@@ -445,29 +455,15 @@ function Breadcrumb() {
   }
 
   function navigateToCrumb(key: string) {
-    // Find the chain position and expand up to (and including) this crumb,
-    // collapse anything deeper by toggling off.
-    const chainIdx = chain.indexOf(key);
-    if (chainIdx === -1) return;
-    // Expand all expandable ancestors up to (and including) this crumb. The
-    // crumb's own reveal chain IS root→crumb's expandable keys (the crumb is an
-    // ancestor of the selected node), so the shared helper gives the same set.
-    for (const k of revealChainFor(model, key)) {
-      if (!store.expanded.has(k)) store.toggleExpand(k);
-    }
-    // Collapse any expanded clusters deeper than chainIdx.
-    for (const expandedKey of store.expanded) {
-      if (expandedKey === model.rootKey) continue;
-      const ekChain = model.ancestors.get(expandedKey);
-      if (!ekChain) continue;
-      const ekIdx = ekChain.indexOf(key);
-      // If this expanded key is a descendant of the crumb key (and deeper), collapse it.
-      if (ekIdx !== -1 && ekChain.length - 1 > chainIdx) {
-        store.toggleExpand(expandedKey);
-      }
-    }
-    store.select(key);
-    store.setFocusTarget(key);
+    // Only ancestor crumbs navigate. The trailing crumb for a selected SYMBOL is
+    // not on the cluster chain (it's the leaf itself) and has always been inert —
+    // keep it that way, or clicking it would re-frame the current selection.
+    if (chain.indexOf(key) === -1) return;
+    // ONE transition: open the chain up to this crumb, shut everything below it,
+    // select it and fly there. `collapseDeeper` reproduces the old two-loop walk
+    // (expand root→crumb, collapse strict descendants) inside the reducer, which
+    // is also what collapses the N fitNonce bumps into one.
+    store.revealAndSelect(key, { fly: true, collapseDeeper: true });
   }
 
   return (

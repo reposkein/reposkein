@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { useStore } from "../state/store";
+import { useHovered, useStoreState } from "../state/store";
 import {
   selectVisibleEdges,
   repOf,
@@ -37,12 +37,13 @@ const CURVE_PTS = FLOW_SAMPLES + 1;
  *  useFrame advances a shared phase and walks each particle along its bundle's
  *  polyline (allocation-light: only reads the precomputed arrays). */
 export function FlowParticles() {
-  const store = useStore();
+  const store = useStoreState();
   const model = store.model!;
+  const hovered = useHovered();
 
   const { geometry, curves, curveBase, phaseArr, count } = useMemo(() => {
     // STAGE A — same selection as EdgeLines (with the same activeNodes).
-    const activeNodes = [store.selected, store.hovered, ...(store.focus?.nodes ?? [])].filter(
+    const activeNodes = [store.selected, hovered, ...(store.focus?.nodes ?? [])].filter(
       Boolean,
     ) as string[];
     const { bundles, visible } = selectVisibleEdges(model, {
@@ -67,7 +68,7 @@ export function FlowParticles() {
     // Priority bundles: incident to the selected or hovered node's visible rep.
     const accentKeys = new Set<string>();
     const selRep = store.selected ? repOf(model, store.selected, visible) : null;
-    const hovRep = store.hovered ? repOf(model, store.hovered, visible) : null;
+    const hovRep = hovered ? repOf(model, hovered, visible) : null;
     if (selRep) accentKeys.add(selRep);
     if (hovRep) accentKeys.add(hovRep);
     const isPriority =
@@ -139,7 +140,7 @@ export function FlowParticles() {
     store.audit,
     store.focus,
     store.selected,
-    store.hovered,
+    hovered,
     store.bundleBeta,
   ]);
 

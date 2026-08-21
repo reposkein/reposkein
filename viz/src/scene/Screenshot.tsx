@@ -22,7 +22,7 @@ export function captureScreenshot(): void {
  *  the canvas to a PNG download. The EffectComposer composites bloom onto the
  *  same canvas, so toBlob captures the post-processed image. */
 export function CaptureBridge({ repoId }: { repoId: string | undefined }) {
-  const { gl, scene, camera } = useThree();
+  const { gl, scene, camera, invalidate } = useThree();
 
   useEffect(() => {
     // Defensive: only one CaptureBridge should be mounted at a time. If a
@@ -43,6 +43,12 @@ export function CaptureBridge({ repoId }: { repoId: string | undefined }) {
       }
       const canvas = gl.domElement;
       const filename = screenshotFilename(repoId);
+      // That direct gl.render bypassed the EffectComposer, so the canvas now
+      // holds an UN-COMPOSITED frame (no bloom). Under frameloop="demand"
+      // nothing would necessarily repaint it, leaving the viewer looking at a
+      // flat, un-bloomed scene until the next camera move. Ask for a real frame
+      // once the pixels have been read.
+      const recomposite = () => invalidate();
       const finish = (url: string, revoke: boolean) => {
         const a = document.createElement("a");
         a.href = url;
@@ -57,18 +63,22 @@ export function CaptureBridge({ repoId }: { repoId: string | undefined }) {
           canvas.toBlob((blob) => {
             if (blob) finish(URL.createObjectURL(blob), true);
             else finish(canvas.toDataURL("image/png"), false);
+            recomposite();
           }, "image/png");
         } else {
           finish(canvas.toDataURL("image/png"), false);
+          recomposite();
         }
       } catch {
-        /* capture unavailable (e.g. tainted canvas) — silently no-op */
+        /* capture unavailable (e.g. tainted canvas) — silently no-op, but still
+           repaint: the un-composited frame is on screen either way. */
+        recomposite();
       }
     };
     return () => {
       captureFn = null;
     };
-  }, [gl, scene, camera, repoId]);
+  }, [gl, scene, camera, repoId, invalidate]);
 
   return null;
 }

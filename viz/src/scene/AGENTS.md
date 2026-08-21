@@ -6,8 +6,10 @@ R3F rendering layer. 22 files. The pixels.
 
 | File | Role |
 |---|---|
-| `encoding.ts` | **SSoT for visual encoding** — colors, sizes, labels, edge-type palette. Read this first. |
+| `encoding.ts` | **SSoT for visual encoding** — colors, sizes, labels, edge-type palette. Read this first. Also feeds the CSS `@theme` bridge (`../styles/tokens.ts`). |
+| `frameloop.ts` | **The `frameloop="demand"` contract** — the audit table of every animator and whether it invalidates. Read before adding a `useFrame`. |
 | `StarField.tsx` (602 LOC) | Core scene: instanced stars, edges, fog/bloom orchestration. |
+| `BackgroundStars.tsx` | drei `<Stars>` + the continuous-frame request its twinkle needs under demand. |
 | `EdgeLines.tsx` | Edge segments. Color = type; opacity = `resolution` (`exact`/`name_match`/`ambiguous`). |
 | `ConstellationLines.tsx` | Constellation-level cluster edges. |
 | `FlowParticles.tsx` | Per-edge flow particles → call direction. |
@@ -32,6 +34,8 @@ R3F rendering layer. 22 files. The pixels.
   - **Opacity** = resolver confidence: `exact (1.0)` > `name_match (0.7-0.8)` > `ambiguous (0.4)`
   - Confidence-audit mode inverts opacity to surface low-confidence edges.
 - **GPU pipeline**: single-buffer **instanced** geometry. ~10k+ nodes must stay interactive on integrated GPUs.
+- **Demand frameloop.** The Canvas is `frameloop="demand"`. A `useFrame` that animates by mutating a material or a buffer attribute changes nothing R3F tracks, so it MUST `invalidate()` while it is running and stop when it settles. See `frameloop.ts` for the audit — update it when you add or gate an animation.
+- **Scene state.** Read reducer state with `useStoreState()`, dispatch with `useActions()`, and read `hovered` with `useHovered()` — never from reducer state (it isn't there). Publish hover with `useSetHovered()`.
 - **Read-only.** No mutation of `.reposkein/*.jsonl` from any scene component.
 
 ## CONVENTIONS

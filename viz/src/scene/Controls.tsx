@@ -3,7 +3,7 @@ import { CameraControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import CameraControlsImpl from "camera-controls";
-import { useStore } from "../state/store";
+import { useStoreState } from "../state/store";
 import { representativeFor, visibleClusters } from "../data/clientModel";
 
 /** Latest camera target (orbit pivot) in world space, published each frame so
@@ -33,11 +33,15 @@ const FIT_PADDING = 1.3;
  *   - useFitToVisible: refit whenever the visible set changes (load / expand /
  *     collapse) or a star is framed, via fitToSphere(sphere, true).
  *   - idle drift: gentle automatic azimuth rotation after a few seconds of no
- *     interaction; pauses the instant the user touches the controls. */
+ *     interaction; pauses the instant the user touches the controls. OPT-IN
+ *     (store.idleDrift, default off): an unrequested camera move fights the
+ *     reader, and under frameloop="demand" an always-on drift means the GPU
+ *     never idles. */
 export function Controls() {
   const controlsRef = useRef<CameraControlsImpl | null>(null);
-  const store = useStore();
+  const store = useStoreState();
   const model = store.model;
+  const idleDrift = store.idleDrift;
   const { invalidate } = useThree();
 
   // Tracks the last interaction time so idle drift only runs when idle.
@@ -158,7 +162,11 @@ export function Controls() {
       return;
     }
     if (now - lastInteractionRef.current < IDLE_AFTER_MS) return;
+    // Drift is opt-in. Checked AFTER publishing cameraTarget so the minimap
+    // indicator keeps tracking either way.
+    if (!idleDrift) return;
     // Gentle azimuth-only orbit; no transition (per-frame) so it reads smooth.
+    // invalidate() keeps the demand frameloop alive for as long as drift runs.
     void controls.rotate(DRIFT_RADIANS_PER_SEC * delta, 0, false);
     invalidate();
   });

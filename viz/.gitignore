@@ -2,3 +2,8 @@ node_modules
 dist
 *.tsbuildinfo
 .vite
+
+# Generated at dev + build from src/scene/encoding.ts by the `reposkein-tokens`
+# Vite plugin. Deliberately NOT committed: a checked-in copy is a second source
+# of truth that goes stale the moment encoding.ts changes.
+src/styles/tokens.generated.css
