@@ -221,8 +221,8 @@ export function buildCommandRegistry(): CommandItem[] {
     },
     {
       id: "copy-link",
-      label: "Copy link to selected node",
-      subtitle: "Copies the current deep link (?node=…) to the clipboard",
+      label: "Copy link to this view",
+      subtitle: "The node, the lens and every active overlay (?node&lens&overlays)",
       disabledReason: NEEDS_SELECTION,
       group: "commands",
       disabled: (s) => !s.selected,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -32,6 +32,12 @@ import { isCommandPaletteOpen, requestCommandPalette } from "../panels/paletteOp
 import { handleGlobalKey } from "../panels/globalKeys";
 import { handlePointerMissed } from "../scene/pointerMissed";
 import { resolveNodeFallback } from "../data/nodeFallback";
+import {
+  encodeViewSearch,
+  isDefaultView,
+  parseViewSearch,
+  sameViewSearch,
+} from "../data/urlState";
 import { CaptureBridge } from "../scene/Screenshot";
 
 export function Root() {
@@ -46,7 +52,6 @@ function View() {
   const store = useStore();
   const search = useSearch({ from: "/" });
   const navigate = useNavigate({ from: "/" });
-  const nodeFromUrl = search.node;
 
   // Global keys. The bindings themselves live in `panels/globalKeys.ts` (a pure
   // function over a plain event shape) so they can be tested without standing
@@ -68,8 +73,70 @@ function View() {
   }, [store]);
 
   const [nodeNotice, setNodeNotice] = useState<string | null>(null);
+
+  /** THE INITIAL VIEW, captured ONCE (V4 §7).
+   *
+   *  The URL is both an input (restore this view) and an output (describe the
+   *  current one), and the write-back effect below runs on mount — before the
+   *  graph has loaded and therefore before anything can be restored. Reading the
+   *  incoming params from live `search` would mean the write-back clears them
+   *  first and the restore then finds nothing to do. Snapshotting on first
+   *  render is what makes a cold deep link survive its own round trip. */
+  const initialView = useRef(parseViewSearch(search)).current;
+  /** Set once the initial view has been applied (or found to be empty). Until
+   *  then the write-back holds off, for the reason above. */
+  const restored = useRef(isDefaultView(initialView));
+
+  // RESTORE. One shot, once the model exists: lens first (it resets filters and
+  // clears audit, so anything applied before it would be wiped), then the node,
+  // then the overlays — impact and focus need a selection to compute against.
   useEffect(() => {
-    if (!store.model || !nodeFromUrl) return;
+    if (restored.current || !store.model) return;
+    const model = store.model;
+
+    if (initialView.lens && initialView.lens !== "all") store.setLens(initialView.lens);
+
+    if (initialView.node) {
+      let id = initialView.node;
+      if (!model.records.has(id)) {
+        const fallback = resolveNodeFallback(id, model.records.keys());
+        if (!fallback) {
+          setNodeNotice(initialView.node);
+          id = "";
+        } else {
+          id = fallback;
+        }
+      }
+      if (id) {
+        setNodeNotice(null);
+        store.revealAndSelect(id, { fly: true });
+      }
+    }
+
+    const { impact, focus, coupling, audit } = initialView.overlays;
+    // Depth before the toggle: `toggleFocus` computes against `focusDepth`, so
+    // setting it afterwards would need a second recompute.
+    if (focus !== null) {
+      store.setFocusDepth(focus);
+      store.toggleFocus();
+    } else if (impact) {
+      // `toggleFocus` clears impact and vice versa — they are mutually
+      // exclusive in the reducer, so a link can only restore one. Focus wins
+      // because it carries a depth, i.e. more of the reader's intent.
+      store.toggleImpact();
+    }
+    if (coupling) store.toggleCoupling();
+    if (audit) store.setAudit(audit);
+
+    restored.current = true;
+  }, [store.model]); // intentional: a one-shot restore, guarded by `restored`
+
+  // A later ?node change (the reader edits the URL, or a back/forward that
+  // lands on a different node) still reveals, exactly as it did in V3.
+  const nodeFromUrl = search.node;
+  useEffect(() => {
+    if (!restored.current || !store.model || !nodeFromUrl) return;
+    if (nodeFromUrl === store.selected) return;
     const model = store.model;
     let id = nodeFromUrl;
     if (!model.records.has(id)) {
@@ -95,12 +162,23 @@ function View() {
     };
   }, [store.coupling, store.cochange]); // re-run when the toggle flips on
 
+  // WRITE BACK. The URL always describes the CURRENT view, so the browser's
+  // address bar (and therefore Copy link, which reads `window.location.href`)
+  // carries the lens and the overlays too, not just the node.
+  //
+  // `replace` + the `sameViewSearch` guard together keep this out of the
+  // browser's own history: this is a mirror of app state, not a navigation, and
+  // pushing an entry per reducer transition would make the back button walk
+  // through mode toggles.
+  const nextSearch = encodeViewSearch(store);
   useEffect(() => {
-    navigate({
-      search: store.selected ? { node: store.selected } : {},
-      replace: true,
-    });
-  }, [store.selected]); // intentional: navigate identity is stable
+    if (!restored.current) return;
+    if (sameViewSearch(nextSearch, search)) return;
+    navigate({ search: nextSearch, replace: true });
+    // Intentional deps: `navigate` identity is stable, and `search` is read for
+    // the equality guard only — depending on it would re-run this effect with
+    // its own output.
+  }, [nextSearch.node, nextSearch.lens, nextSearch.overlays]);
 
   return (
     <div className="relative h-full w-full">
