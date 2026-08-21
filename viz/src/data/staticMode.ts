@@ -106,7 +106,7 @@ export function staticCochange(): CochangeMap {
 
 /** Looks up a baked source slice (--with-source) for an exact [path,start,end]
  *  match, or null when static mode has no baked slice for that range (the
- *  DetailPanel then shows no source, same as any other static degrade). */
+ *  Inspector then shows no source, same as any other static degrade). */
 export function staticSourceSlice(path: string, start: number, end: number): SourceSlice | null {
   const slices = staticPayload()?.sourceSlices;
   if (!slices) return null;

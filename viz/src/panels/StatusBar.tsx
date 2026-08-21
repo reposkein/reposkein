@@ -18,7 +18,9 @@ import {
   setChipsPopoverOpen,
   setLensPopoverOpen,
 } from "./statusBarOverlayState";
-import { TourController } from "./TourController";
+import { openLayer, toggleLayer, useOpenLayer, type LayerId } from "./layerState";
+import { pushToast } from "./toastState";
+import { TourLaunchButton } from "./TourController";
 
 const BAR = "h-7 text-[13px] text-[var(--color-brand-cream)]";
 const MONO = "font-mono";
@@ -70,8 +72,14 @@ function useViewportWidth(): number {
  *    throttled external-store subscription, see scene/cameraNearest.ts —
  *    deliberately NOT per-frame React state).
  *  RIGHT: mode chips (derived, one selector, see data/modeChips.ts) + a lens
- *    popover (LensSwitcher's replacement) + minimap/legend/help toggles +
- *    tour/screenshot/frame-all.
+ *    popover (LensSwitcher's replacement) + the SUMMONED-LAYER toggles
+ *    (Map/Legend/Filters/?) + tour/screenshot/frame-all.
+ *
+ *  V3: the Map / Legend pills no longer flip reducer booleans — they call
+ *  `toggleLayer` (panels/layerState.ts), whose state is one nullable id, so
+ *  opening one puts the other away. Filters joined them (FilterHUD retired) and
+ *  `?` now summons the real keymap overlay instead of the five-line stub this
+ *  file used to carry inline.
  *
  *  Esc stacking: the palette wins first (isCommandPaletteOpen), then either
  *  local ephemeral popover this bar owns (the lens popover / the collapsed
@@ -79,7 +87,8 @@ function useViewportWidth(): number {
  *  pattern so the NEWEST overlay always wins: a popover's own Escape handler
  *  closes and consumes the event before this one would have dismissed a
  *  chip), then the guided tour (it owns Esc while active — see
- *  TourController), and only THEN does a topmost mode chip get dismissed.
+ *  TourController), then an open summoned layer (LayerShell consumes it), and
+ *  only THEN does a topmost mode chip get dismissed.
  *  When nothing above is open and no chip is active, the event is left alone
  *  so Root's collapse-level Esc binding still runs — unchanged behavior for
  *  the common case. */
@@ -131,6 +140,7 @@ export function StatusBar() {
       if (isCommandPaletteOpen()) return; // palette is above everything else
       if (isLensPopoverOpen() || isChipsPopoverOpen()) return; // newest overlay wins — the popover closes itself
       if (storeRef.current.tour) return; // the guided tour owns Esc while active
+      if (openLayer() !== null) return; // a summoned layer consumes Esc first (LayerShell)
       const topmost = chipsRef.current[0];
       if (!topmost) return; // nothing to dismiss — let collapseLevel run as before
       e.preventDefault();
@@ -144,7 +154,7 @@ export function StatusBar() {
   return (
     <footer
       role="contentinfo"
-      className={`${BAR} fixed inset-x-0 bottom-0 z-[100] flex items-center gap-4 overflow-x-auto border-t border-[rgba(148,163,207,0.16)] bg-[color-mix(in_srgb,var(--color-brand-navy)_94%,transparent)] px-3`}
+      className={`${BAR} pointer-events-auto fixed inset-x-0 bottom-0 z-[100] flex items-center gap-4 overflow-x-auto border-t border-[rgba(148,163,207,0.16)] bg-[color-mix(in_srgb,var(--color-brand-navy)_94%,transparent)] px-3`}
     >
       <StatusBarLeft hideStaleness={width < BP_HIDE_STALENESS} hideCounts={width < BP_HIDE_COUNTS} />
       <StatusBarCenter crumbs={displayCrumbs} />
@@ -189,7 +199,26 @@ function StatusBarLeft({
  *  see state/store.tsx's docstring on why that split exists). */
 function EdgeCapIndicator() {
   const { drawn, total } = useEdgeStats();
-  if (total <= 0 || drawn >= total) return null;
+  const capped = total > 0 && drawn < total;
+
+  // Toast the moment the cap ENGAGES (V3 §5) — the pill alone is easy to miss,
+  // and "why did some threads disappear when I expanded that folder?" is exactly
+  // the question a silent cap leaves behind. Fires on the transition only, not
+  // on every pass, and is deduped so a wobble around the threshold replaces the
+  // message rather than stacking copies.
+  const wasCapped = useRef(false);
+  useEffect(() => {
+    if (capped && !wasCapped.current) {
+      pushToast(`Edge cap engaged — drawing ${drawn} of ${total} bundles`, {
+        tone: "warn",
+        hint: "Collapse a cluster or narrow the lens to see more",
+        dedupeKey: "edge-cap",
+      });
+    }
+    wasCapped.current = capped;
+  }, [capped, drawn, total]);
+
+  if (!capped) return null;
   return (
     <span
       className={`${MONO} text-[11px] text-[var(--color-brand-amber)]`}
@@ -280,7 +309,10 @@ function StatusBarCenter({ crumbs }: { crumbs: Crumb[] }) {
 
 function StatusBarRight({ chips, collapseChips }: { chips: ModeChip[]; collapseChips: boolean }) {
   const store = useStore();
-  const [helpOpen, setHelpOpen] = useState(false);
+  // Subscribing to the layer singleton here (not the reducer) is what keeps a
+  // layer toggle from re-rendering the constellation: only this bar and the
+  // layer host care which layer is open.
+  const layer = useOpenLayer();
 
   return (
     <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
@@ -291,24 +323,36 @@ function StatusBarRight({ chips, collapseChips }: { chips: ModeChip[]; collapseC
           chips.map((chip) => <ModeChipPill key={chip.kind} chip={chip} />)
         ))}
       <LensPopoverButton />
-      <IconToggle
+      <LayerToggle
+        id="minimap"
         label="Map"
-        title={store.showMinimap ? "Hide minimap" : "Show minimap"}
-        active={store.showMinimap}
-        onClick={() => store.toggleMinimap()}
+        name="map"
+        hint="Overview of the clusters currently on screen"
+        open={layer}
       />
-      <IconToggle
+      <LayerToggle
+        id="legend"
         label="Legend"
-        title={store.showLegend ? "Hide legend" : "Show legend"}
-        active={store.showLegend}
-        onClick={() => store.toggleLegend()}
+        name="legend"
+        hint="What every color and line weight means"
+        open={layer}
+      />
+      <LayerToggle
+        id="filters"
+        label="Filters"
+        name="filters"
+        hint="Symbol kinds, relationships, confidence, edge bundling"
+        open={layer}
       />
       {store.model && (
         <IconToggle
           label="Shot"
           title="Capture a PNG screenshot of the current view"
           active={false}
-          onClick={() => captureScreenshot()}
+          onClick={() => {
+            captureScreenshot();
+            pushToast("Screenshot saved", { tone: "accent", dedupeKey: "screenshot" });
+          }}
         />
       )}
       {store.model && (
@@ -319,15 +363,53 @@ function StatusBarRight({ chips, collapseChips }: { chips: ModeChip[]; collapseC
           onClick={() => store.requestFit()}
         />
       )}
-      {store.model && <TourController />}
-      <IconToggle
+      <TourLaunchButton />
+      <LayerToggle
+        id="help"
         label="?"
-        title="Keyboard shortcuts"
-        active={helpOpen}
-        onClick={() => setHelpOpen((o) => !o)}
+        name="keyboard shortcuts"
+        hint="Every key and pointer gesture"
+        open={layer}
       />
-      {helpOpen && <HelpOverlay onDismiss={() => setHelpOpen(false)} />}
     </div>
+  );
+}
+
+/** A summoned-layer pill. Pressed state comes from the layer singleton, so the
+ *  bar and the layer can never disagree about what's open — and because the
+ *  singleton holds ONE id, pressing Legend visibly un-presses Map.
+ *
+ *  `label` is the pill's text, `name` its prose name for the tooltip. They are
+ *  separate because the help pill's label is the glyph "?", and lower-casing a
+ *  label to build a sentence produced "Hide ? — …" (fix round 1, M6a).
+ *
+ *  `data-layer-toggle` is load-bearing, not decoration: LayerShell's
+ *  outside-click dismissal treats these pills as INSIDE, so the mousedown
+ *  doesn't close the layer only for the following click to re-open it. */
+function LayerToggle({
+  id,
+  label,
+  name,
+  hint,
+  open,
+}: {
+  id: LayerId;
+  /** The pill's visible text — may be a glyph. */
+  label: string;
+  /** The prose name used in the tooltip sentence. */
+  name: string;
+  hint: string;
+  open: LayerId | null;
+}) {
+  const active = open === id;
+  return (
+    <IconToggle
+      label={label}
+      title={`${active ? "Hide" : "Show"} ${name} — ${hint}`}
+      active={active}
+      onClick={() => toggleLayer(id)}
+      layerToggle
+    />
   );
 }
 
@@ -523,11 +605,14 @@ function IconToggle({
   title,
   active,
   onClick,
+  layerToggle,
 }: {
   label: string;
   title: string;
   active: boolean;
   onClick: () => void;
+  /** Marks this pill as a summoned-layer toggle — see LayerToggle's docstring. */
+  layerToggle?: boolean;
 }) {
   return (
     <button
@@ -535,6 +620,7 @@ function IconToggle({
       onClick={onClick}
       title={title}
       aria-pressed={active}
+      data-layer-toggle={layerToggle ? "" : undefined}
       className={`${TAP} rounded-full border px-2 py-1 text-[11px] transition-colors ${
         active
           ? "border-[color-mix(in_srgb,var(--color-brand-teal)_45%,transparent)] text-[var(--color-brand-teal)]"
@@ -543,38 +629,6 @@ function IconToggle({
     >
       {label}
     </button>
-  );
-}
-
-/** Minimal keymap stub (V3 owns the full overlay per the REP-18 brief). Every
- *  line here previously lived as the HeaderBar's two hint rows. */
-function HelpOverlay({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <div
-      role="dialog"
-      aria-label="Keyboard shortcuts"
-      className="fixed bottom-9 right-3 z-[110] w-64 rounded-[10px] border border-[rgba(148,163,207,0.2)] bg-[color-mix(in_srgb,var(--color-brand-navy)_96%,white_4%)] p-3 text-[12px] text-[var(--color-brand-cream)] shadow-[0_8px_24px_-8px_rgba(0,0,0,0.6)]"
-    >
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-wider opacity-60">Keys</span>
-        <button type="button" onClick={onDismiss} className="opacity-60 hover:opacity-100">
-          ✕
-        </button>
-      </div>
-      <ul className="space-y-1 opacity-85">
-        <li>
-          <kbd className={MONO}>/</kbd> search · <kbd className={MONO}>⌘K</kbd> commands
-        </li>
-        <li>
-          <kbd className={MONO}>f</kbd> frame all · <kbd className={MONO}>Esc</kbd> back / dismiss
-        </li>
-        <li>
-          <kbd className={MONO}>←→</kbd> / <kbd className={MONO}>Tab</kbd> hop neighbor
-        </li>
-        <li className="opacity-70">scroll = zoom · drag = orbit</li>
-        <li className="opacity-70">click cluster = expand · click star = inspect</li>
-      </ul>
-    </div>
   );
 }
 

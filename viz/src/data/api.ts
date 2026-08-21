@@ -34,7 +34,7 @@ export interface SourceSlice {
 
 /** Fetch a read-only source slice for `path` over [start,end] (1-based,
  *  inclusive). Best-effort: any failure (missing file, traversal → 404, network)
- *  yields null so the DetailPanel degrades to showing nothing. The server
+ *  yields null so the Inspector degrades to showing nothing. The server
  *  clamps + caps the range; we still send what the record claims.
  *  Static export: no server — falls back to a baked slice (--with-source) when
  *  one exists for this exact range, else null. */

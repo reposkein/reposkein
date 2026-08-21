@@ -47,8 +47,7 @@ function mockActions(): Actions {
     resetExpansion: vi.fn(),
     setBundleBeta: vi.fn(),
     setIdleDrift: vi.fn(),
-    toggleMinimap: vi.fn(),
-    toggleLegend: vi.fn(),
+    retryLoad: vi.fn(),
     toggleLabels: vi.fn(),
     hover: vi.fn(),
     setEdgeStats: vi.fn(),
@@ -156,6 +155,94 @@ describe("CommandPalette — open/close", () => {
       fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     });
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+});
+
+/** MIGRATED FROM SearchPanel (retired in Astrolabe V3 §7).
+ *
+ *  The standalone search box is gone and the palette absorbed it, so the
+ *  behaviours that were specific to SearchPanel are asserted here rather than
+ *  dropped: the 2-character query floor, ranked results with the file path
+ *  visible, click-to-open, and Enter opening the top hit. `/` reaching this
+ *  palette at all is covered in `globalKeys.test.tsx` (SearchPanel's `/` binding
+ *  focused a DOM id that no longer exists — the exact regression that test
+ *  exists to catch). */
+describe("CommandPalette — absorbed SearchPanel behaviour", () => {
+  it("ranks nothing until the query reaches 2 characters", async () => {
+    const model = graphModel();
+    const { store } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    const input = screen.getByRole("combobox");
+
+    fireEvent.change(input, { target: { value: "g" } });
+    expect(screen.queryByRole("group", { name: "Symbols" })).toBeNull();
+
+    fireEvent.change(input, { target: { value: "gr" } });
+    expect(screen.getByRole("group", { name: "Symbols" })).toBeTruthy();
+  });
+
+  it("matches on the file path, not just the name", async () => {
+    const model = graphModel();
+    const { store } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "loader.ts" } });
+    expect(within(screen.getByRole("group", { name: "Files" })).getByText("graphtools/loader.ts")).toBeTruthy();
+  });
+
+  it("shows each hit's file path in JetBrains Mono under its name", async () => {
+    const model = graphModel();
+    const { store } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "graphWalk" } });
+    const path = within(screen.getByRole("group", { name: "Symbols" })).getByText(
+      "graphtools/loader.ts",
+    );
+    expect(path.className).toContain("font-mono");
+  });
+
+  it("clicking a result opens it and closes the palette (SearchPanel's click path)", async () => {
+    const model = graphModel();
+    const { store, actions } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "graphWalk" } });
+
+    fireEvent.mouseDown(screen.getByText("graphWalk"));
+
+    expect(actions.revealAndSelect).toHaveBeenCalledWith(
+      "rs1:r:sym:graphtools/loader.ts#graphWalk@0",
+      { fly: true },
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("Enter opens the top-ranked hit (SearchPanel's Enter path)", async () => {
+    const model = graphModel();
+    const { store, actions } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "graphWalk" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(actions.revealAndSelect).toHaveBeenCalledWith(
+      "rs1:r:sym:graphtools/loader.ts#graphWalk@0",
+      { fly: true },
+    );
+  });
+
+  it("renders nothing to search when no model has loaded, without throwing", async () => {
+    const { store } = makeStore({ model: null });
+    currentStore = store;
+    await openPalette();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "graph" } });
+    expect(screen.queryByRole("group", { name: "Symbols" })).toBeNull();
+    // Commands remain reachable — the palette is useful pre-load.
+    expect(screen.getByRole("group", { name: "Commands" })).toBeTruthy();
   });
 });
 

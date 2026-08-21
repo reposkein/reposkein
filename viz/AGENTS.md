@@ -20,11 +20,18 @@ See ADR `adr:2026-08-21-viewer-redesign-baseline-react-19-tailwind-v4-tokens-gen
 src/
   main.tsx            # ENTRY (:50 createRoot). Imports index.css. Mounts QueryClient + Router.
   index.css           # Tailwind entry (theme + utilities, NO preflight) + font/token imports
-  routes/Root.tsx     # App shell: scene Canvas + HUD panels
+  routes/Root.tsx     # App shell: scene Canvas + chrome (one ChromeGroup fade group,
+                      # so the guided tour can fade all chrome but its own transport)
   scene/              # R3F rendering layer — see scene/AGENTS.md
   data/               # the brains: graph engine + algorithms — see data/AGENTS.md
-  panels/             # 7 HUD components: DetailPanel, FilterHUD, LegendPanel, LensSwitcher,
-                      # MinimapPanel, SearchPanel, TourController
+  panels/             # HUD chrome. ONE persistent surface (StatusBar), ONE selection-scoped
+                      # drawer (Inspector), FOUR mutually-exclusive summoned layers
+                      # (MinimapLayer / LegendSheet / FiltersPopover / HelpOverlay via
+                      # LayerHost + LayerShell + layerState), CommandPalette, TourController,
+                      # Toasts, LoadingScreen, ErrorScreen.
+                      # layerState.ts / paletteOpenState.ts / statusBarOverlayState.ts /
+                      # toastState.ts are module singletons — chrome state deliberately
+                      # OUTSIDE the reducer (see below).
   state/store.tsx     # ONE reducer + split contexts (state / actions / channels)
   state/channel.ts    # useSyncExternalStore slots for pointer-rate values
   styles/tokens.ts    # encoding.ts → @theme generator (pure, unit-tested)
@@ -38,7 +45,10 @@ vite/tokens-plugin.ts # the Vite plugin that runs styles/tokens.ts
 
 - **`tsconfig.json`** enforces `strict + noUnusedLocals + noUnusedParameters + noUncheckedIndexedAccess + noFallthroughCasesInSwitch` and `moduleResolution: Bundler`. `@/*` → `src/*` (mirrored in `vite.config.ts` and `vitest.config.ts`).
 - **`eslint.config.js`** is flat config. Turns off `@typescript-eslint/no-non-null-assertion` (R3F refs justify it).
-- **Hidden filter sets**: an empty set means *show all*, not *hide all*. Universal across `state/store.tsx`, `data/lens.ts`, `panels/FilterHUD.tsx`.
+- **Hidden filter sets**: an empty set means *show all*, not *hide all*. Universal across `state/store.tsx`, `data/lens.ts`, `panels/FiltersPopover.tsx`.
+- **Chrome state lives outside the reducer.** Every `useStore()`/`useStoreState()` consumer re-renders on any reducer transition — including the R3F components inside `<Canvas>`. So *ephemeral* UI state (which summoned layer is open, whether the palette is open, live toasts) lives in module singletons with `useSyncExternalStore` subscriptions: `panels/layerState.ts`, `panels/paletteOpenState.ts`, `panels/statusBarOverlayState.ts`, `panels/toastState.ts`. Summoning the legend must not re-render the constellation. Corollary: a command that toggles one of these is a side effect on the singleton, so it goes through `PaletteEnv` (`state/commands.ts`) alongside screenshot/clipboard — never a reducer action.
+- **One layer at a time, structurally.** `layerState` holds ONE nullable `LayerId`, so "opening one closes the others" is unrepresentable-otherwise rather than a rule to remember. (V2 kept two independent booleans, both defaulting to `true`, both docked bottom-left — they painted over each other on first load.)
+- **Esc stack**: palette > tour > layer > mode chip > collapse-level. Each surface reads the singleton for everything above it and steps aside; whoever acts calls `stopImmediatePropagation` so exactly one thing happens per keypress. `panels/globalKeys.ts` is the last resort. Tests: `panels/layerStack.test.tsx`, `panels/globalKeys.test.tsx`.
 - **`fitNonce`** in store state is the camera-refit trigger — bump it to re-frame. **Bump it once per user intent**: a batched action (`revealAndSelect`) exists precisely so "reveal + select + fly" is one transition instead of N.
 - **Token bridge.** `scene/encoding.ts` stays the SSoT for every hue. `src/styles/tokens.ts` renders its tables into `src/styles/tokens.generated.css` (`@theme static`), run by the `reposkein-tokens` Vite plugin at dev AND build. The generated file is **git-ignored** so it can never become a second source of truth — add a color to `encoding.ts` and the CSS variable appears. `styles/tokens.test.ts` guards determinism + coverage.
 - **Fonts are self-hosted**, referenced relatively from `src/styles/fonts.css`, so the static export makes **zero external requests** (self-hosted fonts, relative asset URLs). Never add a CDN font or stylesheet. Note the export is **not** a `file://` target: its entry is a module script, and browsers block module scripts from `file://` origins — it needs an `http(s)` origin (the `view` server, GitHub Pages, any static host, `python3 -m http.server`).

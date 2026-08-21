@@ -1,0 +1,308 @@
+// @vitest-environment jsdom
+//
+// Global bindings (Astrolabe V3), and their agreement with the keymap the help
+// overlay publishes.
+//
+// The concrete regression behind the '/' tests: V2's handler did
+// `document.getElementById("reposkein-search")?.focus()`. When SearchPanel
+// retired, that id stopped existing and '/' became a silent no-op — a dead
+// shortcut still advertised in the status bar's key hints. Binding it to the
+// palette through an env function is what makes that assertable.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createInitialState, type Actions, type State, type Store } from "../state/store";
+import { buildModel } from "../data/model";
+import { fromWorker, type ClientModel } from "../data/clientModel";
+import type { WorkerResult } from "../data/worker/graph.worker";
+import type { RawGraph } from "../data/types";
+import { KEYMAP, documentedBindings } from "../data/keymap";
+import { handleGlobalKey, type GlobalKeyEnv, type GlobalKeyEventLike } from "./globalKeys";
+
+vi.mock("../scene/Screenshot", () => ({ captureScreenshot: vi.fn(), CaptureBridge: () => null }));
+
+let currentStore: Store;
+vi.mock("../state/store", async () => {
+  const actual = await vi.importActual<typeof import("../state/store")>("../state/store");
+  return { ...actual, useStore: () => currentStore, useStoreState: () => currentStore };
+});
+
+const { CommandPalette } = await import("./CommandPalette");
+const { requestCommandPalette, setCommandPaletteOpen } = await import("./paletteOpenState");
+const { resetLayers } = await import("./layerState");
+
+afterEach(() => {
+  cleanup();
+  resetLayers();
+  setCommandPaletteOpen(false);
+});
+
+function mockActions(): Actions {
+  return {
+    toggleExpand: vi.fn(),
+    collapseLevel: vi.fn(),
+    select: vi.fn(),
+    requestFit: vi.fn(),
+    revealAndSelect: vi.fn(),
+    revealWithoutRefit: vi.fn(),
+    setKindFilter: vi.fn(),
+    setEdgeTypeFilter: vi.fn(),
+    setMinConfidence: vi.fn(),
+    clearFilters: vi.fn(),
+    setFocusTarget: vi.fn(),
+    setLens: vi.fn(),
+    setAudit: vi.fn(),
+    toggleImpact: vi.fn(),
+    toggleFocus: vi.fn(),
+    setFocusDepth: vi.fn(),
+    toggleCoupling: vi.fn(),
+    setCochange: vi.fn(),
+    startTour: vi.fn(),
+    exitTour: vi.fn(),
+    resetView: vi.fn(),
+    resetExpansion: vi.fn(),
+    setBundleBeta: vi.fn(),
+    setIdleDrift: vi.fn(),
+    retryLoad: vi.fn(),
+    toggleLabels: vi.fn(),
+    hover: vi.fn(),
+    setEdgeStats: vi.fn(),
+  };
+}
+
+function mockEnv(): GlobalKeyEnv & Record<keyof GlobalKeyEnv, ReturnType<typeof vi.fn>> {
+  return { openPalette: vi.fn(), toggleLayer: vi.fn() };
+}
+
+const SEL = "rs1:r:sym:a.ts#run@0";
+
+function tinyModel(): ClientModel {
+  const g: RawGraph = {
+    nodes: [
+      { id: "rs1:r:repo:.", labels: ["Repository"], props: { name: "r" } },
+      { id: "rs1:r:file:a.ts", labels: ["File"], props: { name: "a.ts", path: "a.ts" } },
+      {
+        id: SEL,
+        labels: ["Function"],
+        props: { name: "run", file_path: "a.ts", content_hash: "h" },
+      },
+      {
+        id: "rs1:r:sym:a.ts#other@0",
+        labels: ["Function"],
+        props: { name: "other", file_path: "a.ts", content_hash: "h" },
+      },
+    ],
+    edges: [
+      {
+        type: "CALLS",
+        from: SEL,
+        to: "rs1:r:sym:a.ts#other@0",
+        props: { resolution: "exact", confidence: 1 },
+      },
+    ],
+  };
+  const m = buildModel(g);
+  const result: WorkerResult = {
+    type: "result",
+    repoId: m.tree.repoId,
+    rootKey: m.tree.rootKey,
+    clusters: [...m.tree.byKey.values()],
+    keys: m.layout.keys,
+    positions: m.layout.positions,
+    drawEdges: m.drawEdges,
+    records: [...m.records.entries()],
+    fingerprint: m.fingerprint,
+    counts: { nodes: g.nodes.length, edges: g.edges.length },
+    repoRoot: null,
+  };
+  return fromWorker(result);
+}
+
+function stateWith(overrides: Partial<State> = {}): State {
+  return { ...createInitialState(), ...overrides };
+}
+
+function key(k: string, extra: Partial<GlobalKeyEventLike> = {}): GlobalKeyEventLike {
+  return { key: k, preventDefault: vi.fn(), ...extra };
+}
+
+describe("handleGlobalKey — '/' summons the palette", () => {
+  it("calls openPalette and consumes the key", () => {
+    const env = mockEnv();
+    const e = key("/");
+    expect(handleGlobalKey(e, stateWith(), mockActions(), env)).toBe(true);
+    expect(env.openPalette).toHaveBeenCalledOnce();
+    expect(e.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("works with no model loaded (search is reachable before the graph is)", () => {
+    const env = mockEnv();
+    handleGlobalKey(key("/"), stateWith({ model: null }), mockActions(), env);
+    expect(env.openPalette).toHaveBeenCalledOnce();
+  });
+
+  it("does NOT fire while typing in a field", () => {
+    const env = mockEnv();
+    const e = key("/", { target: { tagName: "INPUT" } });
+    expect(handleGlobalKey(e, stateWith(), mockActions(), env)).toBe(false);
+    expect(env.openPalette).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire while the guided tour is running", () => {
+    const env = mockEnv();
+    handleGlobalKey(key("/"), stateWith({ tour: true }), mockActions(), env);
+    expect(env.openPalette).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleGlobalKey — layer shortcuts", () => {
+  it("'?' toggles the help layer", () => {
+    const env = mockEnv();
+    expect(handleGlobalKey(key("?"), stateWith(), mockActions(), env)).toBe(true);
+    expect(env.toggleLayer).toHaveBeenCalledExactlyOnceWith("help");
+  });
+
+  it("'m' and 'M' toggle the map layer", () => {
+    for (const k of ["m", "M"]) {
+      const env = mockEnv();
+      expect(handleGlobalKey(key(k), stateWith(), mockActions(), env)).toBe(true);
+      expect(env.toggleLayer).toHaveBeenCalledExactlyOnceWith("minimap");
+    }
+  });
+
+  it("neither fires while typing", () => {
+    const env = mockEnv();
+    handleGlobalKey(key("m", { target: { tagName: "TEXTAREA" } }), stateWith(), mockActions(), env);
+    handleGlobalKey(
+      key("?", { target: { isContentEditable: true } }),
+      stateWith(),
+      mockActions(),
+      env,
+    );
+    expect(env.toggleLayer).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
+  it("'f' frames all", () => {
+    const actions = mockActions();
+    expect(handleGlobalKey(key("f"), stateWith(), actions, mockEnv())).toBe(true);
+    expect(actions.resetView).toHaveBeenCalledOnce();
+  });
+
+  it("Esc collapses one level — the last resort in the Esc stack", () => {
+    const actions = mockActions();
+    expect(handleGlobalKey(key("Escape"), stateWith(), actions, mockEnv())).toBe(true);
+    expect(actions.collapseLevel).toHaveBeenCalledOnce();
+  });
+
+  it("Esc is left alone while typing (the field's own handler owns it)", () => {
+    const actions = mockActions();
+    const e = key("Escape", { target: { tagName: "INPUT" } });
+    expect(handleGlobalKey(e, stateWith(), actions, mockEnv())).toBe(false);
+    expect(actions.collapseLevel).not.toHaveBeenCalled();
+  });
+
+  it("arrows and Tab hop to a neighbor, forwards and backwards", () => {
+    const model = tinyModel();
+    for (const [k, extra] of [
+      ["ArrowRight", {}],
+      ["ArrowDown", {}],
+      ["ArrowLeft", {}],
+      ["ArrowUp", {}],
+      ["Tab", {}],
+      ["Tab", { shiftKey: true }],
+    ] as const) {
+      const actions = mockActions();
+      handleGlobalKey(
+        key(k, extra),
+        stateWith({ model, selected: SEL }),
+        actions,
+        mockEnv(),
+      );
+      expect(actions.revealAndSelect).toHaveBeenCalledWith("rs1:r:sym:a.ts#other@0", {
+        fly: true,
+      });
+    }
+  });
+
+  it("hopping needs both a model and a selection", () => {
+    const actions = mockActions();
+    handleGlobalKey(key("ArrowRight"), stateWith({ model: null }), actions, mockEnv());
+    handleGlobalKey(
+      key("ArrowRight"),
+      stateWith({ model: tinyModel(), selected: null }),
+      actions,
+      mockEnv(),
+    );
+    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+  });
+
+  it("an unbound key is not consumed", () => {
+    expect(handleGlobalKey(key("q"), stateWith(), mockActions(), mockEnv())).toBe(false);
+  });
+});
+
+/** The help overlay is only useful if it describes the app that exists. */
+describe("keymap ↔ handler agreement", () => {
+  it("every global binding the keymap documents is actually handled", () => {
+    for (const binding of documentedBindings()) {
+      if (binding === "k") continue; // ⌘K lives in CommandPalette's own listener
+      if (binding === "Escape") continue; // asserted above; also owned by the Esc stack
+      const actions = mockActions();
+      const env = mockEnv();
+      const handled = handleGlobalKey(
+        key(binding),
+        stateWith({ model: tinyModel(), selected: SEL }),
+        actions,
+        env,
+      );
+      expect(handled, `documented but unhandled: ${binding}`).toBe(true);
+    }
+  });
+
+  it("documents '/' , '?', 'm' and 'f' — the four bindings V3 introduced or rewired", () => {
+    const documented = documentedBindings();
+    for (const b of ["/", "?", "m", "f"]) expect(documented.has(b)).toBe(true);
+  });
+
+  it("the keymap has no empty group and no binding without a description", () => {
+    expect(KEYMAP.length).toBeGreaterThan(0);
+    for (const group of KEYMAP) {
+      expect(group.bindings.length).toBeGreaterThan(0);
+      for (const b of group.bindings) {
+        expect(b.keys.length).toBeGreaterThan(0);
+        expect(b.description.trim().length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("requestCommandPalette — the '/' rendezvous with the mounted palette", () => {
+  it("opens the palette, and the input takes focus", () => {
+    currentStore = { ...createInitialState(), ...mockActions(), model: tinyModel() } as Store;
+    render(<CommandPalette />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    act(() => requestCommandPalette());
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+  });
+
+  it("is a safe no-op before the palette mounts (and after it unmounts)", () => {
+    expect(() => requestCommandPalette()).not.toThrow();
+
+    currentStore = { ...createInitialState(), ...mockActions(), model: tinyModel() } as Store;
+    const view = render(<CommandPalette />);
+    view.unmount();
+    expect(() => requestCommandPalette()).not.toThrow();
+  });
+
+  it("the palette absorbed search: Esc closes it again", () => {
+    currentStore = { ...createInitialState(), ...mockActions(), model: tinyModel() } as Store;
+    render(<CommandPalette />);
+    act(() => requestCommandPalette());
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});

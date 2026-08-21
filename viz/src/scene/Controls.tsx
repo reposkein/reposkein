@@ -20,6 +20,24 @@ export function recenterCamera(x: number, y: number, z: number): void {
   flyToWorld?.(x, y, z);
 }
 
+/** The camera's orbit distance + perspective parameters, published each frame
+ *  alongside `cameraTarget`. The minimap layer turns these into the world-space
+ *  viewport rectangle it draws (see `scene/minimap.viewportHalfExtents`) — V2's
+ *  minimap could only mark the target POINT, which told you nothing about how
+ *  much of the graph was actually on screen. Null before the scene mounts. */
+export interface CameraView {
+  /** Orbit distance from the camera to its target. */
+  distance: number;
+  /** Vertical field of view, in degrees. */
+  fov: number;
+  /** Viewport aspect (width / height). */
+  aspect: number;
+}
+let cameraView: CameraView | null = null;
+export function getCameraView(): CameraView | null {
+  return cameraView;
+}
+
 /** How long (ms) of no interaction before the gentle idle azimuth drift kicks
  *  in, and how fast it rotates (radians / second). */
 const IDLE_AFTER_MS = 4000;
@@ -158,6 +176,7 @@ export function Controls() {
     return () => {
       flyToWorld = null;
       cameraTarget = null;
+      cameraView = null;
     };
   }, [invalidate]);
 
@@ -169,6 +188,14 @@ export function Controls() {
     // Publish the current orbit target for the minimap viewport indicator.
     controls.getTarget(targetVec);
     cameraTarget = { x: targetVec.x, y: targetVec.y, z: targetVec.z };
+    // …and the perspective params the minimap turns into a frustum rectangle.
+    // Guarded: an orthographic camera has no `fov`, in which case the rect is
+    // simply not drawn rather than drawn wrong.
+    const cam = controls.camera as THREE.PerspectiveCamera;
+    cameraView =
+      typeof cam?.fov === "number" && typeof cam?.aspect === "number"
+        ? { distance: controls.distance, fov: cam.fov, aspect: cam.aspect }
+        : null;
     const now = performance.now();
     // Any active user interaction resets the idle timer.
     if (controls.active) {

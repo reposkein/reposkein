@@ -15,22 +15,16 @@
  *  labels (`"Function"` etc.) already match `NODE_KIND_META` verbatim and
  *  pass through unchanged.
  *
- *  `nodeKindColorVar` reproduces `styles/tokens.ts`'s `tokenSlug` locally
- *  rather than importing it: `styles/` is a leaf (Vite-plugin-only) module,
- *  and duplicating a three-line slug function is cheaper than inverting that
- *  dependency direction. Keep the two slug functions in sync if either changes
- *  (`tokens.test.ts` would catch a drift in the generated CSS var names). */
+ *  The kind→CSS-var mapping itself lives in `data/encodingVars.ts` (shared with
+ *  the legend sheet and the filter chips so all three name the SAME token —
+ *  see `panels/colorIdentity.test.tsx`); `nodeKindColorVar` is re-exported here
+ *  so existing call sites keep their import. */
 
-/** Raw structural label → the ClusterKind key NODE_KIND_META actually uses. */
-const STRUCTURAL_KIND: Record<string, string> = {
-  Repository: "galaxy",
-  Directory: "dir",
-  File: "file",
-};
+import { nodeKindColorVar, normalizeNodeKind } from "./encodingVars";
 
-function normalizeKind(kind: string): string {
-  return STRUCTURAL_KIND[kind] ?? kind; // symbol kinds pass through unchanged.
-}
+export { nodeKindColorVar };
+
+const normalizeKind = normalizeNodeKind;
 
 const GLYPH: Record<string, string> = {
   galaxy: "◎",
@@ -49,15 +43,3 @@ export function nodeKindGlyph(kind: string): string {
   return GLYPH[normalizeKind(kind)] ?? DEFAULT_GLYPH;
 }
 
-function slug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-/** e.g. `nodeKindColorVar("Function")` → `"var(--color-node-function)"`;
- *  `nodeKindColorVar("File")` → `"var(--color-node-file)"`. */
-export function nodeKindColorVar(kind: string): string {
-  return `var(--color-node-${slug(normalizeKind(kind))})`;
-}

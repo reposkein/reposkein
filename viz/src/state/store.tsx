@@ -96,12 +96,15 @@ export interface State {
    *  binding land with the navigation-semantics task (REP-14). Intentionally a
    *  dead flag until then, not an oversight. */
   idleDrift: boolean;
-  /** HUD chrome visibility toggles (command palette + panel headers). Default
-   *  true so a fresh load looks exactly as before these existed — a panel's
-   *  own collapse header stays; this only additionally hides its body/mount. */
-  showMinimap: boolean;
-  showLegend: boolean;
+  /** In-scene name labels. The minimap / legend / filters / help surfaces used
+   *  to live here too as `showMinimap` / `showLegend` booleans; V3 moved them to
+   *  `panels/layerState.ts`, which holds ONE nullable layer id so two of them
+   *  can never be open at once (they both defaulted to `true` and both docked
+   *  bottom-left — the overlap this phase exists to fix). Labels stay in the
+   *  reducer because they're a SCENE toggle, read inside <Canvas>. */
   showLabels: boolean;
+  /** Bumped by `retryLoad()` to re-run the loader effect after an error. */
+  loadNonce: number;
 }
 
 /** Confidence-audit preset: which low-confidence buckets to keep visible. */
@@ -135,8 +138,7 @@ export type Action =
   | { t: "resetExpansion" }
   | { t: "setBundleBeta"; value: number }
   | { t: "setIdleDrift"; on: boolean }
-  | { t: "toggleMinimap" }
-  | { t: "toggleLegend" }
+  | { t: "retryLoad" }
   | { t: "toggleLabels" };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
@@ -442,10 +444,13 @@ export function reducer(state: State, a: Action): State {
     case "setIdleDrift":
       if (state.idleDrift === a.on) return state;
       return { ...state, idleDrift: a.on };
-    case "toggleMinimap":
-      return { ...state, showMinimap: !state.showMinimap };
-    case "toggleLegend":
-      return { ...state, showLegend: !state.showLegend };
+    case "retryLoad":
+      // The error screen's Retry: back to loading and bump the nonce the loader
+      // effect keys on, so the SAME code path that ran on mount runs again
+      // (rather than a second, subtly-different retry path). Deliberately keeps
+      // any prior model around — a retry after a transient fetch failure on a
+      // reload shouldn't blank a graph that's already on screen.
+      return { ...state, status: { kind: "loading", phase: "starting" }, loadNonce: state.loadNonce + 1 };
     case "toggleLabels":
       return { ...state, showLabels: !state.showLabels };
   }
@@ -485,8 +490,8 @@ export interface Actions {
   resetExpansion(): void;
   setBundleBeta(value: number): void;
   setIdleDrift(on: boolean): void;
-  toggleMinimap(): void;
-  toggleLegend(): void;
+  /** Re-run the graph load after an error (the error screen's Retry button). */
+  retryLoad(): void;
   toggleLabels(): void;
   /** Pointer-rate: writes the hover CHANNEL, not the reducer. */
   hover(id: string | null): void;
@@ -532,9 +537,8 @@ export function createInitialState(): State {
     tour: false,
     bundleBeta: 0.85,
     idleDrift: false,
-    showMinimap: true,
-    showLegend: true,
     showLabels: true,
+    loadNonce: 0,
   };
 }
 
@@ -592,7 +596,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     worker.onerror = (e) => dispatch({ t: "error", message: e.message });
     worker.postMessage({ cmd: "load" });
     return () => worker.terminate();
-  }, []);
+    // Keyed on `loadNonce` (bumped by retryLoad) so the error screen's Retry
+    // re-runs THIS effect — the same fetch/parse/layout path as the first load,
+    // with a fresh worker — instead of a parallel retry implementation.
+  }, [state.loadNonce]);
 
   // Stable for the provider's lifetime: `dispatch` is stable and the channels
   // are created once, so this object is created ONCE. That is the whole point of
@@ -629,8 +636,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       resetExpansion: () => dispatch({ t: "resetExpansion" }),
       setBundleBeta: (value) => dispatch({ t: "setBundleBeta", value }),
       setIdleDrift: (on) => dispatch({ t: "setIdleDrift", on }),
-      toggleMinimap: () => dispatch({ t: "toggleMinimap" }),
-      toggleLegend: () => dispatch({ t: "toggleLegend" }),
+      retryLoad: () => dispatch({ t: "retryLoad" }),
       toggleLabels: () => dispatch({ t: "toggleLabels" }),
       hover: (id) => hovered.set(id),
       setEdgeStats: (stats) => edgeStats.set(stats),
