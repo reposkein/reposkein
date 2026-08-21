@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { useSearch, useNavigate } from "@tanstack/react-router";
-import { StoreProvider, useEdgeStats, useStore } from "../state/store";
+import { StoreProvider, useStore } from "../state/store";
 import { StarField } from "../scene/StarField";
 import { BackgroundStars } from "../scene/BackgroundStars";
 import { NebulaHalos } from "../scene/NebulaHalos";
@@ -18,14 +18,12 @@ import { FilterHUD } from "../panels/FilterHUD";
 import { SearchPanel } from "../panels/SearchPanel";
 import { CommandPalette } from "../panels/CommandPalette";
 import { LegendPanel } from "../panels/LegendPanel";
-import { LensSwitcher } from "../panels/LensSwitcher";
 import { MinimapPanel } from "../panels/MinimapPanel";
-import { TourController } from "../panels/TourController";
+import { StatusBar } from "../panels/StatusBar";
 import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
 import { resolveNodeFallback } from "../data/nodeFallback";
-import { badgeInfo, teamConstellationHref } from "../data/badge";
-import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
+import { CaptureBridge } from "../scene/Screenshot";
 
 export function Root() {
   return (
@@ -202,173 +200,25 @@ function View() {
         </EffectComposer>
       </Canvas>
 
-      <HeaderBar />
+      {/* SearchPanel keeps its top-left spot and its '/' binding; it retires
+          fully in V3 (design: Astrolabe V2 status bar, REP-18). No longer
+          wrapped by HeaderBar — rendered standalone, tokens-consistent. */}
+      {store.model && (
+        <div className="absolute left-3 top-3 z-[25]">
+          <SearchPanel />
+        </div>
+      )}
+      <StatusBar />
       <CommandPalette />
       {nodeNotice && (
         <NodeMovedNotice nodeId={nodeNotice} onDismiss={() => setNodeNotice(null)} />
       )}
-      {store.status.kind === "ready" && store.model && <Breadcrumb />}
       {store.status.kind === "ready" && <DetailPanel />}
-      {store.status.kind === "ready" && <LensSwitcher />}
       {store.status.kind === "ready" && <FilterHUD />}
       {store.status.kind === "ready" && <LegendPanel />}
       {store.status.kind === "ready" && store.model && <MinimapPanel />}
       <LoaderGate />
       {store.status.kind === "error" && <Overlay text={`Error: ${store.status.message}`} error />}
-    </div>
-  );
-}
-
-function HeaderBar() {
-  const store = useStore();
-  const counts = store.model?.counts;
-  return (
-    <div
-      style={{
-        position: "absolute",
-        top: 12,
-        left: 12,
-        fontSize: 13,
-        padding: "8px 12px",
-        borderRadius: 8,
-        background: "rgba(8,11,22,0.85)",
-        border: "1px solid rgba(90,120,180,0.35)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontWeight: 600, color: BRAND.amber }}>RepoSkein Constellation</span>
-        {store.model && (
-          <button
-            onClick={() => store.resetView()}
-            title="Frame all — collapse to top level"
-            style={{
-              marginLeft: 8,
-              padding: "2px 10px",
-              fontSize: 11,
-              borderRadius: 5,
-              border: `1px solid ${BRAND.amber}66`,
-              background: `${BRAND.amber}1f`,
-              color: BRAND.cream,
-              cursor: "pointer",
-              letterSpacing: 0.3,
-            }}
-          >
-            Frame all
-          </button>
-        )}
-        {store.model && (
-          <button
-            onClick={() => captureScreenshot()}
-            title="Capture a PNG screenshot of the current view"
-            style={{
-              padding: "2px 10px",
-              fontSize: 11,
-              borderRadius: 5,
-              border: `1px solid ${BRAND.teal}66`,
-              background: `${BRAND.teal}1f`,
-              color: BRAND.cream,
-              cursor: "pointer",
-              letterSpacing: 0.3,
-            }}
-          >
-            Screenshot
-          </button>
-        )}
-        {store.model && teamConstellationHref(store.model.repoMeta) && (
-          <a
-            href={teamConstellationHref(store.model.repoMeta)!}
-            target="_blank"
-            rel="noreferrer"
-            title="Open this team's published constellation (configured in .reposkein/config.toml [team] pages_url)"
-            style={{
-              padding: "2px 10px",
-              fontSize: 11,
-              borderRadius: 5,
-              border: `1px solid ${BRAND.amber}66`,
-              background: `${BRAND.amber}1f`,
-              color: BRAND.cream,
-              cursor: "pointer",
-              letterSpacing: 0.3,
-              textDecoration: "none",
-            }}
-          >
-            Team constellation ↗
-          </a>
-        )}
-        {store.model && <TourController />}
-      </div>
-      {store.model && (
-        <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>
-          {store.model.repoId} · {counts?.nodes ?? 0} nodes · {counts?.edges ?? 0} edges
-        </div>
-      )}
-      {store.model && <StalenessBadge />}
-      {store.model && <EdgeStatsReadout />}
-      <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>
-        scroll = zoom · drag = orbit · click cluster = expand · click star = inspect · Esc / click space = back
-      </div>
-      <div style={{ fontSize: 11, opacity: 0.45, marginTop: 1 }}>
-        keys: / search · ⌘K commands · f frame all · ←→ / Tab hop neighbor
-      </div>
-      {store.model && <SearchPanel />}
-    </div>
-  );
-}
-
-/** "showing N of M connections" — its own component precisely so it can
- *  subscribe to the edgeStats CHANNEL. EdgeLines republishes the counters on
- *  every render pass (expand, filter, hover-driven rebuild); when they lived in
- *  the reducer that re-rendered the whole HUD for a number nothing else reads.
- *  The inline style is the HeaderBar row's, moved verbatim to keep this task at
- *  zero visual change; it migrates to Tailwind with the rest of HeaderBar in
- *  REP-18. */
-function EdgeStatsReadout() {
-  const { drawn, total } = useEdgeStats();
-  if (total <= 0) return null;
-  return (
-    <div
-      style={{ fontSize: 11, opacity: 0.6, marginTop: 1 }}
-      title="Edge bundles currently drawn / total bundles before the render cap"
-    >
-      showing {drawn} of {total} connections
-      {drawn < total ? " (capped)" : ""}
-    </div>
-  );
-}
-
-/** "graph @ <short-sha> · <relative age>" — shown when the loaded model carries
- *  bake-time/server-start provenance (static export: baked by `runExport`;
- *  server mode: resolved once from git at server start). Age is recomputed
- *  every render (cheap: Date.now() + arithmetic) so it stays fresh across a
- *  long-lived tab without a timer. Links to the commit when a repoUrl was
- *  resolvable; otherwise renders as plain (unlinked) text. Matches the
- *  existing inline-style HeaderBar rows — no new visual system introduced. */
-function StalenessBadge() {
-  const store = useStore();
-  const info = badgeInfo(store.model?.repoMeta ?? null);
-  if (!info) return null;
-  const text = (
-    <span
-      style={{ color: "rgba(200,210,235,0.85)" }}
-      title={store.model?.repoMeta?.builtAt ? `baked ${store.model.repoMeta.builtAt}` : undefined}
-    >
-      {info.label}
-    </span>
-  );
-  return (
-    <div style={{ fontSize: 11, opacity: 0.75, marginTop: 1 }}>
-      {info.href ? (
-        <a
-          href={info.href}
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: "inherit", textDecoration: "none" }}
-        >
-          {text}
-        </a>
-      ) : (
-        text
-      )}
     </div>
   );
 }
@@ -429,83 +279,6 @@ function NodeMovedNotice({ nodeId, onDismiss }: { nodeId: string; onDismiss: () 
       >
         ✕
       </button>
-    </div>
-  );
-}
-
-/** Breadcrumb strip showing the ancestor path of the selected node.
- *  Clicking a crumb expands up to that level and resets view below it. */
-function Breadcrumb() {
-  const store = useStore();
-  const model = store.model!;
-
-  if (!store.selected) return null;
-
-  // Resolve the cluster key for the selected node.
-  const clusterKey = model.clusterOfNode.get(store.selected) ?? store.selected;
-  const chain = model.ancestors.get(clusterKey) ?? [clusterKey];
-
-  // Build crumb labels from the ancestor chain.
-  const crumbs = chain.map((key) => {
-    const c = model.byKey.get(key);
-    return { key, label: c?.name ?? key };
-  });
-  // Add the selected node itself if it's a symbol (leaf, not in ancestor chain as cluster).
-  const rec = model.records.get(store.selected);
-  if (rec && !model.byKey.has(store.selected)) {
-    crumbs.push({ key: store.selected, label: rec.name });
-  }
-
-  function navigateToCrumb(key: string) {
-    // Only ancestor crumbs navigate. The trailing crumb for a selected SYMBOL is
-    // not on the cluster chain (it's the leaf itself) and has always been inert —
-    // keep it that way, or clicking it would re-frame the current selection.
-    if (chain.indexOf(key) === -1) return;
-    // ONE transition: open the chain up to this crumb, shut everything below it,
-    // select it and fly there. `collapseDeeper` reproduces the old two-loop walk
-    // (expand root→crumb, collapse strict descendants) inside the reducer, which
-    // is also what collapses the N fitNonce bumps into one.
-    store.revealAndSelect(key, { fly: true, collapseDeeper: true });
-  }
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        top: 132,
-        left: 12,
-        display: "flex",
-        alignItems: "center",
-        gap: 4,
-        fontSize: 12,
-        background: "rgba(8,11,22,0.78)",
-        border: "1px solid rgba(90,120,180,0.25)",
-        borderRadius: 6,
-        padding: "4px 10px",
-        maxWidth: "calc(100vw - 420px)",
-        overflow: "hidden",
-        flexWrap: "nowrap",
-      }}
-    >
-      {crumbs.map((crumb, i) => (
-        <span key={crumb.key} style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
-          {i > 0 && <span style={{ opacity: 0.4, flexShrink: 0 }}>›</span>}
-          <span
-            onClick={() => navigateToCrumb(crumb.key)}
-            style={{
-              cursor: i < crumbs.length - 1 ? "pointer" : "default",
-              color: i === crumbs.length - 1 ? "#dfe6f5" : "rgba(160,180,220,0.7)",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              maxWidth: 200,
-            }}
-            title={crumb.label}
-          >
-            {crumb.label}
-          </span>
-        </span>
-      ))}
     </div>
   );
 }
