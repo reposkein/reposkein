@@ -1,5 +1,10 @@
 # Migration: stop committing the derived RepoSkein graph
 
+For humans. Historical — describes a past migration; the single-file
+`summaries.jsonl` it introduces below was itself later replaced by sharded
+`summaries/<xx>.jsonl` (see [`../INSTALL.md` §4.2](../INSTALL.md#42-merge-behaviour-for-reposkein)
+for the current scheme and the follow-up migration off this file).
+
 Status: plan only. Nothing here has been executed.
 Written: 2026-08-06.
 Applies to: any repository that already has `.reposkein/nodes.jsonl` and
