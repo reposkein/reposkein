@@ -504,7 +504,8 @@ When the user wants to hand this off without copying the whole document, they ca
 Want a durable link to the constellation viewer (for a README, a PR, or a
 teammate without RepoSkein installed) instead of `reposkein-mcp view`'s local
 server? `reposkein-mcp view --export` produces a self-contained static site
-(no server, works from `file://`). `reposkein-mcp init --ci` writes a GitHub
+(no backend, no external requests — serve it from any static host).
+`reposkein-mcp init --ci` writes a GitHub
 Actions workflow that publishes it to GitHub Pages on every push.
 
 **Read [`docs/HOSTING.md`](./HOSTING.md) before enabling this** — it covers

@@ -317,7 +317,9 @@ function HeaderBar() {
  *  subscribe to the edgeStats CHANNEL. EdgeLines republishes the counters on
  *  every render pass (expand, filter, hover-driven rebuild); when they lived in
  *  the reducer that re-rendered the whole HUD for a number nothing else reads.
- *  Same markup and position as before — it was a row of the HeaderBar. */
+ *  The inline style is the HeaderBar row's, moved verbatim to keep this task at
+ *  zero visual change; it migrates to Tailwind with the rest of HeaderBar in
+ *  REP-18. */
 function EdgeStatsReadout() {
   const { drawn, total } = useEdgeStats();
   if (total <= 0) return null;

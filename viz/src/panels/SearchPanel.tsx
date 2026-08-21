@@ -25,9 +25,9 @@ export function SearchPanel() {
 
   function selectResult(id: string) {
     if (!model) return;
-    // One transition: expand the ancestor chain, select, fly. (Was a
-    // toggleExpand-per-ancestor walk plus select plus setFocusTarget — N+2
-    // fitNonce bumps for one user intent.)
+    // One atomic transition: expand the ancestor chain, select, fly. (Was a
+    // toggleExpand-per-ancestor walk plus select plus setFocusTarget — one
+    // render either way, but no longer a chain of intermediate states.)
     store.revealAndSelect(id, { fly: true });
     setQuery("");
     setOpen(false);

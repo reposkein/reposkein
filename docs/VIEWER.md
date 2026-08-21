@@ -22,7 +22,9 @@ The map is **deterministic**: a seeded force layout means the same graph always 
 reposkein-mcp view --export ./site .   # write a self-contained static site
 ```
 
-`--export` bakes the graph into `graph-data.js` (as `window.__REPOSKEIN_GRAPH__`) and emits a **self-contained static site** — it works from `file://` or any static host with no server, which is exactly how the live demo above is published. Handy for sharing a snapshot, embedding in docs, or a project landing page.
+`--export` bakes the graph into `graph-data.js` (as `window.__REPOSKEIN_GRAPH__`) and emits a **self-contained static site** — no backend, no database, no external requests (fonts and every asset ship with it), which is exactly how the live demo above is published. Handy for sharing a snapshot, embedding in docs, or a project landing page.
+
+Serve it over `http(s)` — any static host, or `python3 -m http.server` in the export directory. Opening `index.html` straight off disk does **not** work: the entry is an ES module, and browsers refuse module scripts from a `file://` origin.
 
 ## Publishing a durable link
 

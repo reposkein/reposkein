@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { INITIAL_STATE, reducer, type State } from "./store";
+import { createInitialState, reducer, type State } from "./store";
 import { buildModel } from "../data/model";
 import { fromWorker, type ClientModel } from "../data/clientModel";
 import type { WorkerResult } from "../data/worker/graph.worker";
@@ -64,14 +64,7 @@ function graph(): RawGraph {
 
 /** A ready store state over `model`, root expanded (what "ready" produces). */
 function readyState(model: ClientModel): State {
-  return reducer(
-    {
-      ...INITIAL_STATE,
-      expanded: new Set<string>(),
-      filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
-    },
-    { t: "ready", model },
-  );
+  return reducer(createInitialState(), { t: "ready", model });
 }
 
 const A1 = "rs1:r:sym:mcp/a.ts#a1";
@@ -89,8 +82,13 @@ describe("revealAndSelect", () => {
     expect(next.expanded.has("file:r:mcp/deep/b.ts")).toBe(true);
     expect(next.selected).toBe(B1);
     expect(next.focusTarget).toBe(B1);
-    // ...for ONE camera refit. The old path (toggleExpand per ancestor + select
-    // + setFocusTarget) bumped it once per dispatch — 5 for this graph.
+    // ...as ONE state transition. The old path dispatched toggleExpand per
+    // ancestor plus select plus setFocusTarget; React's auto-batching already
+    // collapsed those into one render and one camera effect, so this is not a
+    // "fewer refits" win. What it buys is ATOMICITY: one reducer transition
+    // means no intermediate state (half-expanded chain, selected-but-hidden
+    // node) exists to be read, rendered, or reasoned about — and fitNonce
+    // stays a truthful "one bump per user intent" counter.
     expect(next.fitNonce).toBe(ready.fitNonce + 1);
   });
 
@@ -145,7 +143,7 @@ describe("revealAndSelect", () => {
   });
 
   it("is a no-op before the model loads", () => {
-    const cold = { ...INITIAL_STATE, expanded: new Set<string>() };
+    const cold = createInitialState();
     expect(reducer(cold, { t: "revealAndSelect", id: B1, fly: true })).toBe(cold);
   });
 });

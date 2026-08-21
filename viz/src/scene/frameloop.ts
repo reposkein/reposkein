@@ -21,9 +21,11 @@ import { useFrame } from "@react-three/fiber";
  *  | FlowParticles drift          | any bundle is drawn           | yes (self)  |
  *  | Controls idle drift          | store.idleDrift && idle       | yes (self)  |
  *  | drei <Stars> twinkle         | always mounted                | via useContinuousFrames |
+ *  | Labels (drei <Html>)         | camera or layout moves        | covered by camera invalidation — Html re-projects in its own useFrame, and every camera change already invalidates (CameraControls events, fitToSphere, drift), so the labels track without asking for frames of their own |
+ *  | Screenshot capture           | one-shot                      | yes — the direct gl.render bypasses the composer, so it invalidates afterwards to repaint a bloomed frame |
  *  | Bloom / EffectComposer       | composites whatever frame runs | n/a        |
  *  | TemporalLinks, EdgeLines,    | static geometry               | n/a         |
- *  | ConstellationLines, Labels   |                               |             |
+ *  | ConstellationLines           |                               |             |
  *
  *  Two of those are *unconditionally* animating today (the decorative starfield
  *  twinkle and the flow particles), so in practice the loop stays warm while the

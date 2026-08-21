@@ -91,7 +91,9 @@ export interface State {
   /** Gentle idle azimuth drift after a few seconds of no interaction.
    *  DEFAULT OFF: with `frameloop="demand"` an always-on drift means the GPU
    *  never sleeps, and an unrequested camera move fights the reader. Controls
-   *  respects this flag; a keyboard binding lands with the shortcut pass. */
+   *  respects this flag today; nothing can flip it yet — the toggle + keyboard
+   *  binding land with the navigation-semantics task (REP-14). Intentionally a
+   *  dead flag until then, not an oversight. */
   idleDrift: boolean;
 }
 
@@ -230,9 +232,11 @@ export function reducer(state: State, a: Action): State {
       // ONE transition for "make this node visible and inspect it": expand its
       // ancestor chain, select it, optionally fly to it — with a SINGLE fitNonce
       // bump. The callers used to dispatch toggleExpand per ancestor plus select
-      // plus setFocusTarget, so a search hit bumped fitNonce N+2 times and every
-      // intermediate expansion was a separately-reduced state the scene could
-      // have rendered.
+      // plus setFocusTarget. React's auto-batching already collapsed those into
+      // one render, so this is not about firing the camera effect less; it is
+      // about atomicity — no half-expanded / selected-but-hidden intermediate
+      // state exists to be read or reasoned about, and fitNonce stays a
+      // truthful count of user intents rather than of dispatches.
       if (!state.model) return state;
       const model = state.model;
       const expanded = expandToReveal(model, state.expanded, [a.id]);
@@ -470,34 +474,30 @@ const StateCtx = createContext<State | null>(null);
 const ActionsCtx = createContext<Actions | null>(null);
 const ChannelsCtx = createContext<Channels | null>(null);
 
-export const INITIAL_STATE: State = {
-  status: { kind: "loading", phase: "starting" },
-  model: null,
-  expanded: new Set<string>(),
-  selected: null,
-  fitNonce: 0,
-  filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
-  focusTarget: null,
-  lens: "all",
-  emphasis: "none",
-  audit: "off",
-  impact: null,
-  coupling: false,
-  cochange: null,
-  focus: null,
-  focusDepth: DEFAULT_FOCUS_DEPTH,
-  tour: false,
-  bundleBeta: 0.85,
-  idleDrift: false,
-};
-
-/** Fresh initial state per provider — the Sets must not be shared across mounts
- *  (tests mount several) and the reducer treats them as owned values. */
-function initialState(): State {
+/** A fresh initial state. A FACTORY, not a shared constant: `expanded` and
+ *  `filters.kinds` / `filters.edgeTypes` are mutable Sets that the reducer
+ *  treats as owned values, so handing the same object to two providers (tests
+ *  mount several) would let one leak expansion into the other. */
+export function createInitialState(): State {
   return {
-    ...INITIAL_STATE,
+    status: { kind: "loading", phase: "starting" },
+    model: null,
     expanded: new Set<string>(),
+    selected: null,
+    fitNonce: 0,
     filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
+    focusTarget: null,
+    lens: "all",
+    emphasis: "none",
+    audit: "off",
+    impact: null,
+    coupling: false,
+    cochange: null,
+    focus: null,
+    focusDepth: DEFAULT_FOCUS_DEPTH,
+    tour: false,
+    bundleBeta: 0.85,
+    idleDrift: false,
   };
 }
 
@@ -507,7 +507,7 @@ const sameEdgeStats = (a: EdgeStats, b: EdgeStats) =>
 export function StoreProvider({ children }: { children: ReactNode }) {
   // React 19 dropped the 2-arg `useReducer<Reducer>` overload; the plain
   // (reducer, initialState) form infers [State, Dispatch<Action>] correctly.
-  const [state, dispatch] = useReducer(reducer, undefined, initialState);
+  const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
 
   // Pointer-rate / per-pass channels. Created once; the context value is the
   // channel OBJECT, so publishing a value never re-renders a context consumer —

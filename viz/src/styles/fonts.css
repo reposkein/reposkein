@@ -1,11 +1,12 @@
 /** Self-hosted JetBrains Mono — NO external requests.
  *
- *  The static export (`reposkein-mcp view --export`) is opened from disk over
- *  file:// and from air-gapped intranets, so every byte the page needs must ship
- *  with it. The woff2 files live in src/assets/fonts/ (vendored from
- *  @fontsource/jetbrains-mono 5.3.0, latin subset, SIL OFL 1.1 — see
- *  LICENSE-OFL.txt beside them) and are referenced RELATIVELY so Vite emits them
- *  as hashed assets with relative URLs under `base: "./"`.
+ *  The static export (`reposkein-mcp view --export`) is served from GitHub
+ *  Pages, internal static hosts and air-gapped intranets, so every byte the
+ *  page needs must ship with it. The woff2 files live in src/assets/fonts/
+ *  (vendored from @fontsource/jetbrains-mono 5.3.0, latin subset, SIL OFL 1.1 —
+ *  see LICENSE-OFL.txt beside them) and are referenced RELATIVELY so Vite emits
+ *  them as hashed assets with relative URLs under `base: "./"` — resolving
+ *  under any subpath.
  *
  *  Weights: 400 Regular, 500 Medium, 700 Bold — the three the redesign needs.
  *  `font-display: swap` so a slow disk read never blanks the chrome. */
