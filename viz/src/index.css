@@ -72,6 +72,17 @@
   }
 }
 
+@keyframes rs-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes rs-spin {
   to {
     transform: rotate(360deg);
@@ -88,4 +99,19 @@
     opacity: 1;
     transform: scale(1.12);
   }
+}
+
+/* Focus rings (Astrolabe V5 a11y pass). One global rule beats auditing every
+ * interactive element by hand — and, being UNLAYERED (Tailwind's utilities
+ * live inside the `@layer` block above), it wins the cascade over any
+ * `focus:outline-*` utility regardless of specificity, so it can't be
+ * silently shadowed by one.
+ *
+ * `:focus-visible`, never bare `:focus` — the requirement is a ring on
+ * KEYBOARD focus, not on every mouse click that happens to land focus on a
+ * button. Browsers apply their own `:focus-visible` heuristic (roughly:
+ * keyboard/programmatic focus, not a pointer click) so this needs no JS. */
+:focus-visible {
+  outline: 2px solid var(--color-brand-teal);
+  outline-offset: 2px;
 }

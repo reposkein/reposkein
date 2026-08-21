@@ -35,13 +35,6 @@ export type LayerId = "legend" | "minimap" | "filters" | "help";
 /** Display order — also the order the help overlay lists the toggles in. */
 export const LAYER_IDS: readonly LayerId[] = ["minimap", "legend", "filters", "help"];
 
-export const LAYER_LABEL: Record<LayerId, string> = {
-  minimap: "Map",
-  legend: "Legend",
-  filters: "Filters",
-  help: "Help",
-};
-
 let openId: LayerId | null = null;
 const listeners = new Set<() => void>();
 
@@ -103,11 +96,19 @@ export function stashLayer(): void {
 
 /** Re-opens the layer `stashLayer` parked, if any, and forgets it. Called on
  *  tour exit, so the tour is a genuine round trip rather than a way to silently
- *  lose the panel you had open. */
+ *  lose the panel you had open.
+ *
+ *  MERGE-AWARE (fix round 2 / REP-22 polish): a layer summoned from the
+ *  palette WHILE the tour is running (nothing stops that — only Esc defers to
+ *  the tour, opening one doesn't) leaves `openId` non-null at exit time. Blindly
+ *  restoring the stash on top of that clobbered the viewer's own in-tour
+ *  choice with whatever was open before the tour even started. The fix: only
+ *  restore when nothing is currently open — an explicit toggle taken during
+ *  the tour wins over the pre-tour stash. */
 export function restoreStashedLayer(): void {
   const next = stashed;
   stashed = null;
-  if (next) showLayer(next);
+  if (next && openId === null) showLayer(next);
 }
 
 /** Test/introspection hook: what `restoreStashedLayer` would re-open. */

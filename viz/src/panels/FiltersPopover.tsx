@@ -165,7 +165,7 @@ function CouplingToggle() {
         full
       />
       {on && !fetched && (
-        <p className="mt-1 text-[11px] opacity-50">Reading git history…</p>
+        <p className="mt-1 text-[11px] opacity-70">Reading git history…</p>
       )}
       {noData && (
         <p className="mt-1 text-[11px] leading-relaxed text-[var(--color-brand-amber)]">
@@ -190,12 +190,12 @@ function Field({
   return (
     <section className="mb-3 last:mb-0">
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider opacity-50">{label}</h3>
+        <h3 className="text-[11px] font-medium uppercase tracking-wider opacity-70">{label}</h3>
         {value !== undefined && (
-          <span className="font-mono text-[11px] tabular-nums opacity-60">{value}</span>
+          <span className="font-mono text-[11px] tabular-nums opacity-70">{value}</span>
         )}
       </div>
-      {hint && <p className="mb-1.5 mt-0.5 text-[11px] leading-tight opacity-45">{hint}</p>}
+      {hint && <p className="mb-1.5 mt-0.5 text-[11px] leading-tight opacity-70">{hint}</p>}
       {children}
     </section>
   );
@@ -229,7 +229,7 @@ function ColorChip({
       title={on ? `${label} — click to hide` : `${label} — click to show`}
       style={on ? { color: colorVar, borderColor: colorVar } : undefined}
       className={`min-h-6 rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
-        on ? "bg-white/5" : "border-[rgba(148,163,207,0.18)] opacity-40"
+        on ? "bg-white/5" : "border-[rgba(148,163,207,0.18)] opacity-70"
       }`}
     >
       {label}

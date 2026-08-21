@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useStoreState } from "../state/store";
 import { hideLayer, type LayerId } from "./layerState";
 import { isCommandPaletteOpen } from "./paletteOpenState";
+import { useViewportWidth, BP_LAYER_FULL_WIDTH } from "./viewport";
 
 /** Where a layer sits horizontally. Vertical placement is uniform (`bottom-9`,
  *  clearing the 28px status bar), so only this varies. */
@@ -36,8 +37,20 @@ const GUTTER = "0.75rem"; // = right-3 / left-3
  *  regression.
  *
  *  Pure and exported so the geometry is unit-testable without measuring a
- *  layout jsdom doesn't compute. */
-export function layerPlacement(dock: LayerDock, inspectorOpen: boolean): string {
+ *  layout jsdom doesn't compute.
+ *
+ *  `fullWidthSheet` (Astrolabe V5 §2, responsive <640px): overrides dock/
+ *  inspector-column reasoning entirely. Below `BP_LAYER_FULL_WIDTH` there is
+ *  no room left over for ANY docked width (184px–30rem, per layer) — and the
+ *  Inspector is itself a full-bleed bottom sheet down here, so there is no
+ *  column to reserve either. Every layer becomes one full-width bottom sheet
+ *  regardless of its normal `dock`. */
+export function layerPlacement(
+  dock: LayerDock,
+  inspectorOpen: boolean,
+  fullWidthSheet = false,
+): string {
+  if (fullWidthSheet) return "bottom-9 inset-x-3 max-w-none";
   // Room a layer may occupy: the viewport minus its own two gutters, and minus
   // the Inspector's column once that is on screen.
   const maxW = inspectorOpen
@@ -90,6 +103,12 @@ export function LayerShell({
 }) {
   const state = useStoreState();
   const rootRef = useRef<HTMLDivElement>(null);
+  const viewportWidth = useViewportWidth();
+  // Astrolabe V5 §2: below this width EVERY layer becomes a full-width bottom
+  // sheet, overriding its normal dock/width entirely (see `layerPlacement`'s
+  // docstring) — so the caller's desired `width` class is dropped too; the
+  // sheet placement already governs width on its own.
+  const fullWidthSheet = viewportWidth < BP_LAYER_FULL_WIDTH;
 
   // The Inspector mounts on a live selection of a node that exists in the
   // graph, so mirror that exact condition rather than just `selected !== null`
@@ -141,15 +160,16 @@ export function LayerShell({
       data-layer={id}
       data-testid={`layer-${id}`}
       data-inspector-open={inspectorOpen}
-      className={`pointer-events-auto fixed z-[120] ${layerPlacement(dock, inspectorOpen)} ${width} motion-safe:animate-[rs-layer-in_140ms_ease-out] overflow-hidden rounded-[10px] border border-[rgba(148,163,207,0.2)] bg-[color-mix(in_srgb,var(--color-brand-navy)_88%,white_4%)] text-[13px] text-[var(--color-brand-cream)] shadow-[0_12px_36px_-12px_rgba(0,0,0,0.7)] backdrop-blur-md`}
+      data-full-width-sheet={fullWidthSheet}
+      className={`pointer-events-auto fixed z-[120] ${layerPlacement(dock, inspectorOpen, fullWidthSheet)} ${fullWidthSheet ? "" : width} motion-safe:animate-[rs-layer-in_140ms_ease-out] overflow-hidden rounded-[10px] border border-[rgba(148,163,207,0.2)] bg-[color-mix(in_srgb,var(--color-brand-navy)_88%,white_4%)] text-[13px] text-[var(--color-brand-cream)] shadow-[0_12px_36px_-12px_rgba(0,0,0,0.7)] backdrop-blur-md`}
     >
       <div className="flex h-7 items-center justify-between border-b border-[rgba(148,163,207,0.16)] px-2.5">
-        <span className="text-[11px] font-medium uppercase tracking-wider opacity-55">{title}</span>
+        <span className="text-[11px] font-medium uppercase tracking-wider opacity-70">{title}</span>
         <button
           type="button"
           onClick={() => hideLayer()}
           aria-label={`Close ${title}`}
-          className="min-h-5 min-w-5 text-[11px] opacity-55 hover:opacity-100"
+          className="min-h-5 min-w-5 text-[11px] opacity-70 hover:opacity-100"
         >
           ✕
         </button>

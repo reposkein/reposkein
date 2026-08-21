@@ -23,7 +23,7 @@ export function HelpOverlay() {
       <div className="max-h-[min(70vh,34rem)] overflow-y-auto p-3">
         {KEYMAP.map((group) => (
           <section key={group.title} className="mb-3 last:mb-0">
-            <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider opacity-45">
+            <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider opacity-70">
               {group.title}
             </h3>
             <dl className="flex flex-col gap-1">

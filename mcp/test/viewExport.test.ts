@@ -33,6 +33,24 @@ describe("buildGraphDataJs (static export baking)", () => {
     expect(payload.manifest.federated).toEqual([]);
   });
 
+  it("populates manifest.counts from the real node/edge line counts (fix round 2 / REP-22 polish — was hardcoded 0/0)", () => {
+    const js = buildGraphDataJs(
+      "demo",
+      '{"id":"a"}\n{"id":"b"}\n{"id":"c"}\n',
+      '{"from":"a","to":"b"}\n',
+    );
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as { manifest: { counts: { nodes: number; edges: number } } };
+    expect(payload.manifest.counts).toEqual({ nodes: 3, edges: 1 });
+  });
+
+  it("counts tolerate a missing trailing newline and ignore stray blank lines", () => {
+    const js = buildGraphDataJs("demo", '{"id":"a"}\n\n{"id":"b"}', "");
+    const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
+    const payload = JSON.parse(json) as { manifest: { counts: { nodes: number; edges: number } } };
+    expect(payload.manifest.counts).toEqual({ nodes: 2, edges: 0 });
+  });
+
   it("does NOT bake an absolute repoRoot (shared export, no leak)", () => {
     const js = buildGraphDataJs("demo", "n\n", "e\n");
     expect(js).not.toContain("repoRoot");

@@ -47,6 +47,9 @@ const {
   resetLayers,
   showLayer,
   toggleLayer,
+  stashLayer,
+  restoreStashedLayer,
+  stashedLayer,
   LAYER_IDS,
 } = await import("./layerState");
 const { setCommandPaletteOpen, isCommandPaletteOpen, requestCommandPalette } = await import(
@@ -209,6 +212,44 @@ describe("layerState — exclusivity is structural", () => {
     expect(hideLayer()).toBe(false);
     summon("help");
     expect(hideLayer()).toBe(true);
+    expect(openLayer()).toBeNull();
+  });
+});
+
+/** Fix round 2 / REP-22 polish: "palette layer-toggle during active tour is
+ *  clobbered by stash restore on tour exit". `stashLayer`/`restoreStashedLayer`
+ *  are tested directly here (no need to mount TourController — it's a thin
+ *  wrapper that calls exactly these two functions on the tour's
+ *  active/inactive transitions; see `tourCinematic.test.tsx` for that wiring). */
+describe("layerState — stash/restore is merge-aware (fix round 2)", () => {
+  it("an explicit toggle taken DURING the tour wins over the pre-tour stash", () => {
+    resetLayers();
+    showLayer("help"); // open before the tour starts
+    stashLayer(); // tour entry: park it, close everything
+    expect(openLayer()).toBeNull();
+    expect(stashedLayer()).toBe("help");
+
+    showLayer("legend"); // an in-tour explicit toggle (e.g. via the palette)
+    restoreStashedLayer(); // tour exit
+
+    expect(openLayer()).toBe("legend"); // NOT "help" — the explicit choice wins
+    expect(stashedLayer()).toBeNull(); // the stash is still consumed, not left dangling
+  });
+
+  it("restores the pre-tour stash when nothing was explicitly opened during the tour", () => {
+    resetLayers();
+    showLayer("filters");
+    stashLayer();
+    expect(openLayer()).toBeNull();
+
+    restoreStashedLayer();
+
+    expect(openLayer()).toBe("filters");
+  });
+
+  it("is a no-op when nothing was stashed (no layer was open before the tour)", () => {
+    resetLayers();
+    restoreStashedLayer();
     expect(openLayer()).toBeNull();
   });
 });
@@ -456,6 +497,54 @@ describe("layer placement never collides with the Inspector", () => {
     // z-120 vs the Inspector's z-110: intentional, so a layer summoned over the
     // drawer's own edge is never clipped by it.
     expect(screen.getByTestId("layer-filters").className).toContain("z-[120]");
+  });
+});
+
+/** Astrolabe V5 §2 (responsive <640px): every summoned layer becomes a
+ *  full-width bottom sheet below `BP_LAYER_FULL_WIDTH`, regardless of its
+ *  normal dock/width — there is no room left over for a docked 184px–30rem
+ *  panel at this size, and the Inspector is itself a full-bleed sheet down
+ *  here too. */
+describe("layer placement — full-width bottom sheet under 640px (Astrolabe V5 §2)", () => {
+  it("layerPlacement ignores dock/inspector state and returns a full-width sheet", () => {
+    for (const dock of ["right", "center"] as const) {
+      for (const inspectorOpen of [false, true]) {
+        const placement = layerPlacement(dock, inspectorOpen, true);
+        expect(placement).toBe("bottom-9 inset-x-3 max-w-none");
+      }
+    }
+  });
+
+  it("is opt-in: the default (no third argument) is the normal docked placement", () => {
+    expect(layerPlacement("right", false)).not.toContain("max-w-none");
+  });
+
+  const ORIGINAL_INNER_WIDTH = window.innerWidth;
+  function setViewportWidth(width: number) {
+    Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
+    fireEvent(window, new Event("resize"));
+  }
+  afterEach(() => setViewportWidth(ORIGINAL_INNER_WIDTH));
+
+  it("a mounted LayerShell drops the sheet below 640px, marking itself via data-full-width-sheet", () => {
+    currentStore = makeStore({ model: tinyModel() }).store;
+    setViewportWidth(500);
+    render(<LayerHost />);
+    summon("legend");
+    const el = screen.getByTestId("layer-legend");
+    expect(el.getAttribute("data-full-width-sheet")).toBe("true");
+    expect(el.className).toContain("max-w-none");
+    expect(el.className).not.toContain("w-56"); // LegendSheet's normal desired width
+  });
+
+  it("stays docked at its normal width at 900px", () => {
+    currentStore = makeStore({ model: tinyModel() }).store;
+    setViewportWidth(900);
+    render(<LayerHost />);
+    summon("legend");
+    const el = screen.getByTestId("layer-legend");
+    expect(el.getAttribute("data-full-width-sheet")).toBe("false");
+    expect(el.className).toContain("w-56");
   });
 });
 

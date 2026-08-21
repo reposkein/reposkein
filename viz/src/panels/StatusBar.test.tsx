@@ -198,6 +198,13 @@ describe("StatusBar — breadcrumb crumb clicks", () => {
     const model = tinyModel();
     const { store, actions } = makeStore({ model, selected: "rs1:acmerepo:sym:lib/a.ts#run@0" });
     currentStore = store;
+    // Explicit wide viewport: this is a click-behaviour test, not a
+    // width-tier one, but the Inspector is open (a node is selected) — and
+    // the breadcrumb tier now reserves the drawer's own width when it is
+    // (fix round 2 / REP-22 polish), so leaving this at jsdom's implicit
+    // default (1024, which sits exactly on the OLD un-reserved boundary)
+    // would exercise that reservation by accident. 1280 has headroom either way.
+    setViewportWidth(1280);
     render(<StatusBar />);
 
     fireEvent.click(screen.getByTitle("lib"));

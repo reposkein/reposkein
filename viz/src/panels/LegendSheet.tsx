@@ -72,7 +72,7 @@ export function LegendSheet() {
           </Group>
         )}
 
-        <p className="mt-2 border-t border-[rgba(148,163,207,0.14)] pt-2 text-[11px] leading-relaxed opacity-50">
+        <p className="mt-2 border-t border-[rgba(148,163,207,0.14)] pt-2 text-[11px] leading-relaxed opacity-70">
           Edge opacity = confidence · halo tint = language · star size = degree
         </p>
       </div>
@@ -83,7 +83,7 @@ export function LegendSheet() {
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section className="mb-2.5 last:mb-0">
-      <h3 className="mb-1 text-[11px] font-medium uppercase tracking-wider opacity-45">{label}</h3>
+      <h3 className="mb-1 text-[11px] font-medium uppercase tracking-wider opacity-70">{label}</h3>
       <ul className="flex flex-col gap-1">{children}</ul>
     </section>
   );

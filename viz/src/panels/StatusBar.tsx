@@ -21,10 +21,14 @@ import {
 import { openLayer, toggleLayer, useOpenLayer, type LayerId } from "./layerState";
 import { pushToast } from "./toastState";
 import { TourLaunchButton } from "./TourController";
+import { useViewportWidth } from "./viewport";
 
 const BAR = "h-7 text-[13px] text-[var(--color-brand-cream)]";
 const MONO = "font-mono";
-const DIM = "opacity-60";
+/** Secondary chrome text. 70% is the contrast floor for chrome text at 11px+
+ *  on an opaque surface (Astrolabe V5 a11y pass) — below that, cream-on-navy
+ *  no longer clears a comfortable read at this size. */
+const DIM = "opacity-70";
 /** Minimum hit area for every clickable pill in the bar — the bar itself is
  *  only 28px tall, so this is close to the ceiling of what fits, but it must
  *  hold regardless of how narrow the viewport gets (fix round 1, `#2`:
@@ -45,22 +49,6 @@ const TAP = "min-h-6 min-w-6";
 const BP_HIDE_STALENESS = 768;
 const BP_HIDE_COUNTS = 640;
 const BP_COLLAPSE_CHIPS = 480;
-
-/** The viewport width, updated on resize. The bar is `fixed inset-x-0`, so
- *  viewport width IS the bar's own width — no ResizeObserver on the footer
- *  element needed. SSR-safe default (this app is client-only, but jsdom/test
- *  environments without a real layout still get a sane wide-tier default). */
-function useViewportWidth(): number {
-  const [width, setWidth] = useState<number>(() =>
-    typeof window === "undefined" ? 1280 : window.innerWidth,
-  );
-  useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return width;
-}
 
 /** The 28px persistent status bar (REP-18 / Astrolabe V2). The ONLY chrome
  *  that is always on screen: everything HeaderBar / LensSwitcher / the
@@ -111,9 +99,19 @@ export function StatusBar() {
     () => (model ? resolveBreadcrumb(model, store.selected, nearestKey) : []),
     [model, store.selected, nearestKey],
   );
+  // The Inspector reserves no horizontal space (it sits below the bar), but
+  // it DOES change what the breadcrumb has to render: a selection appends the
+  // symbol as a synthetic leaf crumb (`selectionCrumbs`), so the chain is
+  // typically one segment longer with the drawer open than the camera-nearest
+  // fallback shown otherwise. Widths tuned for "the general case" therefore
+  // under-collapse right when the drawer opens — the fix round 2 regression
+  // ("crumbs over-truncate at 1280 with inspector open") — so the tier lookup
+  // treats an open Inspector as narrower by its own width + gutters.
+  const inspectorOpen =
+    model !== null && store.selected !== null && model.records.has(store.selected);
   const displayCrumbs = useMemo(
-    () => collapseCrumbsForDisplay(crumbs, breadcrumbMaxVisibleForWidth(width)),
-    [crumbs, width],
+    () => collapseCrumbsForDisplay(crumbs, breadcrumbMaxVisibleForWidth(width, inspectorOpen)),
+    [crumbs, width, inspectorOpen],
   );
 
   // Start the throttled camera-nearest poll once the model exists; stop it
@@ -278,17 +276,17 @@ function StatusBarCenter({ crumbs }: { crumbs: Crumb[] }) {
   return (
     <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden whitespace-nowrap px-2">
       {crumbs.map((crumb, i) => (
-        <span key={`${crumb.key}-${i}`} className="flex min-w-0 items-center">
+        <span key={`${crumb.key}-${i}`} className="flex min-w-[2ch] shrink items-center">
           {i > 0 && <span className="mx-1.5 shrink-0 opacity-35">·</span>}
           {crumb.clickable ? (
             <button
               type="button"
               onClick={() => onCrumbClick(crumb)}
               title={crumb.label}
-              className={`${MONO} min-w-0 truncate text-[13px] transition-opacity ${
+              className={`${MONO} min-w-0 truncate text-[13px] transition-opacity motion-reduce:transition-none ${
                 i === crumbs.length - 1
                   ? "text-[var(--color-brand-cream)] opacity-95"
-                  : "opacity-60 hover:opacity-90"
+                  : "opacity-70 hover:opacity-90"
               }`}
             >
               {crumb.label}

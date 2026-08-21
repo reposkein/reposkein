@@ -1,4 +1,5 @@
 import { dismissToast, useToasts, type ToastTone } from "./toastState";
+import { useOpenLayer } from "./layerState";
 
 /** Toast host (Astrolabe V3 §5). Bottom-center, just above the status bar.
  *
@@ -6,7 +7,16 @@ import { dismissToast, useToasts, type ToastTone } from "./toastState";
  *  screen reader announces each new message once as it mounts; the region is
  *  always present in the DOM (an aria-live region added at the same time as its
  *  content is not reliably announced). Each toast carries a manual dismiss for
- *  pointer users — auto-dismiss is the norm, not the only exit. */
+ *  pointer users — auto-dismiss is the norm, not the only exit.
+ *
+ *  MOVES TO THE TOP while a summoned layer is open (fix round 2 / REP-22
+ *  polish): the bottom-center toast stack (z-150) used to sit ABOVE a
+ *  centered layer (z-120) in paint order without any positional awareness of
+ *  it, so a toast firing while the Help overlay was open could paint over its
+ *  bottom edge — and, since every layer becomes a full-width bottom sheet
+ *  below 640px (Astrolabe V5 §2), the same collision is now possible for the
+ *  right-docked layers too. Any open layer is reason enough to move: there is
+ *  no bottom-docked toast position guaranteed clear of all four. */
 
 const TONE: Record<ToastTone, string> = {
   info: "border-[rgba(148,163,207,0.28)] text-[var(--color-brand-cream)]",
@@ -17,12 +27,16 @@ const TONE: Record<ToastTone, string> = {
 
 export function Toasts() {
   const toasts = useToasts();
+  const layerOpen = useOpenLayer() !== null;
   return (
     <div
       aria-live="polite"
       aria-atomic="false"
       data-testid="toast-region"
-      className="pointer-events-none fixed bottom-10 left-1/2 z-[150] flex w-[min(360px,calc(100vw-2rem))] -translate-x-1/2 flex-col items-center gap-1.5"
+      data-position={layerOpen ? "top" : "bottom"}
+      className={`pointer-events-none fixed left-1/2 z-[150] flex w-[min(360px,calc(100vw-2rem))] -translate-x-1/2 flex-col items-center gap-1.5 ${
+        layerOpen ? "top-3" : "bottom-10"
+      }`}
     >
       {toasts.map((t) => (
         <div

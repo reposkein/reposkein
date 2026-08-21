@@ -388,7 +388,7 @@ export function CommandPalette() {
             ref={inputRef}
             id={`${uid}-input`}
             role="combobox"
-            aria-expanded="true"
+            aria-expanded={!noResults}
             aria-controls={listboxId}
             aria-activedescendant={activeRowId}
             aria-autocomplete="list"
@@ -396,7 +396,7 @@ export function CommandPalette() {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onInputKeyDown}
             placeholder="Search or type > for commands…"
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-brand-cream)] placeholder:opacity-45 focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-brand-cream)] placeholder:opacity-70 focus:outline-none"
           />
           {filesOnly && (
             <button
@@ -420,7 +420,7 @@ export function CommandPalette() {
             {!noResults &&
               grouped.map(({ group, rows }) => (
                 <div key={group} role="group" aria-label={GROUP_LABEL[group]} className="mb-1 last:mb-0">
-                  <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider opacity-45">
+                  <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider opacity-70">
                     {GROUP_LABEL[group]}
                   </p>
                   {rows.map((row) => {
@@ -500,7 +500,7 @@ function NoResults({
       <p className="text-[13px] font-medium">
         {isCommandMode ? `No commands match "${query.slice(1).trim()}"` : `No matches for "${query}"`}
       </p>
-      <p className="mt-1 max-w-xs text-[11px] opacity-60">
+      <p className="mt-1 max-w-xs text-[11px] opacity-70">
         {isCommandMode
           ? "Check the spelling, or clear the > prefix to search symbols and files too."
           : "Check the spelling, try fewer words, or narrow the search to files only."}
@@ -605,7 +605,7 @@ function ConfidenceBadge({ value }: { value: number }) {
   return (
     <span
       title={`Touched by a low-confidence edge (${Math.round(value * 100)}%)`}
-      className="shrink-0 rounded-full border border-[rgba(255,180,84,0.4)] bg-[rgba(255,180,84,0.16)] px-1.5 py-0.5 text-[10px] font-medium text-[#ffd9a0] tabular-nums"
+      className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-brand-amber)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-amber)_16%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-brand-amber)] tabular-nums"
     >
       {Math.round(value * 100)}%
     </span>

@@ -61,7 +61,15 @@ export function cameraCrumbs(model: ClientModel, nearestKey: string | null): Cru
 }
 
 /** The single entry point the status bar's breadcrumb renders: selection
- *  takes priority; camera-nearest is the persistent fallback. Never empty. */
+ *  takes priority; camera-nearest is the persistent fallback. Never empty.
+ *
+ *  Adjacent crumbs with the IDENTICAL label are folded into one (fix round 2 /
+ *  REP-22 polish): a repo whose top-level directory shares the repo's own name
+ *  (a common layout) renders a root galaxy crumb and a directory crumb that
+ *  say the exact same word — "reposkein · reposkein" reads as a rendering bug,
+ *  not as two distinct levels. The fold keeps the DEEPER crumb's key (so
+ *  clicking it still navigates to the more specific scope) and just the one
+ *  label. */
 export function resolveBreadcrumb(
   model: ClientModel,
   selectedId: string | null,
@@ -70,7 +78,25 @@ export function resolveBreadcrumb(
   const crumbs = selectedId
     ? selectionCrumbs(model, selectedId)
     : cameraCrumbs(model, nearestClusterKey);
-  return crumbs.length > 0 ? crumbs : [{ key: model.rootKey, label: model.repoId, clickable: false }];
+  const deduped = dedupeAdjacentCrumbLabels(crumbs);
+  return deduped.length > 0
+    ? deduped
+    : [{ key: model.rootKey, label: model.repoId, clickable: false }];
+}
+
+/** Folds runs of adjacent crumbs sharing the same displayed LABEL into one,
+ *  keeping the last (deepest) crumb's `key`/`clickable` — clicking the folded
+ *  crumb still navigates to the more specific of the two scopes. Pure, so the
+ *  "repo root galaxy and its same-named top directory" case is unit-testable
+ *  without a real model. */
+export function dedupeAdjacentCrumbLabels(crumbs: Crumb[]): Crumb[] {
+  const out: Crumb[] = [];
+  for (const c of crumbs) {
+    const prev = out[out.length - 1];
+    if (prev && prev.label === c.label) out[out.length - 1] = c;
+    else out.push(c);
+  }
+  return out;
 }
 
 /** A synthetic, inert "…" crumb — never clickable, never confused with a real
@@ -96,6 +122,12 @@ export function collapseCrumbsForDisplay(crumbs: Crumb[], maxVisible: number): C
   return [head, { key: ELLIPSIS_KEY, label: "…", clickable: false }, ...tail];
 }
 
+/** The Inspector's own width + the gutters `LayerShell`'s `layerPlacement`
+ *  reserves around it (kept in sync with that module's `INSPECTOR_W`/
+ *  `GUTTER` — duplicated rather than imported so this stays a leaf, React-free
+ *  module; `StatusBar.test.tsx` pins the two numbers agreeing). */
+const INSPECTOR_RESERVED_PX = 360 + 12 * 3;
+
 /** How many breadcrumb segments to show at a given bar (== viewport) width,
  *  in px. The bar is `fixed inset-x-0`, so viewport width IS the bar's
  *  width — no ResizeObserver needed. Wide bars show the whole chain; narrow
@@ -104,10 +136,21 @@ export function collapseCrumbsForDisplay(crumbs: Crumb[], maxVisible: number): C
  *  the FIRST thing to give ground as the bar narrows, before the left
  *  section drops anything — its threshold (1024) is wider than the left
  *  section's widest drop threshold (768) — see StatusBar.tsx's tier
- *  comment). */
-export function breadcrumbMaxVisibleForWidth(width: number): number {
-  if (width >= 1024) return Infinity;
-  if (width >= 640) return 4;
+ *  comment).
+ *
+ *  `inspectorOpen` (fix round 2 / REP-22 polish — "crumbs over-truncate at
+ *  1280 with inspector open"): a live selection makes `selectionCrumbs`
+ *  append a synthetic leaf crumb the camera-nearest fallback never has, so
+ *  the SAME viewport width has to fit one more segment exactly when the
+ *  drawer is also on screen. Tiers tuned for the general case therefore
+ *  under-collapsed right when both were true at once. Treating an open
+ *  Inspector as `INSPECTOR_RESERVED_PX` narrower — the same number
+ *  `layerPlacement` reserves for it — fixes that without a second set of
+ *  breakpoints to keep in sync by hand. */
+export function breadcrumbMaxVisibleForWidth(width: number, inspectorOpen = false): number {
+  const effective = inspectorOpen ? width - INSPECTOR_RESERVED_PX : width;
+  if (effective >= 1024) return Infinity;
+  if (effective >= 640) return 4;
   return 3;
 }
 

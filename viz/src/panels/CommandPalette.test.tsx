@@ -335,6 +335,22 @@ describe("CommandPalette — no-results state", () => {
     expect(live?.textContent).toMatch(/No matches for/);
   });
 
+  it("aria-expanded on the combobox reflects whether there are results (fix round 2 / REP-22 polish — was hardcoded true)", async () => {
+    const model = graphModel();
+    const { store } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "graph" } });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.change(input, { target: { value: "zzzznotfound" } });
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.change(input, { target: { value: "graph" } });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("announces the result count via the aria-live region when results exist", async () => {
     const model = graphModel();
     const { store } = makeStore({ model });

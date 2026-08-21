@@ -211,3 +211,18 @@ export const SYMBOL_KIND_META: { kind: string; filterKey: string; color: string;
     filterKey: m.kind.toLowerCase(),
   }));
 
+/** Status semantics for HUD chrome (REP-22 polish). Before this table, the
+ *  Inspector's impact/covering-test badges carried their own literal hexes
+ *  (`#ff8a73`, `#74ff8e`) with no relationship to anything else on screen —
+ *  exactly the drift `scene/encoding.ts` exists to prevent for node/edge/
+ *  language hues. `warn` reuses `BRAND.amber` (not a new hex) because it's
+ *  already the app's one "something needs attention" hue (toasts, the
+ *  edge-cap indicator, confidence badges); `ok`/`danger` are new but now
+ *  live here, generated into `--color-status-*` tokens by `styles/tokens.ts`
+ *  exactly like every other table above. */
+export const STATUS_META: { status: "ok" | "warn" | "danger"; color: string; label: string }[] = [
+  { status: "danger", color: "#ff8a73", label: "Danger / impacted" },
+  { status: "ok", color: "#74ff8e", label: "OK / covering" },
+  { status: "warn", color: BRAND.amber, label: "Warning" },
+];
+

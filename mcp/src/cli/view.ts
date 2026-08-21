@@ -128,7 +128,26 @@ function githubHttpsUrl(remote: string): string | null {
   return null;
 }
 
-function buildManifest(repoId: string, repoRoot: string, meta: RepoBakeMeta): string {
+/** Counts records in a `.jsonl` file's text: one non-blank line, one record.
+ *  Tolerates a trailing newline (the common case) and any stray blank lines
+ *  without over- or under-counting. Shared by the live manifest and the
+ *  static-export bake (REP-22 polish: both used to hardcode `{ nodes: 0,
+ *  edges: 0 }` with a "the client re-derives" comment — true for the live
+ *  worker path, but the baked `graph-data.js` payload is also a document
+ *  other tooling may read directly, so a real count belongs in it too). */
+function countJsonlRecords(text: string): number {
+  if (!text) return 0;
+  let count = 0;
+  for (const line of text.split("\n")) if (line.trim().length > 0) count++;
+  return count;
+}
+
+function buildManifest(
+  repoId: string,
+  repoRoot: string,
+  meta: RepoBakeMeta,
+  counts: { nodes: number; edges: number },
+): string {
   return JSON.stringify({
     root: {
       repoId,
@@ -144,7 +163,7 @@ function buildManifest(repoId: string, repoRoot: string, meta: RepoBakeMeta): st
       repoRoot,
     },
     federated: [], // M1: single repo. Federation deferred to M3.
-    counts: { nodes: 0, edges: 0 }, // counts are advisory; the client re-derives.
+    counts,
     meta,
   });
 }
@@ -188,9 +207,14 @@ export function makeViewHandler(repoPath: string, repoId: string) {
   const distDir = vizDistDir();
 
   const repoRoot = resolve(repoPath);
-  // Computed once (shells out to git) — cheap and stable for the server's
-  // lifetime; recomputing per-request would add a git spawn to every load.
+  // Computed once (shells out to git / reads the JSONL files) — cheap and
+  // stable for the server's lifetime; recomputing per-request would add a
+  // git spawn and two file reads to every /api/graph hit.
   const repoMeta = resolveServerRepoMeta(repoPath);
+  const counts = {
+    nodes: existsSync(nodesPath) ? countJsonlRecords(readFileSync(nodesPath, "utf8")) : 0,
+    edges: existsSync(edgesPath) ? countJsonlRecords(readFileSync(edgesPath, "utf8")) : 0,
+  };
 
   return function handler(req: IncomingMessage, res: ServerResponse): void {
     const rawUrl = req.url ?? "/";
@@ -199,7 +223,7 @@ export function makeViewHandler(repoPath: string, repoId: string) {
 
     // --- API routes ---
     if (url === "/api/graph") {
-      sendGzip(res, buildManifest(repoId, repoRoot, repoMeta), "application/json; charset=utf-8");
+      sendGzip(res, buildManifest(repoId, repoRoot, repoMeta, counts), "application/json; charset=utf-8");
       return;
     }
 
@@ -462,7 +486,7 @@ export function buildGraphDataJs(
         nodesUrl: "",
         edgesUrl: "",
       })),
-      counts: { nodes: 0, edges: 0 },
+      counts: { nodes: countJsonlRecords(nodesText), edges: countJsonlRecords(edgesText) },
     },
     nodesText,
     edgesText,

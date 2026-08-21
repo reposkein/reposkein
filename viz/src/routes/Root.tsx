@@ -26,6 +26,7 @@ import { Toasts } from "../panels/Toasts";
 import { ModeToasts } from "../panels/ModeToasts";
 import { LoadingScreen } from "../panels/LoadingScreen";
 import { ErrorScreen } from "../panels/ErrorScreen";
+import { CoachMark } from "../panels/CoachMark";
 import { toggleLayer } from "../panels/layerState";
 import { isCommandPaletteOpen, requestCommandPalette } from "../panels/paletteOpenState";
 import { handleGlobalKey } from "../panels/globalKeys";
@@ -243,6 +244,7 @@ function View() {
         <StatusBar />
         {store.status.kind === "ready" && <Inspector />}
         <LayerHost />
+        {store.status.kind === "ready" && <CoachMark />}
         {nodeNotice && (
           <NodeMovedNotice nodeId={nodeNotice} onDismiss={() => setNodeNotice(null)} />
         )}

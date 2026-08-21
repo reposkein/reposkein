@@ -136,7 +136,7 @@ export function MinimapLayer() {
           aria-label="Overview map of the visible constellation — click to recenter"
           className="block h-[120px] w-[168px] cursor-crosshair select-none rounded-[4px]"
         />
-        <p className="mt-1.5 text-[11px] leading-tight opacity-45">
+        <p className="mt-1.5 text-[11px] leading-tight opacity-70">
           Visible clusters · <span className="text-[var(--color-brand-teal)]">frame</span> = viewport
         </p>
       </div>
