@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import { useSearch, useNavigate } from "@tanstack/react-router";
@@ -10,7 +10,10 @@ import { ConstellationLines } from "../scene/ConstellationLines";
 import { EdgeLines } from "../scene/EdgeLines";
 import { FlowParticles } from "../scene/FlowParticles";
 import { Labels } from "../scene/Labels";
-import { Controls } from "../scene/Controls";
+import { Controls, getCameraView } from "../scene/Controls";
+import { HopTrail } from "../scene/HopTrail";
+import { isNodeOnScreen } from "../scene/onScreen";
+import { getCameraPose, registerOnScreenProbe } from "../state/cameraPose";
 import { TemporalLinks } from "../scene/TemporalLinks";
 import { fetchTemporal } from "../data/temporal";
 import { CommandPalette } from "../panels/CommandPalette";
@@ -24,9 +27,16 @@ import { ModeToasts } from "../panels/ModeToasts";
 import { LoadingScreen } from "../panels/LoadingScreen";
 import { ErrorScreen } from "../panels/ErrorScreen";
 import { toggleLayer } from "../panels/layerState";
-import { requestCommandPalette } from "../panels/paletteOpenState";
+import { isCommandPaletteOpen, requestCommandPalette } from "../panels/paletteOpenState";
 import { handleGlobalKey } from "../panels/globalKeys";
+import { handlePointerMissed } from "../scene/pointerMissed";
 import { resolveNodeFallback } from "../data/nodeFallback";
+import {
+  encodeViewSearch,
+  isDefaultView,
+  parseViewSearch,
+  sameViewSearch,
+} from "../data/urlState";
 import { CaptureBridge } from "../scene/Screenshot";
 
 export function Root() {
@@ -41,7 +51,27 @@ function View() {
   const store = useStore();
   const search = useSearch({ from: "/" });
   const navigate = useNavigate({ from: "/" });
-  const nodeFromUrl = search.node;
+
+  /** "Is this node comfortably in view?" — the one frustum closure this app
+   *  needs, used by two callers that both refuse to move the camera for a node
+   *  the reader can already see: the neighbour hop (V4 §5) and `select` (V4 §6 /
+   *  fix round 1 `I3`). `store.model` is the only reactive input; the pose and
+   *  the perspective params are read fresh from the scene singletons at call
+   *  time, so the closure stays valid across camera moves. */
+  const model = store.model;
+  const isOnScreen = useCallback(
+    (id: string) =>
+      model ? isNodeOnScreen(model, id, getCameraPose(), getCameraView()) : false,
+    [model],
+  );
+
+  // The store's `select` wrapper cannot import `scene/` (Controls imports the
+  // store — that would be a cycle), so it reads this capability through a
+  // registered probe. See `state/cameraPose.ts`.
+  useEffect(() => {
+    registerOnScreenProbe(isOnScreen);
+    return () => registerOnScreenProbe(null);
+  }, [isOnScreen]);
 
   // Global keys. The bindings themselves live in `panels/globalKeys.ts` (a pure
   // function over a plain event shape) so they can be tested without standing
@@ -49,14 +79,81 @@ function View() {
   // renders, can be diffed against them. This effect is just the listener.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) =>
-      handleGlobalKey(e, store, store, { openPalette: requestCommandPalette, toggleLayer });
+      handleGlobalKey(e, store, store, {
+        openPalette: requestCommandPalette,
+        toggleLayer,
+        paletteOpen: isCommandPaletteOpen,
+        isOnScreen,
+      });
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [store]);
+  }, [store, isOnScreen]);
 
   const [nodeNotice, setNodeNotice] = useState<string | null>(null);
+
+  /** THE INITIAL VIEW, captured ONCE (V4 §7).
+   *
+   *  The URL is both an input (restore this view) and an output (describe the
+   *  current one), and the write-back effect below runs on mount — before the
+   *  graph has loaded and therefore before anything can be restored. Reading the
+   *  incoming params from live `search` would mean the write-back clears them
+   *  first and the restore then finds nothing to do. Snapshotting on first
+   *  render is what makes a cold deep link survive its own round trip. */
+  const [initialView] = useState(() => parseViewSearch(search));
+  /** Set once the initial view has been applied (or found to be empty). Until
+   *  then the write-back holds off, for the reason above. */
+  const restored = useRef(isDefaultView(initialView));
+
+  // RESTORE. One shot, once the model exists: lens first (it resets filters and
+  // clears audit, so anything applied before it would be wiped), then the node,
+  // then the overlays — impact and focus need a selection to compute against.
   useEffect(() => {
-    if (!store.model || !nodeFromUrl) return;
+    if (restored.current || !store.model) return;
+    const model = store.model;
+
+    if (initialView.lens && initialView.lens !== "all") store.setLens(initialView.lens);
+
+    if (initialView.node) {
+      let id = initialView.node;
+      if (!model.records.has(id)) {
+        const fallback = resolveNodeFallback(id, model.records.keys());
+        if (!fallback) {
+          setNodeNotice(initialView.node);
+          id = "";
+        } else {
+          id = fallback;
+        }
+      }
+      if (id) {
+        setNodeNotice(null);
+        store.revealAndSelect(id, { fly: true });
+      }
+    }
+
+    const { impact, focus, coupling, audit } = initialView.overlays;
+    // Depth before the toggle: `toggleFocus` computes against `focusDepth`, so
+    // setting it afterwards would need a second recompute.
+    if (focus !== null) {
+      store.setFocusDepth(focus);
+      store.toggleFocus();
+    } else if (impact) {
+      // `toggleFocus` clears impact and vice versa — they are mutually
+      // exclusive in the reducer, so a link can only restore one. Focus wins
+      // because it carries a depth, i.e. more of the reader's intent.
+      store.toggleImpact();
+    }
+    if (coupling) store.toggleCoupling();
+    if (audit) store.setAudit(audit);
+
+    restored.current = true;
+  }, [store.model]); // intentional: a one-shot restore, guarded by `restored`
+
+  // A later ?node change (the reader edits the URL, or a back/forward that
+  // lands on a different node) still reveals, exactly as it did in V3.
+  const nodeFromUrl = search.node;
+  useEffect(() => {
+    if (!restored.current || !store.model || !nodeFromUrl) return;
+    if (nodeFromUrl === store.selected) return;
     const model = store.model;
     let id = nodeFromUrl;
     if (!model.records.has(id)) {
@@ -82,12 +179,23 @@ function View() {
     };
   }, [store.coupling, store.cochange]); // re-run when the toggle flips on
 
+  // WRITE BACK. The URL always describes the CURRENT view, so the browser's
+  // address bar (and therefore Copy link, which reads `window.location.href`)
+  // carries the lens and the overlays too, not just the node.
+  //
+  // `replace` + the `sameViewSearch` guard together keep this out of the
+  // browser's own history: this is a mirror of app state, not a navigation, and
+  // pushing an entry per reducer transition would make the back button walk
+  // through mode toggles.
+  const nextSearch = encodeViewSearch(store);
   useEffect(() => {
-    navigate({
-      search: store.selected ? { node: store.selected } : {},
-      replace: true,
-    });
-  }, [store.selected]); // intentional: navigate identity is stable
+    if (!restored.current) return;
+    if (sameViewSearch(nextSearch, search)) return;
+    navigate({ search: nextSearch, replace: true });
+    // Intentional deps: `navigate` identity is stable, and `search` is read for
+    // the equality guard only — depending on it would re-run this effect with
+    // its own output.
+  }, [nextSearch.node, nextSearch.lens, nextSearch.overlays]);
 
   return (
     <div className="relative h-full w-full">
@@ -97,9 +205,7 @@ function View() {
         frameloop="demand"
         gl={{ antialias: true, preserveDrawingBuffer: true }}
         style={{ background: "transparent" }}
-        onPointerMissed={(e) => {
-          if (e.button === 0) store.collapseLevel();
-        }}
+        onPointerMissed={(e) => handlePointerMissed(e, store)}
       >
         <fogExp2 attach="fog" args={[0x070a12, 0.0016]} />
         <ambientLight intensity={0.6} />
@@ -112,6 +218,7 @@ function View() {
             <EdgeLines />
             <FlowParticles />
             <TemporalLinks />
+            <HopTrail />
             {store.showLabels && <Labels />}
           </>
         )}

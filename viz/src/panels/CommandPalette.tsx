@@ -300,6 +300,8 @@ export function CommandPalette() {
         break;
       case "Escape":
         e.preventDefault();
+        // See onDialogKeyDown for why this must stop propagating.
+        e.stopPropagation();
         close();
         break;
     }
@@ -308,6 +310,25 @@ export function CommandPalette() {
   function onDialogKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
     if (e.key === "Escape") {
       e.preventDefault();
+      // STOP THE ESC HERE (V4 §1, fix round 1 `C1`). The palette is the top of
+      // the Esc stack, but it is the ONE step that cannot announce that by
+      // being asked: `LayerShell` and the status bar's chip handler are
+      // capture-phase window listeners that call `stopImmediatePropagation`,
+      // whereas this is a React handler on the dialog, so without an explicit
+      // stop the native event keeps bubbling to the window listener in
+      // `routes/Root.tsx`.
+      //
+      // That listener asks `isCommandPaletteOpen()` — and `close()` below has
+      // already flipped the singleton to false by the time the event arrives.
+      // So one Esc closed the palette AND ran the next rung of the ladder:
+      // through V3 a collapse, after V4 a deselect. The singleton guard alone
+      // cannot fix it, because the state it reads changes mid-dispatch; only
+      // consuming the event can.
+      //
+      // BOTH handlers need it: the input's own keydown never reaches this one,
+      // and focus sits on a row rather than the input as soon as the reader
+      // clicks or tabs into the list.
+      e.stopPropagation();
       close();
       return;
     }

@@ -13,6 +13,8 @@
 
 import type { Actions, State } from "./store";
 import { LENS_ORDER, LENS_PRESETS } from "../data/lens";
+import { canStepBack, canStepForward } from "./viewHistory";
+import { encodeViewSearch } from "../data/urlState";
 import type { LayerId } from "../panels/layerState";
 
 export interface PaletteEnv {
@@ -42,7 +44,14 @@ export interface CommandItem {
    *  handler does the routing; this is not a global hotkey registration). */
   kbd?: string;
   group: "commands";
-  /** Whether this command can run right now. */
+  /** Whether this command can run right now.
+   *
+   *  Takes `State` because that is where nearly every precondition lives. The
+   *  two history rows are the exception: their precondition is the depth of the
+   *  `state/viewHistory.ts` stacks, which are deliberately NOT reducer state
+   *  (see that module's docstring — an entry holds a camera pose the reducer
+   *  does not own). They read the singleton directly, which keeps them testable
+   *  via `resetViewHistory()` and keeps the pose out of the reducer. */
   disabled(state: State): boolean;
   /** Explanatory subtitle shown INSTEAD of `subtitle` while disabled. */
   disabledReason?: string;
@@ -144,6 +153,49 @@ export function buildCommandRegistry(): CommandItem[] {
       run: (actions) => actions.requestFit(),
     },
     {
+      id: "history-back",
+      label: "Back",
+      subtitle: "The previous view — selection, expansion and camera together",
+      kbd: "[",
+      disabledReason: "Nothing to go back to",
+      group: "commands",
+      disabled: () => !canStepBack(),
+      run: (actions) => {
+        actions.historyBack();
+      },
+    },
+    {
+      id: "history-forward",
+      label: "Forward",
+      subtitle: "Undo a Back step",
+      kbd: "]",
+      disabledReason: "Nothing to go forward to",
+      group: "commands",
+      disabled: () => !canStepForward(),
+      run: (actions) => {
+        actions.historyForward();
+      },
+    },
+    {
+      id: "collapse-branch",
+      label: "Collapse branch",
+      subtitle: "Close the cluster around the selection — symbol → file → folder",
+      kbd: "X",
+      disabledReason: NEEDS_SELECTION,
+      group: "commands",
+      disabled: (s) => !s.selected,
+      run: (actions) => actions.collapseBranch(),
+    },
+    {
+      id: "collapse-to-file-level",
+      label: "Collapse to file level",
+      subtitle: "Close every expansion above file level — back to clean file arcs",
+      kbd: "⇧X",
+      group: "commands",
+      disabled: () => false,
+      run: (actions) => actions.collapseToFileLevel(),
+    },
+    {
       id: "clean-slate",
       label: "Clean slate",
       subtitle: "Collapse expansion, clear filters/lens/overlays, and reframe — destructive",
@@ -170,11 +222,17 @@ export function buildCommandRegistry(): CommandItem[] {
     },
     {
       id: "copy-link",
-      label: "Copy link to selected node",
-      subtitle: "Copies the current deep link (?node=…) to the clipboard",
-      disabledReason: NEEDS_SELECTION,
+      label: "Copy link to this view",
+      subtitle: "The node, the lens and every active overlay (?node&lens&overlays)",
+      // Enabled for ANY non-default view, not just a selection: since V4 §7 the
+      // link carries the lens and the overlays too, so "impact on, tests lens,
+      // nothing selected" is a perfectly shareable view. Asking
+      // `encodeViewSearch` keeps this in step with whatever the encoding
+      // actually writes — the alternative is a second list of "things worth
+      // sharing" that drifts the moment a param is added.
+      disabledReason: "Nothing to share yet — select a node, pick a lens, or turn on an overlay",
       group: "commands",
-      disabled: (s) => !s.selected,
+      disabled: (s) => Object.keys(encodeViewSearch(s)).length === 0,
       run: (_actions, _state, env) => env.copyLink(),
     },
     {
@@ -223,6 +281,7 @@ export function buildCommandRegistry(): CommandItem[] {
       id: "toggle-drift",
       label: "Toggle idle drift",
       subtitle: "Gentle camera drift after a few seconds of no interaction",
+      kbd: "D",
       group: "commands",
       disabled: () => false,
       run: (actions, s) => actions.setIdleDrift(!s.idleDrift),

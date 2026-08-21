@@ -40,8 +40,23 @@ export const KEYMAP: KeymapGroup[] = [
     bindings: [
       { keys: ["←", "→", "↑", "↓"], description: "Hop to the next / previous neighbor", binding: null },
       { keys: ["Tab", "⇧Tab"], description: "Hop neighbors (same as the arrows)", binding: "Tab" },
-      { keys: ["f"], description: "Frame all — refit the camera to what's on screen", binding: "f" },
-      { keys: ["Esc"], description: "Back out one level: overlay → layer → mode → expansion", binding: "Escape" },
+      { keys: ["f"], description: "Frame the current selection — camera only, nothing is reset", binding: "f" },
+      { keys: ["d"], description: "Idle drift — gentle auto-rotation after a few seconds still", binding: "d" },
+      { keys: ["Esc"], description: "Back out one step: palette → layer → mode → selection", binding: "Escape" },
+    ],
+  },
+  {
+    title: "Zoom out",
+    bindings: [
+      { keys: ["x"], description: "Collapse the selected branch one level (symbol → file → folder)", binding: "x" },
+      { keys: ["⇧X"], description: "Collapse everything to file level", binding: "X" },
+    ],
+  },
+  {
+    title: "View history",
+    bindings: [
+      { keys: ["["], description: "Back — the previous view, camera included", binding: "[" },
+      { keys: ["]"], description: "Forward again", binding: "]" },
     ],
   },
   {
@@ -59,7 +74,7 @@ export const KEYMAP: KeymapGroup[] = [
       { keys: ["scroll"], description: "Zoom", binding: null },
       { keys: ["click cluster"], description: "Expand or collapse it", binding: null },
       { keys: ["click star"], description: "Inspect it (opens the Inspector)", binding: null },
-      { keys: ["click empty space"], description: "Collapse one level", binding: null },
+      { keys: ["click empty space"], description: "Deselect (never collapses, never moves the camera)", binding: null },
     ],
   },
 ];

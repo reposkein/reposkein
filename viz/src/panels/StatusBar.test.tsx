@@ -53,11 +53,15 @@ afterEach(() => {
 function mockActions(): Actions {
   return {
     toggleExpand: vi.fn(),
-    collapseLevel: vi.fn(),
+    collapseBranch: vi.fn(),
+    collapseToFileLevel: vi.fn(),
     select: vi.fn(),
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
+    historyBack: vi.fn(() => false),
+    historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
     setEdgeTypeFilter: vi.fn(),
     setMinConfidence: vi.fn(),
@@ -245,7 +249,7 @@ describe("StatusBar — Esc stacking (palette > chips)", () => {
     expect(vi.mocked(actions.setLens).mock.calls.length).toBe(callsBeforeEscape);
   });
 
-  it("does nothing when no chip is active (lets the default collapse-level Esc run elsewhere)", () => {
+  it("does nothing when no chip is active (lets the global deselect Esc run elsewhere)", () => {
     const model = tinyModel();
     const { store, actions } = makeStore({ model });
     currentStore = store;

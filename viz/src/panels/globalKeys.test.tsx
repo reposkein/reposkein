@@ -39,11 +39,15 @@ afterEach(() => {
 function mockActions(): Actions {
   return {
     toggleExpand: vi.fn(),
-    collapseLevel: vi.fn(),
+    collapseBranch: vi.fn(),
+    collapseToFileLevel: vi.fn(),
     select: vi.fn(),
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
+    historyBack: vi.fn(() => false),
+    historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
     setEdgeTypeFilter: vi.fn(),
     setMinConfidence: vi.fn(),
@@ -70,7 +74,14 @@ function mockActions(): Actions {
 }
 
 function mockEnv(): GlobalKeyEnv & Record<keyof GlobalKeyEnv, ReturnType<typeof vi.fn>> {
-  return { openPalette: vi.fn(), toggleLayer: vi.fn() };
+  return {
+    openPalette: vi.fn(),
+    toggleLayer: vi.fn(),
+    paletteOpen: vi.fn(() => false),
+    // Default OFF-screen, so a hop flies unless a test says otherwise — the
+    // same "unknown means fly" default the real env uses.
+    isOnScreen: vi.fn(() => false),
+  };
 }
 
 const SEL = "rs1:r:sym:a.ts#run@0";
@@ -154,6 +165,25 @@ describe("handleGlobalKey — '/' summons the palette", () => {
   });
 });
 
+/** The palette is modal AND cannot consume the event itself (its Esc is a React
+ *  handler on the dialog, so the synthetic event bubbles all the way to the
+ *  window listener). Through V3 that meant Esc-to-close-the-palette also ran
+ *  the global Esc step — then a collapse — so dismissing the palette silently
+ *  rearranged the scene. */
+describe("handleGlobalKey — nothing global fires behind an open palette", () => {
+  it("declines every binding, Escape included", () => {
+    const state = stateWith({ model: tinyModel(), selected: SEL });
+    for (const k of ["Escape", "x", "X", "f", "m", "?", "/", "ArrowRight"]) {
+      const actions = mockActions();
+      const env = { ...mockEnv(), paletteOpen: vi.fn(() => true) };
+      expect(handleGlobalKey(key(k), state, actions, env), `leaked: ${k}`).toBe(false);
+      for (const fn of Object.values(actions)) expect(fn).not.toHaveBeenCalled();
+      expect(env.openPalette).not.toHaveBeenCalled();
+      expect(env.toggleLayer).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("handleGlobalKey — layer shortcuts", () => {
   it("'?' toggles the help layer", () => {
     const env = mockEnv();
@@ -183,23 +213,53 @@ describe("handleGlobalKey — layer shortcuts", () => {
 });
 
 describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
-  it("'f' frames all", () => {
+  it("'f' frames the current view — and nothing else (V4 §6)", () => {
     const actions = mockActions();
     expect(handleGlobalKey(key("f"), stateWith(), actions, mockEnv())).toBe(true);
-    expect(actions.resetView).toHaveBeenCalledOnce();
+    expect(actions.requestFit).toHaveBeenCalledOnce();
+    // It used to call resetView(), i.e. Clean slate: lens, filters, every
+    // overlay and the whole expansion tree, from a key the keymap calls
+    // "Frame all".
+    expect(actions.resetView).not.toHaveBeenCalled();
+    expect(actions.clearFilters).not.toHaveBeenCalled();
+    expect(actions.setLens).not.toHaveBeenCalled();
   });
 
-  it("Esc collapses one level — the last resort in the Esc stack", () => {
+  it("'d' toggles idle drift, reading the current flag", () => {
+    const off = mockActions();
+    handleGlobalKey(key("d"), stateWith({ idleDrift: false }), off, mockEnv());
+    expect(off.setIdleDrift).toHaveBeenCalledExactlyOnceWith(true);
+
+    const on = mockActions();
+    expect(handleGlobalKey(key("D"), stateWith({ idleDrift: true }), on, mockEnv())).toBe(true);
+    expect(on.setIdleDrift).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("Esc DESELECTS — the last resort in the Esc stack (V4 §1: it never collapses)", () => {
     const actions = mockActions();
-    expect(handleGlobalKey(key("Escape"), stateWith(), actions, mockEnv())).toBe(true);
-    expect(actions.collapseLevel).toHaveBeenCalledOnce();
+    const state = stateWith({ model: tinyModel(), selected: SEL });
+    expect(handleGlobalKey(key("Escape"), state, actions, mockEnv())).toBe(true);
+    expect(actions.select).toHaveBeenCalledExactlyOnceWith(null);
+    // V3 called collapseLevel() here, which silently rearranged the scene at
+    // the exact moment the reader was trying to back out of something.
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+    expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
+    expect(actions.resetView).not.toHaveBeenCalled();
+  });
+
+  it("Esc with nothing selected is a genuine no-op, NOT consumed", () => {
+    const actions = mockActions();
+    const state = stateWith({ model: tinyModel(), selected: null });
+    expect(handleGlobalKey(key("Escape"), state, actions, mockEnv())).toBe(false);
+    expect(actions.select).not.toHaveBeenCalled();
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
   });
 
   it("Esc is left alone while typing (the field's own handler owns it)", () => {
     const actions = mockActions();
     const e = key("Escape", { target: { tagName: "INPUT" } });
-    expect(handleGlobalKey(e, stateWith(), actions, mockEnv())).toBe(false);
-    expect(actions.collapseLevel).not.toHaveBeenCalled();
+    expect(handleGlobalKey(e, stateWith({ selected: SEL }), actions, mockEnv())).toBe(false);
+    expect(actions.select).not.toHaveBeenCalled();
   });
 
   it("arrows and Tab hop to a neighbor, forwards and backwards", () => {
@@ -219,10 +279,55 @@ describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
         actions,
         mockEnv(),
       );
-      expect(actions.revealAndSelect).toHaveBeenCalledWith("rs1:r:sym:a.ts#other@0", {
-        fly: true,
-      });
+      // The target, the hop memory to carry into the next press, and the fly
+      // decision — which mockEnv's isOnScreen() answers "off screen" → true.
+      expect(actions.hop).toHaveBeenCalledWith(
+        "rs1:r:sym:a.ts#other@0",
+        expect.objectContaining({ from: SEL, to: "rs1:r:sym:a.ts#other@0" }),
+        true,
+      );
+      // The V3 path is gone: a hop is no longer an ordinary reveal.
+      expect(actions.revealAndSelect).not.toHaveBeenCalled();
     }
+  });
+
+  /** FLY ONLY IF OFF SCREEN (V4 §5). V3 flew on every hop, which yanked the
+   *  view around a cluster the reader could already see whole. */
+  it("does NOT fly when the target is already on screen", () => {
+    const actions = mockActions();
+    const env = { ...mockEnv(), isOnScreen: vi.fn(() => true) };
+    handleGlobalKey(
+      key("ArrowRight"),
+      stateWith({ model: tinyModel(), selected: SEL }),
+      actions,
+      env,
+    );
+    expect(env.isOnScreen).toHaveBeenCalledWith("rs1:r:sym:a.ts#other@0");
+    expect(actions.hop).toHaveBeenCalledWith(
+      "rs1:r:sym:a.ts#other@0",
+      expect.anything(),
+      false,
+    );
+  });
+
+  it("threads the anchor memory: ArrowRight then ArrowLeft returns to the anchor", () => {
+    const model = tinyModel();
+    const OTHER = "rs1:r:sym:a.ts#other@0";
+
+    const out = mockActions();
+    handleGlobalKey(key("ArrowRight"), stateWith({ model, selected: SEL }), out, mockEnv());
+    const memory = vi.mocked(out.hop).mock.calls[0]![1];
+    expect(memory).toEqual({ from: SEL, to: OTHER, dir: "next" });
+
+    // Now at OTHER, carrying that memory: the opposite arrow goes home.
+    const back = mockActions();
+    handleGlobalKey(
+      key("ArrowLeft"),
+      stateWith({ model, selected: OTHER, lastHop: memory }),
+      back,
+      mockEnv(),
+    );
+    expect(back.hop).toHaveBeenCalledWith(SEL, expect.anything(), true);
   });
 
   it("hopping needs both a model and a selection", () => {
@@ -234,11 +339,100 @@ describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
       actions,
       mockEnv(),
     );
-    expect(actions.revealAndSelect).not.toHaveBeenCalled();
+    expect(actions.hop).not.toHaveBeenCalled();
   });
 
   it("an unbound key is not consumed", () => {
     expect(handleGlobalKey(key("q"), stateWith(), mockActions(), mockEnv())).toBe(false);
+  });
+});
+
+/** SCOPED COLLAPSE (V4 §2). LOD collapse is now a DELIBERATE key, not what Esc
+ *  or a misclick happens to do. */
+describe("handleGlobalKey — x / ⇧x collapse", () => {
+  it("'x' collapses the selected branch", () => {
+    const actions = mockActions();
+    const e = key("x");
+    expect(handleGlobalKey(e, stateWith(), actions, mockEnv())).toBe(true);
+    expect(actions.collapseBranch).toHaveBeenCalledOnce();
+    expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
+    expect(e.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("'X' (shifted) collapses to file level globally", () => {
+    const actions = mockActions();
+    expect(handleGlobalKey(key("X"), stateWith(), actions, mockEnv())).toBe(true);
+    expect(actions.collapseToFileLevel).toHaveBeenCalledOnce();
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+  });
+
+  it("'x' with shiftKey set also means file level (never both)", () => {
+    const actions = mockActions();
+    handleGlobalKey(key("x", { shiftKey: true }), stateWith(), actions, mockEnv());
+    expect(actions.collapseToFileLevel).toHaveBeenCalledOnce();
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+  });
+
+  it("neither fires while typing", () => {
+    const actions = mockActions();
+    handleGlobalKey(key("x", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    handleGlobalKey(key("X", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+    expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
+  });
+});
+
+/** VIEW HISTORY (V4 §4). The keys delegate; the stack itself is covered by
+ *  `state/viewHistory.test.ts` and its wiring by `viewHistoryWiring.test.tsx`. */
+describe("handleGlobalKey — [ and ] walk view history", () => {
+  it("'[' steps back and ']' steps forward", () => {
+    const back = mockActions();
+    vi.mocked(back.historyBack).mockReturnValue(true);
+    expect(handleGlobalKey(key("["), stateWith(), back, mockEnv())).toBe(true);
+    expect(back.historyBack).toHaveBeenCalledOnce();
+    expect(back.historyForward).not.toHaveBeenCalled();
+
+    const fwd = mockActions();
+    vi.mocked(fwd.historyForward).mockReturnValue(true);
+    expect(handleGlobalKey(key("]"), stateWith(), fwd, mockEnv())).toBe(true);
+    expect(fwd.historyForward).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the key UNCONSUMED at either end of the stack", () => {
+    // historyBack/-Forward default to returning false in mockActions().
+    const actions = mockActions();
+    const back = key("[");
+    const fwd = key("]");
+    expect(handleGlobalKey(back, stateWith(), actions, mockEnv())).toBe(false);
+    expect(handleGlobalKey(fwd, stateWith(), actions, mockEnv())).toBe(false);
+    // …and unprevented: `[` and `]` are ordinary characters, so swallowing them
+    // when there is nowhere to step would break a browser/OS binding for free.
+    expect(back.preventDefault).not.toHaveBeenCalled();
+    expect(fwd.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("prevents the default only when it actually moved", () => {
+    const actions = mockActions();
+    vi.mocked(actions.historyBack).mockReturnValue(true);
+    const e = key("[");
+    expect(handleGlobalKey(e, stateWith(), actions, mockEnv())).toBe(true);
+    expect(e.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("neither fires while typing (a '[' in the palette's query is a '[')", () => {
+    const actions = mockActions();
+    handleGlobalKey(key("[", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    handleGlobalKey(key("]", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    expect(actions.historyBack).not.toHaveBeenCalled();
+    expect(actions.historyForward).not.toHaveBeenCalled();
+  });
+
+  it("needs no model and no selection — history predates both", () => {
+    const actions = mockActions();
+    vi.mocked(actions.historyBack).mockReturnValue(true);
+    expect(
+      handleGlobalKey(key("["), stateWith({ model: null, selected: null }), actions, mockEnv()),
+    ).toBe(true);
   });
 });
 
@@ -249,6 +443,10 @@ describe("keymap ↔ handler agreement", () => {
       if (binding === "k") continue; // ⌘K lives in CommandPalette's own listener
       if (binding === "Escape") continue; // asserted above; also owned by the Esc stack
       const actions = mockActions();
+      // `[` / `]` report whether they moved; give them a non-empty stack so
+      // "documented" is tested, not "history happens to be empty".
+      vi.mocked(actions.historyBack).mockReturnValue(true);
+      vi.mocked(actions.historyForward).mockReturnValue(true);
       const env = mockEnv();
       const handled = handleGlobalKey(
         key(binding),
@@ -260,9 +458,10 @@ describe("keymap ↔ handler agreement", () => {
     }
   });
 
-  it("documents '/' , '?', 'm' and 'f' — the four bindings V3 introduced or rewired", () => {
+  it("documents every binding V3 and V4 introduced or rewired", () => {
     const documented = documentedBindings();
-    for (const b of ["/", "?", "m", "f"]) expect(documented.has(b)).toBe(true);
+    for (const b of ["/", "?", "m", "f", "d", "x", "X", "[", "]"])
+      expect(documented.has(b)).toBe(true);
   });
 
   it("the keymap has no empty group and no binding without a description", () => {

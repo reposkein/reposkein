@@ -12,11 +12,15 @@ import {
 } from "@tanstack/react-router";
 import { Root } from "./routes/Root";
 import { isStaticMode } from "./data/staticMode";
+import { validateViewSearch } from "./data/urlState";
 
 const queryClient = new QueryClient();
 
 // TanStack Router: a root layout + the index route.
-// The ?node=<id> search param enables deep-linking to a specific node.
+// The search params are the shareable VIEW, not just a node pointer:
+// `?node=<id>&lens=<id>&overlays=<tokens>` (Astrolabe V4 §7). The encoding and
+// every tolerance rule live in `data/urlState.ts`, which is pure and tested;
+// this is only the router's shape check.
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
@@ -24,9 +28,7 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  validateSearch: (search: Record<string, unknown>) => ({
-    node: typeof search.node === "string" ? search.node : undefined,
-  }),
+  validateSearch: validateViewSearch,
   component: Root,
 });
 

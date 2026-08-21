@@ -58,9 +58,9 @@ export function layerPlacement(dock: LayerDock, inspectorOpen: boolean): string 
  *   - ESC STACK POSITION. A capture-phase window listener that steps aside when
  *     the palette is open (it wins) or a guided tour is running (it wins too),
  *     and otherwise closes the layer and CONSUMES the key — which is what stops
- *     the same Esc from also reaching Root's collapse-level binding or the
- *     status bar's mode-chip dismissal. Full order: palette > tour > layer >
- *     chip > collapse-level. See `panels/layerStack.test.tsx`.
+ *     the same Esc from also reaching the status bar's mode-chip dismissal or
+ *     the global handler's deselect. Full order: palette > tour > layer >
+ *     chip > deselect. See `panels/layerStack.test.tsx`.
  *   - OUTSIDE CLICK dismisses. A layer is summoned, not docked; clicking the
  *     scene puts it away.
  *   - PLACEMENT that never collides with the Inspector — see `layerPlacement`.

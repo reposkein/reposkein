@@ -17,7 +17,7 @@
  *  can't be implemented-but-undocumented or documented-but-dead. */
 
 import type { Actions, State } from "../state/store";
-import { pickNeighbor } from "../data/navigate";
+import { nextHop, type HopDir } from "../data/navigate";
 import type { LayerId } from "./layerState";
 
 export interface GlobalKeyEnv {
@@ -25,6 +25,26 @@ export interface GlobalKeyEnv {
   openPalette(): void;
   /** Summon or dismiss a layer (panels/layerState.toggleLayer). */
   toggleLayer(id: LayerId): void;
+  /** Is the ⌘K palette on screen (panels/paletteOpenState.isCommandPaletteOpen)?
+   *
+   *  The palette is MODAL, and it is the top of the Esc stack — but unlike the
+   *  summoned layers and the status bar's chip handler, it cannot announce that
+   *  by consuming the event: its Esc lives in a React `onKeyDown` on the dialog,
+   *  and a synthetic event bubbles all the way to the window listener that calls
+   *  this function. Through V3 that meant closing the palette with Esc ALSO ran
+   *  the global Esc step (then: collapse a level — so dismissing the palette
+   *  silently rearranged the scene). Asking the singleton is what makes "the
+   *  palette wins" true rather than aspirational. */
+  paletteOpen(): boolean;
+  /** Is this node comfortably inside the current view (`scene/onScreen.ts`)?
+   *
+   *  A hop flies only when the answer is NO. It is an env function rather than
+   *  a pure computation over `State` because the answer depends on the live
+   *  camera — the pose and the perspective params — which lives inside <Canvas>
+   *  and is not reducer state. "Unknown" (no frame rendered yet) must answer
+   *  FALSE, so an unknown hop still flies: a wasted animation is cheap, a
+   *  selection the reader cannot see is not. */
+  isOnScreen(nodeId: string): boolean;
 }
 
 /** Spread onto any widget that binds Arrow / Home / End / Tab FOR ITSELF, to
@@ -80,10 +100,19 @@ function inKeyScope(e: GlobalKeyEventLike): boolean {
 
 /** Handles one keydown. Returns true when the key was consumed.
  *
- *  Escape is the LAST resort in the Esc stack (palette > tour > layer > chip >
- *  here): every surface above consumes the event with
+ *  Escape is the LAST resort in the Esc stack (palette > tour > summoned layer >
+ *  topmost mode chip > here): every surface above consumes the event with
  *  `stopImmediatePropagation`, so reaching this function means nothing was open
- *  and Esc should back out one level of expansion. */
+ *  and Esc should clear the selection.
+ *
+ *  ESC NEVER COLLAPSES (Astrolabe V4 §1). V3's final step was
+ *  `collapseLevel()` — shut the globally-deepest expanded cluster — which made
+ *  Esc a destructive, non-obvious edit to the scene at the exact moment the
+ *  reader was trying to back out of something. The final step is now DESELECT,
+ *  and when there is nothing selected either, Esc does nothing at all: the
+ *  bottom of a back-out stack should be a no-op, not a surprise. LOD collapse
+ *  is reachable only through `x` / `⇧x`, a breadcrumb click, or a cluster
+ *  click — all three of which name what they are about to close. */
 export function handleGlobalKey(
   e: GlobalKeyEventLike,
   state: State,
@@ -92,12 +121,16 @@ export function handleGlobalKey(
 ): boolean {
   // The guided tour owns the keyboard while it runs (its own handler exits it).
   if (state.tour) return false;
+  // The palette is modal AND cannot consume the event itself — see
+  // `GlobalKeyEnv.paletteOpen`. Nothing global fires behind it.
+  if (env.paletteOpen()) return false;
 
   const typing = isTyping(e);
 
   if (e.key === "Escape") {
     if (typing) return false;
-    actions.collapseLevel();
+    if (!state.selected) return false; // bottom of the stack: a genuine no-op
+    actions.select(null);
     return true;
   }
   if (typing) return false;
@@ -116,11 +149,43 @@ export function handleGlobalKey(
       e.preventDefault();
       env.toggleLayer("minimap");
       return true;
+    // `f` FRAMES, and only frames (V4 §6). It used to call `resetView()` —
+    // which is Clean slate: it wiped the lens, the filters, every overlay and
+    // the whole expansion tree. A key labelled "Frame all" in the keymap and
+    // in the status bar's Frame pill must not be the most destructive command
+    // in the app. `requestFit` is what the pill and the palette row already do.
     case "f":
     case "F":
       e.preventDefault();
-      actions.resetView();
+      actions.requestFit();
       return true;
+    case "d":
+    case "D":
+      e.preventDefault();
+      actions.setIdleDrift(!state.idleDrift);
+      return true;
+    // SCOPED COLLAPSE (V4 §2). LOD collapse happens ONLY here, on a breadcrumb
+    // click, or on a cluster click — never on Esc and never on a misclick.
+    case "x":
+    case "X":
+      e.preventDefault();
+      if (e.shiftKey || e.key === "X") actions.collapseToFileLevel();
+      else actions.collapseBranch();
+      return true;
+    // VIEW HISTORY (V4 §4). Returns whether it actually moved, so at either end
+    // of the stack the key is left UNCONSUMED and unprevented — `[` and `]` are
+    // ordinary characters, and swallowing them when there is nothing to step to
+    // would break a browser or OS binding for no benefit.
+    case "[": {
+      const moved = actions.historyBack();
+      if (moved) e.preventDefault();
+      return moved;
+    }
+    case "]": {
+      const moved = actions.historyForward();
+      if (moved) e.preventDefault();
+      return moved;
+    }
   }
 
   // Neighbor hopping needs both a model and a selection to hop from.
@@ -129,14 +194,17 @@ export function handleGlobalKey(
   // …and must never fight a widget that binds these keys itself. See
   // `keyScopeProps` for the double-fire this prevents.
   if (inKeyScope(e)) return false;
-  let dir: "next" | "prev" | null = null;
+  let dir: HopDir | null = null;
   if (e.key === "ArrowRight" || e.key === "ArrowDown") dir = "next";
   else if (e.key === "ArrowLeft" || e.key === "ArrowUp") dir = "prev";
   else if (e.key === "Tab") dir = e.shiftKey ? "prev" : "next";
   if (!dir) return false;
   e.preventDefault();
-  const next = pickNeighbor(model.drawEdges, state.selected, dir);
-  if (!next) return true; // consumed: we handled the hop, there was nowhere to go
-  actions.revealAndSelect(next, { fly: true });
+  const hop = nextHop(model, state.selected, dir, state.lastHop);
+  if (!hop) return true; // consumed: we handled the hop, there was nowhere to go
+  // FLY ONLY IF OFF SCREEN (V4 §5). A neighbour already in front of the reader
+  // needs no camera move; V3 flew unconditionally, which yanked the view around
+  // a cluster that was already whole on screen.
+  actions.hop(hop.id, hop.memory, !env.isOnScreen(hop.id));
   return true;
 }

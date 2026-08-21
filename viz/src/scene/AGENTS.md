@@ -16,13 +16,16 @@ R3F rendering layer. 22 files. The pixels.
 | `Labels.tsx` | Adaptive-density label renderer (LOD-aware). |
 | `NebulaHalos.tsx` | Per-galaxy halo (language-colored). |
 | `TemporalLinks.tsx` | Git co-change overlay. |
-| `Controls.tsx` | `camera-controls` wrapper + keyboard nav (`/`, `f`, arrows, `Esc`). |
+| `HopTrail.tsx` | 400ms line from the node an arrow hop left to the one it landed on. |
+| `Controls.tsx` | `camera-controls` wrapper: `fitNonce` refit, `poseNonce` exact-pose restore, idle drift, and the per-frame publishers (`getCameraTarget`/`getCameraView`, `state/cameraPose`). |
 | `Screenshot.tsx` + `screenshotName.ts` | PNG export. |
 | `supernova.ts` | Cluster-expand burst animation. |
 | `bundleGeometry.ts` | Edge bundling math. |
 | `constellation.ts` | Per-cluster constellation layout calc. |
 | `flow.ts` | Flow-particle position update. |
 | `minimap.ts` | 2D minimap projection. |
+| `onScreen.ts` | Frustum test — is a node comfortably in view? (a hop flies only if not). |
+| `pointerMissed.ts` | What a click on empty space does: deselect, nothing else. |
 | `sprites.ts` | Star sprite atlas. |
 | `*.test.ts` | Vitest for each pure module (`bundleGeometry`, `constellation`, `flow`, `minimap`, `screenshotName`). |
 

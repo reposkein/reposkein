@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { buildCommandRegistry, pushRecent, type PaletteEnv } from "./commands";
 import { createInitialState, type Actions, type State } from "./store";
+import { pushView, resetViewHistory, stepBack } from "./viewHistory";
 import { buildModel } from "../data/model";
 import { fromWorker, type ClientModel } from "../data/clientModel";
 import type { WorkerResult } from "../data/worker/graph.worker";
@@ -12,11 +13,15 @@ import type { RawGraph } from "../data/types";
 function mockActions(): Actions & Record<keyof Actions, ReturnType<typeof vi.fn>> {
   return {
     toggleExpand: vi.fn(),
-    collapseLevel: vi.fn(),
+    collapseBranch: vi.fn(),
+    collapseToFileLevel: vi.fn(),
     select: vi.fn(),
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
+    historyBack: vi.fn(() => false),
+    historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
     setEdgeTypeFilter: vi.fn(),
     setMinConfidence: vi.fn(),
@@ -187,6 +192,55 @@ describe("buildCommandRegistry — completeness (every REP-13-listed store actio
     expect(actions.resetView).toHaveBeenCalledOnce();
   });
 
+  it("Collapse branch needs a selection; Collapse to file level does not (V4 §2)", () => {
+    const branch = find("collapse-branch");
+    expect(branch.disabled(notSelected)).toBe(true);
+    expect(branch.disabled(selected)).toBe(false);
+    const a1 = mockActions();
+    branch.run(a1, selected, mockEnv());
+    expect(a1.collapseBranch).toHaveBeenCalledOnce();
+
+    const global = find("collapse-to-file-level");
+    expect(global.disabled(notSelected)).toBe(false);
+    const a2 = mockActions();
+    global.run(a2, notSelected, mockEnv());
+    expect(a2.collapseToFileLevel).toHaveBeenCalledOnce();
+  });
+
+  /** The two history rows read the `state/viewHistory.ts` singleton rather than
+   *  `State` — the stack holds a camera pose the reducer does not own. See the
+   *  note on `CommandItem.disabled`. */
+  it("Back / Forward mirror the history stack, and carry the [ ] hints", () => {
+    resetViewHistory();
+    const back = find("history-back");
+    const forward = find("history-forward");
+    expect(back.kbd).toBe("[");
+    expect(forward.kbd).toBe("]");
+
+    // Empty stack: both disabled.
+    expect(back.disabled(notSelected)).toBe(true);
+    expect(forward.disabled(notSelected)).toBe(true);
+
+    // One recorded view: Back opens up, Forward stays shut.
+    pushView({ selected: "n1", expanded: new Set(), pose: null });
+    expect(back.disabled(notSelected)).toBe(false);
+    expect(forward.disabled(notSelected)).toBe(true);
+
+    // Stepping back fills the forward stack.
+    stepBack({ selected: "n2", expanded: new Set(), pose: null });
+    expect(back.disabled(notSelected)).toBe(true);
+    expect(forward.disabled(notSelected)).toBe(false);
+
+    const a1 = mockActions();
+    back.run(a1, notSelected, mockEnv());
+    expect(a1.historyBack).toHaveBeenCalledOnce();
+
+    const a2 = mockActions();
+    forward.run(a2, notSelected, mockEnv());
+    expect(a2.historyForward).toHaveBeenCalledOnce();
+    resetViewHistory();
+  });
+
   it("Start tour calls startTour and is disabled while already touring or with no model", () => {
     const cmd = find("start-tour");
     expect(cmd.disabled(stateWith({ model: null }))).toBe(true);
@@ -204,10 +258,26 @@ describe("buildCommandRegistry — completeness (every REP-13-listed store actio
     expect(env.screenshot).toHaveBeenCalledOnce();
   });
 
-  it("Copy link calls env.copyLink() and is disabled without a selection", () => {
+  /** Since V4 §7 the link carries the lens and the overlays too, so a selection
+   *  is no longer the only thing worth sharing. */
+  it("Copy link is enabled for ANY non-default view, not just a selection", () => {
     const cmd = find("copy-link");
-    expect(cmd.disabled(notSelected)).toBe(true);
+    // A genuinely default view has nothing to share.
+    expect(cmd.disabled(stateWith({ selected: null }))).toBe(true);
+
     expect(cmd.disabled(selected)).toBe(false);
+    expect(cmd.disabled(stateWith({ selected: null, lens: "calls" }))).toBe(false);
+    expect(cmd.disabled(stateWith({ selected: null, coupling: true }))).toBe(false);
+    expect(cmd.disabled(stateWith({ selected: null, audit: "ambiguous" }))).toBe(false);
+    expect(
+      cmd.disabled(
+        stateWith({
+          selected: null,
+          focus: { sourceId: "n1", nodes: new Set(["n1"]), depth: 1 },
+        }),
+      ),
+    ).toBe(false);
+
     const env = mockEnv();
     cmd.run(mockActions(), selected, env);
     expect(env.copyLink).toHaveBeenCalledOnce();

@@ -2,7 +2,7 @@
 //
 // Layer coordination (Astrolabe V3 §2): exclusivity, Esc dismissal, and the
 // position of layers in the Esc stack (palette > tour > layer > chip >
-// collapse-level).
+// deselect).
 //
 // The bug this replaces was user-visible, not theoretical: V2 kept `showMinimap`
 // and `showLegend` as two independent reducer booleans, BOTH defaulting to true,
@@ -49,7 +49,11 @@ const {
   toggleLayer,
   LAYER_IDS,
 } = await import("./layerState");
-const { setCommandPaletteOpen } = await import("./paletteOpenState");
+const { setCommandPaletteOpen, isCommandPaletteOpen, requestCommandPalette } = await import(
+  "./paletteOpenState"
+);
+const { CommandPalette } = await import("./CommandPalette");
+const { handleGlobalKey } = await import("./globalKeys");
 
 afterEach(() => {
   cleanup();
@@ -60,11 +64,15 @@ afterEach(() => {
 function mockActions(): Actions {
   return {
     toggleExpand: vi.fn(),
-    collapseLevel: vi.fn(),
+    collapseBranch: vi.fn(),
+    collapseToFileLevel: vi.fn(),
     select: vi.fn(),
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
     revealWithoutRefit: vi.fn(),
+    hop: vi.fn(),
+    historyBack: vi.fn(() => false),
+    historyForward: vi.fn(() => false),
     setKindFilter: vi.fn(),
     setEdgeTypeFilter: vi.fn(),
     setMinConfidence: vi.fn(),
@@ -497,11 +505,11 @@ describe("Esc stack: palette > tour > layer > chip", () => {
     expect(openLayer()).toBe("help");
   });
 
-  it("a layer's Esc is consumed, so Root's collapse-level binding does not also fire", () => {
-    const collapse = vi.fn();
+  it("a layer's Esc is consumed, so the global handler's deselect does not also fire", () => {
+    const fellThrough = vi.fn();
     // Stand-in for Root's bubble-phase window listener.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") collapse();
+      if (e.key === "Escape") fellThrough();
     };
     window.addEventListener("keydown", onKey);
     const { store } = makeStore({ model: tinyModel() });
@@ -511,12 +519,138 @@ describe("Esc stack: palette > tour > layer > chip", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(openLayer()).toBeNull();
-    expect(collapse).not.toHaveBeenCalled();
+    expect(fellThrough).not.toHaveBeenCalled();
 
-    // With nothing open, the same key reaches the collapse binding as before.
+    // With nothing open, the same key reaches the global binding as before.
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(collapse).toHaveBeenCalledOnce();
+    expect(fellThrough).toHaveBeenCalledOnce();
     window.removeEventListener("keydown", onKey);
+  });
+
+  /** THE LAYERED ESC STACK, END TO END (Astrolabe V4 §1).
+   *
+   *  Each step above is asserted in isolation elsewhere in this file; this walks
+   *  the whole ladder in one mount with the REAL global handler at the bottom,
+   *  because the property that matters is the ORDER — every earlier step must
+   *  consume the key so exactly ONE thing happens per press.
+   *
+   *  palette → summoned layer → topmost mode chip → deselect → nothing. */
+  it("walks palette → layer → chip → deselect → nothing, one step per press", () => {
+    const { store, actions } = makeStore({
+      model: tinyModel(),
+      selected: "rs1:r:file:a.ts",
+      lens: "calls",
+    });
+    currentStore = store;
+    // Root's listener, verbatim in spirit: the real handler is the tail.
+    const onKey = (e: KeyboardEvent) =>
+      handleGlobalKey(e, currentStore, currentStore, {
+        openPalette: vi.fn(),
+        toggleLayer: vi.fn(),
+        paletteOpen: isCommandPaletteOpen,
+        isOnScreen: () => true,
+      });
+    window.addEventListener("keydown", onKey);
+    render(
+      <>
+        <StatusBar />
+        <LayerHost />
+      </>,
+    );
+    summon("legend");
+    setCommandPaletteOpen(true);
+
+    // 1. The palette is above everything: nothing else moves.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(openLayer()).toBe("legend");
+    expect(actions.setLens).not.toHaveBeenCalled();
+    expect(actions.select).not.toHaveBeenCalled();
+    setCommandPaletteOpen(false); // the palette closed itself
+
+    // 2. The summoned layer.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(openLayer()).toBeNull();
+    expect(actions.setLens).not.toHaveBeenCalled();
+    expect(actions.select).not.toHaveBeenCalled();
+
+    // 3. The topmost mode chip (the lens chip is leftmost).
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(actions.setLens).toHaveBeenCalledExactlyOnceWith("all");
+    expect(actions.select).not.toHaveBeenCalled();
+
+    // 4. Deselect. The chip is gone from state's point of view only once the
+    //    store is re-rendered with lens "all", which a real store would do —
+    //    mirror that here.
+    currentStore = { ...currentStore, lens: "all" } as Store;
+    cleanup();
+    render(
+      <>
+        <StatusBar />
+        <LayerHost />
+      </>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(actions.select).toHaveBeenCalledExactlyOnceWith(null);
+
+    // 5. Nothing left. Esc is a no-op — never a collapse.
+    currentStore = { ...currentStore, selected: null } as Store;
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(actions.select).toHaveBeenCalledOnce(); // still just the one call
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+    expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
+
+    window.removeEventListener("keydown", onKey);
+  });
+
+  /** FIX ROUND 1, `C1` — the regression the ladder test above could not see,
+   *  because it drove `setCommandPaletteOpen` by hand instead of mounting the
+   *  real palette.
+   *
+   *  The palette is top of the stack but is the ONE step that cannot be asked
+   *  to step aside: the layers and the chip handler are capture-phase window
+   *  listeners that call `stopImmediatePropagation`, whereas the palette's Esc
+   *  is a React handler on the dialog whose native event keeps bubbling to
+   *  Root's window listener. `close()` flips `isCommandPaletteOpen()` to false
+   *  BEFORE the event gets there, so the singleton guard reads the wrong answer
+   *  and one Esc both closed the palette and ran the next rung — through V3 a
+   *  collapse, after V4 a deselect.
+   *
+   *  Focus matters: the input's own handler never reaches the dialog handler, so
+   *  both need the stop. Focus is on a row (not the input) as soon as the reader
+   *  clicks or tabs into the list. */
+  describe("Esc closing the REAL palette never falls through to deselect", () => {
+    for (const from of ["input", "row"] as const) {
+      it(`consumes the key when Esc is pressed from the ${from}`, () => {
+        const { store, actions } = makeStore({ model: tinyModel(), selected: "rs1:r:file:a.ts" });
+        currentStore = store;
+        const onKey = (e: KeyboardEvent) =>
+          handleGlobalKey(e, currentStore, currentStore, {
+            openPalette: vi.fn(),
+            toggleLayer: vi.fn(),
+            paletteOpen: isCommandPaletteOpen,
+            isOnScreen: () => true,
+          });
+        window.addEventListener("keydown", onKey);
+        render(<CommandPalette />);
+        act(() => requestCommandPalette());
+        expect(screen.getByRole("dialog")).toBeTruthy();
+
+        const target =
+          from === "input"
+            ? screen.getByRole("combobox")
+            : screen.getAllByRole("option")[0]!; // a non-input target INSIDE the dialog
+        fireEvent.keyDown(target, { key: "Escape", bubbles: true });
+
+        // The palette closed…
+        expect(screen.queryByRole("dialog")).toBeNull();
+        // …and NOTHING below it on the ladder ran.
+        expect(actions.select).not.toHaveBeenCalled();
+        expect(actions.collapseBranch).not.toHaveBeenCalled();
+        expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
+
+        window.removeEventListener("keydown", onKey);
+      });
+    }
   });
 });
 
