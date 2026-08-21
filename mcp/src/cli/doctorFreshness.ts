@@ -67,7 +67,13 @@ function currentHeadSha(repoPath: string): string | null {
 
 /** Content-based staleness: the committed graph is fresh iff the commit SHA
  *  recorded the last time it was (re)built (`.reposkein/local/indexed-at` —
- *  see mcp/src/store/indexedAt.ts) equals the current git HEAD.
+ *  see mcp/src/store/indexedAt.ts) equals the current git HEAD. The marker
+ *  is kept current two ways: the installed git hooks maintain it on their
+ *  own (`post-commit` after every commit, `post-merge`/`post-checkout` —
+ *  which also re-index — after a merge/pull/branch switch), and
+ *  `reposkein-mcp index`/`init` write it directly. A mismatch therefore
+ *  means one of: the hooks were never installed (or were removed), or
+ *  nobody's indexed this repo at all yet.
  *
  *  Replaces an earlier mtime-based heuristic (mtime(nodes.jsonl) vs. the last
  *  commit's timestamp) that turned out to be structurally blind after any
@@ -87,10 +93,12 @@ function currentHeadSha(repoPath: string): string | null {
  *  being fixed — so the simpler, conservative rule wins here.
  *
  *  Two distinct failure shapes, both reported under the same check id:
- *   - no recorded SHA at all → never indexed via the mcp-side path (a fresh
- *     clone's local/ never carries over, since it's gitignored) — FAIL.
- *   - a recorded SHA that doesn't match HEAD → commits landed since the last
- *     index — FAIL.
+ *   - no recorded SHA at all → never indexed via a hook or the mcp-side path
+ *     (a fresh clone's local/ never carries over, since it's gitignored) —
+ *     FAIL.
+ *   - a recorded SHA that doesn't match HEAD → the hooks are missing (or
+ *     were bypassed, e.g. `git commit --no-verify`) and nobody's re-indexed
+ *     by hand either — FAIL.
  *
  *  Non-critical by default; `doctor --ci` promotes it (CI_FAIL_IDS in
  *  doctor.ts). */
@@ -113,7 +121,9 @@ export function graphStaleCheck(repoPath: string): Check {
       "graph freshness",
       false,
       "nodes.jsonl exists but no recorded indexed-at commit (.reposkein/local/indexed-at) — " +
-        "never indexed via `reposkein-mcp index`/`init`, or a fresh clone whose local/ scratch didn't carry over",
+        "the post-commit/post-merge/post-checkout hooks maintain this automatically, so its " +
+        "absence means the hooks aren't installed (or local/ never carried over a clone) and " +
+        "nobody's run `reposkein-mcp index`/`init` by hand either",
       "run `reposkein-mcp index`"
     );
   }
@@ -130,7 +140,8 @@ export function graphStaleCheck(repoPath: string): Check {
     "graph_stale",
     "graph freshness",
     false,
-    `graph was indexed at ${recordedSha.slice(0, 7)}, but HEAD is now ${headSha.slice(0, 7)} — commits landed since the last index`,
+    `graph was indexed at ${recordedSha.slice(0, 7)}, but HEAD is now ${headSha.slice(0, 7)} — commits landed since ` +
+      "the last index without the marker advancing (hooks missing/bypassed, or the graph was never re-indexed)",
     "run `reposkein-mcp index`"
   );
 }

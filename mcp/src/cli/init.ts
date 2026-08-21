@@ -146,10 +146,11 @@ export function writeCiWorkflow(repoPath: string): { written: boolean; path: str
  *  binary is fetched into the package (not on PATH), so end users run this.
  *  On success, also records the current git HEAD to `.reposkein/local/indexed-at`
  *  — `doctor --ci`'s `graph_stale` check reads it back (see doctorFreshness.ts).
- *  Known gap (documented, not fixed here): the pre-commit hook re-indexes by
- *  calling the indexer binary directly, not through this path, so it doesn't
- *  update the marker — `graph_stale` can read as stale after a string of
- *  hook-driven commits until someone runs `reposkein-mcp index`/`init` again. */
+ *  The installed git hooks maintain the same marker themselves (`post-commit`
+ *  after every commit, `post-merge`/`post-checkout` — which also re-index —
+ *  after a merge/pull/branch switch; see the hook templates in
+ *  indexer/crates/cli/src/main.rs), so this mcp-side write is the "manual
+ *  index" case, not the only path that keeps the marker current. */
 export async function runIndex(repoPath = "."): Promise<number> {
   const bin = await ensureIndexerBinary();
   const r = await spawnIndexer(bin, ["index", repoPath]);

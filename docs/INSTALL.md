@@ -184,7 +184,7 @@ reposkein-mcp init                    # or: npx @reposkein/mcp init
 
 This:
 1. Verifies/fetches the platform indexer binary.
-2. Installs git hooks (`pre-commit` re-indexes the local graph, staging nothing; `post-merge` reloads Neo4j if configured).
+2. Installs git hooks: `pre-commit` re-indexes the local graph (staging nothing) and `post-commit` records the commit it just became; `post-merge`/`post-checkout` re-index too (a merge/pull/branch switch can change the tree without going through your own commits) and reload Neo4j if configured. All four keep `.reposkein/local/indexed-at` current, which `reposkein-mcp doctor --ci` compares against HEAD to catch a graph nobody's re-indexed.
 3. Installs the `reposkein-graph-rag` skill into `.claude/skills/` (no-op on agents that ignore `.claude/`).
 4. Walks the tree with Tree-sitter → writes deterministic `.reposkein/nodes.jsonl` + `.reposkein/edges.jsonl` + `.reposkein/meta.json`, plus a `.reposkein/.gitignore` that keeps the two derived files out of git.
 5. **Prints an MCP config block** for the user to paste into their agent — you (the agent) should pick the right schema (§6) and write it directly.

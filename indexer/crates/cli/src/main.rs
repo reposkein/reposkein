@@ -32,14 +32,39 @@ fi
 exit 0
 "#;
 
+// Recorded in .reposkein/local/indexed-at: a single git commit SHA (plus
+// trailing newline), read by `doctor --ci`'s graph_stale check (mcp-side:
+// mcp/src/store/indexedAt.ts). pre-commit already indexed the exact tree
+// that becomes this commit, so post-commit has no reindexing to do — it
+// only has to record the commit that tree turned into, which isn't known
+// until after `git commit` actually creates it (pre-commit's `git rev-parse
+// HEAD` would still name the *parent* commit).
+const POST_COMMIT: &str = r#"#!/bin/sh
+# reposkein-managed
+# RepoSkein: record the commit that pre-commit's index run became, so
+# `doctor --ci`'s graph_stale check (.reposkein/local/indexed-at vs. HEAD)
+# doesn't read a false "stale" after every normal commit. No reindex here —
+# pre-commit already built the graph for the tree that just got committed.
+mkdir -p .reposkein/local
+git rev-parse HEAD > .reposkein/local/indexed-at 2>/dev/null || true
+exit 0
+"#;
+
 const POST_MERGE: &str = r#"#!/bin/sh
 # reposkein-managed
-# RepoSkein: import the merged graph into the local database (async, best-effort).
+# RepoSkein: a merge/checkout can change the tree without going through your
+# own pre-commit, so re-index the local graph here too, record the commit it
+# was just built from (.reposkein/local/indexed-at — same marker post-commit
+# writes, read by `doctor --ci`'s graph_stale check), then import into the
+# local database (async, best-effort).
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
-  echo "reposkein: indexer not found; skipping graph import" >&2
+  echo "reposkein: indexer not found; skipping graph refresh" >&2
   exit 0
 fi
+"$BIN" index . >/dev/null 2>&1 || echo "reposkein: index failed; skipping refresh" >&2
+mkdir -p .reposkein/local
+git rev-parse HEAD > .reposkein/local/indexed-at 2>/dev/null || true
 ( "$BIN" load . >/dev/null 2>&1 || echo "reposkein: graph import skipped (database unavailable)" >&2 ) &
 exit 0
 "#;
@@ -1289,8 +1314,11 @@ fn main() -> Result<()> {
                              {}",
                             name,
                             body.lines()
-                                .find(|l| l.contains("reposkein-indexer") && !l.starts_with('#'))
-                                .unwrap_or("\"$BIN\" index . >/dev/null 2>&1 || true")
+                                .find(|l| {
+                                    !l.starts_with('#')
+                                        && (l.contains("reposkein-indexer") || l.contains("indexed-at"))
+                                })
+                                .unwrap_or("see docs/INSTALL.md for the RepoSkein hook content")
                         );
                         return Ok(());
                     }
@@ -1304,6 +1332,7 @@ fn main() -> Result<()> {
                 Ok(())
             };
             write_hook("pre-commit", PRE_COMMIT)?;
+            write_hook("post-commit", POST_COMMIT)?;
             write_hook("post-merge", POST_MERGE)?;
             write_hook("post-checkout", POST_MERGE)?; // same action as post-merge
 
@@ -1548,6 +1577,34 @@ mod tests {
     fn post_merge_hook_contains_marker() {
         use super::POST_MERGE;
         assert!(POST_MERGE.contains("# reposkein-managed"));
+    }
+
+    #[test]
+    fn post_commit_hook_contains_marker() {
+        use super::POST_COMMIT;
+        assert!(POST_COMMIT.contains("# reposkein-managed"));
+    }
+
+    #[test]
+    fn post_commit_hook_writes_the_indexed_at_marker_and_nothing_else() {
+        use super::POST_COMMIT;
+        assert!(POST_COMMIT.contains(".reposkein/local/indexed-at"));
+        assert!(POST_COMMIT.contains("git rev-parse HEAD"));
+        // Single responsibility: record the commit, don't reindex (pre-commit
+        // already indexed the tree that became it).
+        assert!(!POST_COMMIT.contains("index ."));
+    }
+
+    #[test]
+    fn post_merge_hook_reindexes_before_recording_the_marker() {
+        use super::POST_MERGE;
+        assert!(POST_MERGE.contains("index ."));
+        assert!(POST_MERGE.contains(".reposkein/local/indexed-at"));
+        // Search for the actual command invocation, not the prose comment
+        // above it (which also happens to contain the substring "index ").
+        let index_pos = POST_MERGE.find("\"$BIN\" index .").unwrap();
+        let marker_pos = POST_MERGE.find("> .reposkein/local/indexed-at").unwrap();
+        assert!(index_pos < marker_pos);
     }
 
     #[test]

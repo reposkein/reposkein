@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hooksCheck, graphStaleCheck } from "../src/cli/doctorFreshness.js";
-import { writeIndexedAtMarker } from "../src/store/indexedAt.js";
+import { writeIndexedAtMarker, indexedAtPath } from "../src/store/indexedAt.js";
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rs-freshness-")); });
@@ -184,5 +184,42 @@ describe("graphStaleCheck (content-based: recorded indexed-at SHA vs. HEAD)", ()
     } finally {
       rmSync(cloneDir, { recursive: true, force: true });
     }
+  });
+
+  it("closes the false-fail loop: a hook-maintained marker (no mcp-side index call at all) " +
+     "stays fresh across multiple commits", () => {
+    // Simulates the real hook workflow end-to-end at the doctor layer:
+    // pre-commit indexes the about-to-be-committed tree, post-commit then
+    // writes HEAD (the new commit) to the marker — modeled here by writing
+    // nodes.jsonl + the marker right after each commit, exactly like the
+    // Rust post-commit hook does, without ever calling the mcp-side
+    // `reposkein-mcp index` / `writeIndexedAtMarker` from a *different*
+    // commit's context. Before the hooks existed, this sequence would have
+    // gone stale after the very first commit (pre-commit indexed, nothing
+    // ever advanced the marker) — that's the false-fail loop being closed.
+    initRepo();
+    mkdirSync(join(dir, ".reposkein", "local"), { recursive: true });
+
+    writeFileSync(join(dir, "a.py"), "def f():\n    return 1\n");
+    git(["add", "a.py"]);
+    git(["commit", "-qm", "commit 1"]);
+    // pre-commit's index run + post-commit's marker write, simulated:
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), "{}\n");
+    writeFileSync(indexedAtPath(dir), headSha() + "\n");
+    expect(graphStaleCheck(dir).ok).toBe(true);
+
+    writeFileSync(join(dir, "a.py"), "def f():\n    return 2\n");
+    git(["add", "a.py"]);
+    git(["commit", "-qm", "commit 2"]);
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), "{}\n");
+    writeFileSync(indexedAtPath(dir), headSha() + "\n");
+    expect(graphStaleCheck(dir).ok).toBe(true);
+
+    writeFileSync(join(dir, "a.py"), "def f():\n    return 3\n");
+    git(["add", "a.py"]);
+    git(["commit", "-qm", "commit 3"]);
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), "{}\n");
+    writeFileSync(indexedAtPath(dir), headSha() + "\n");
+    expect(graphStaleCheck(dir).ok).toBe(true);
   });
 });
