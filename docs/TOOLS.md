@@ -36,6 +36,8 @@ Agent:  "validate_jwt is called by the login, refresh, and middleware paths;
 
 </details>
 
+> 🎥 A short screen recording is on the roadmap — see [Documentation](../README.md#documentation).
+
 ### Agent skills
 
 RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skills add reposkein/reposkein --all` installs both into Claude Code, Cursor, Codex, and 70+ agents:

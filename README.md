@@ -48,6 +48,8 @@ The bundled `reposkein-graph-rag` skill drives a `semantic_find → get_context_
 - [Supported languages](#supported-languages)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
+- [Acknowledgements](#acknowledgements)
+- [Contact](#contact)
 - [License](#license)
 
 ## For teams
