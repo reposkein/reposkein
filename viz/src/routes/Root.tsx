@@ -24,7 +24,7 @@ import { BRAND } from "../scene/encoding";
 import { pickNeighbor } from "../data/navigate";
 import { revealChainFor } from "../data/clientModel";
 import { resolveNodeFallback } from "../data/nodeFallback";
-import { badgeInfo } from "../data/badge";
+import { badgeInfo, teamConstellationHref } from "../data/badge";
 import { CaptureBridge, captureScreenshot } from "../scene/Screenshot";
 
 export function Root() {
@@ -274,6 +274,27 @@ function HeaderBar() {
           >
             Screenshot
           </button>
+        )}
+        {store.model && teamConstellationHref(store.model.repoMeta) && (
+          <a
+            href={teamConstellationHref(store.model.repoMeta)!}
+            target="_blank"
+            rel="noreferrer"
+            title="Open this team's published constellation (configured in .reposkein/config.toml [team] pages_url)"
+            style={{
+              padding: "2px 10px",
+              fontSize: 11,
+              borderRadius: 5,
+              border: `1px solid ${BRAND.amber}66`,
+              background: `${BRAND.amber}1f`,
+              color: BRAND.cream,
+              cursor: "pointer",
+              letterSpacing: 0.3,
+              textDecoration: "none",
+            }}
+          >
+            Team constellation ↗
+          </a>
         )}
         {store.model && <TourController />}
       </div>

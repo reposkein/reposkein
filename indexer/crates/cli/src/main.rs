@@ -22,23 +22,80 @@ const PRE_COMMIT: &str = r#"#!/bin/sh
 # which IS committed: `stage-summaries` prints a hint when those shards changed
 # and were left out of the commit, and stages them only if you opted in with
 # `[hooks] stage_summaries = true` in .reposkein/config.toml.
+#
+# On success, drops a transient flag (.reposkein/local/.precommit-indexed-ok)
+# for post-commit to consume: pre-commit and post-commit are separate
+# processes with no shared exit status, and post-commit must never record
+# the indexed-at marker (.reposkein/local/indexed-at) off a failed index —
+# that would read as "fresh" when the graph is actually stale/absent. On
+# failure the flag is removed instead, so a stale flag from an earlier
+# successful commit can never be mistaken for this one's result.
+FLAG=".reposkein/local/.precommit-indexed-ok"
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
   echo "reposkein: indexer not found; skipping graph refresh (commit continues)" >&2
+  rm -f "$FLAG"
   exit 0
 fi
-"$BIN" index . >/dev/null 2>&1 || { echo "reposkein: index failed; skipping refresh" >&2; exit 0; }
+if "$BIN" index . >/dev/null 2>&1; then
+  mkdir -p .reposkein/local
+  : > "$FLAG"
+else
+  echo "reposkein: index failed; skipping refresh" >&2
+  rm -f "$FLAG"
+fi
 "$BIN" stage-summaries . || true
+exit 0
+"#;
+
+// Recorded in .reposkein/local/indexed-at: a single git commit SHA (plus
+// trailing newline), read by `doctor --ci`'s graph_stale check (mcp-side:
+// mcp/src/store/indexedAt.ts). pre-commit already indexed the exact tree
+// that becomes this commit, so post-commit has no reindexing to do — it
+// only has to record the commit that tree turned into, which isn't known
+// until after `git commit` actually creates it (pre-commit's `git rev-parse
+// HEAD` would still name the *parent* commit). It gates on pre-commit's
+// transient success flag (see PRE_COMMIT above) rather than writing
+// unconditionally — a failed index must never be recorded as "fresh".
+const POST_COMMIT: &str = r#"#!/bin/sh
+# reposkein-managed
+# RepoSkein: record the commit that pre-commit's index run became, so
+# `doctor --ci`'s graph_stale check (.reposkein/local/indexed-at vs. HEAD)
+# doesn't read a false "stale" after every normal commit. No reindex here —
+# pre-commit already built the graph for the tree that just got committed.
+# Only runs if pre-commit's transient success flag is present (consumed
+# here); a failed pre-commit index leaves the marker untouched instead of
+# recording a false "fresh".
+FLAG=".reposkein/local/.precommit-indexed-ok"
+if [ -f "$FLAG" ]; then
+  rm -f "$FLAG"
+  mkdir -p .reposkein/local
+  git rev-parse HEAD > .reposkein/local/indexed-at 2>/dev/null || true
+else
+  echo "reposkein: pre-commit's index did not succeed; leaving the indexed-at marker as-is" >&2
+fi
 exit 0
 "#;
 
 const POST_MERGE: &str = r#"#!/bin/sh
 # reposkein-managed
-# RepoSkein: import the merged graph into the local database (async, best-effort).
+# RepoSkein: a merge/checkout can change the tree without going through your
+# own pre-commit, so re-index the local graph here too, record the commit it
+# was just built from (.reposkein/local/indexed-at — same marker post-commit
+# writes, read by `doctor --ci`'s graph_stale check), then import into the
+# local database (async, best-effort). The marker is only written when the
+# reindex actually succeeds — a failed index must never be recorded as
+# "fresh".
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
-  echo "reposkein: indexer not found; skipping graph import" >&2
+  echo "reposkein: indexer not found; skipping graph refresh" >&2
   exit 0
+fi
+if "$BIN" index . >/dev/null 2>&1; then
+  mkdir -p .reposkein/local
+  git rev-parse HEAD > .reposkein/local/indexed-at 2>/dev/null || true
+else
+  echo "reposkein: index failed; skipping refresh (indexed-at marker left untouched)" >&2
 fi
 ( "$BIN" load . >/dev/null 2>&1 || echo "reposkein: graph import skipped (database unavailable)" >&2 ) &
 exit 0
@@ -1289,8 +1346,11 @@ fn main() -> Result<()> {
                              {}",
                             name,
                             body.lines()
-                                .find(|l| l.contains("reposkein-indexer") && !l.starts_with('#'))
-                                .unwrap_or("\"$BIN\" index . >/dev/null 2>&1 || true")
+                                .find(|l| {
+                                    !l.starts_with('#')
+                                        && (l.contains("reposkein-indexer") || l.contains("indexed-at"))
+                                })
+                                .unwrap_or("see docs/INSTALL.md for the RepoSkein hook content")
                         );
                         return Ok(());
                     }
@@ -1304,6 +1364,7 @@ fn main() -> Result<()> {
                 Ok(())
             };
             write_hook("pre-commit", PRE_COMMIT)?;
+            write_hook("post-commit", POST_COMMIT)?;
             write_hook("post-merge", POST_MERGE)?;
             write_hook("post-checkout", POST_MERGE)?; // same action as post-merge
 
@@ -1548,6 +1609,94 @@ mod tests {
     fn post_merge_hook_contains_marker() {
         use super::POST_MERGE;
         assert!(POST_MERGE.contains("# reposkein-managed"));
+    }
+
+    #[test]
+    fn post_commit_hook_contains_marker() {
+        use super::POST_COMMIT;
+        assert!(POST_COMMIT.contains("# reposkein-managed"));
+    }
+
+    #[test]
+    fn post_commit_hook_writes_the_indexed_at_marker_and_nothing_else() {
+        use super::POST_COMMIT;
+        assert!(POST_COMMIT.contains(".reposkein/local/indexed-at"));
+        assert!(POST_COMMIT.contains("git rev-parse HEAD"));
+        // Single responsibility: record the commit, don't reindex (pre-commit
+        // already indexed the tree that became it).
+        assert!(!POST_COMMIT.contains("index ."));
+    }
+
+    #[test]
+    fn post_merge_hook_reindexes_before_recording_the_marker() {
+        use super::POST_MERGE;
+        assert!(POST_MERGE.contains("index ."));
+        assert!(POST_MERGE.contains(".reposkein/local/indexed-at"));
+        // Search for the actual command invocation, not the prose comment
+        // above it (which also happens to contain the substring "index ").
+        let index_pos = POST_MERGE.find("\"$BIN\" index .").unwrap();
+        let marker_pos = POST_MERGE.find("> .reposkein/local/indexed-at").unwrap();
+        assert!(index_pos < marker_pos);
+    }
+
+    #[test]
+    fn post_merge_hook_gates_the_marker_write_on_index_success() {
+        use super::POST_MERGE;
+        // The marker write must be reachable only through the success branch
+        // of an `if "$BIN" index . ...; then ... fi` — not written
+        // unconditionally after a `||`-swallowed failure (the bug this test
+        // guards against: an `if`/`then` gate is required, a bare `||` isn't
+        // enough since control flow continues past it either way).
+        assert!(POST_MERGE.contains("if \"$BIN\" index ."));
+        let then_pos = POST_MERGE.find("if \"$BIN\" index .").unwrap();
+        let marker_pos = POST_MERGE.find("> .reposkein/local/indexed-at").unwrap();
+        let else_pos = POST_MERGE
+            .find("else")
+            .expect("post-merge must have an else branch for a failed index");
+        assert!(
+            then_pos < marker_pos,
+            "marker write must be inside the success branch"
+        );
+        assert!(
+            marker_pos < else_pos,
+            "marker write must come before the else (failure) branch"
+        );
+    }
+
+    #[test]
+    fn pre_commit_hook_gates_its_success_flag_on_index_success_and_clears_it_on_failure() {
+        use super::PRE_COMMIT;
+        const FLAG: &str = ".reposkein/local/.precommit-indexed-ok";
+        assert!(PRE_COMMIT.contains(FLAG));
+        assert!(
+            PRE_COMMIT.contains("if \"$BIN\" index ."),
+            "the flag write must be gated by an if/then on the index command's exit status"
+        );
+        // Both branches must mention the flag: the success branch writes it,
+        // the failure branch (and the indexer-not-found branch) remove it —
+        // never leave a stale success flag from an earlier commit around.
+        assert_eq!(
+            PRE_COMMIT.matches("rm -f \"$FLAG\"").count(),
+            2,
+            "the flag must be removed on both the 'not found' and 'index failed' paths:\n{PRE_COMMIT}"
+        );
+    }
+
+    #[test]
+    fn post_commit_hook_only_writes_the_marker_when_the_precommit_flag_is_present() {
+        use super::POST_COMMIT;
+        const FLAG: &str = ".reposkein/local/.precommit-indexed-ok";
+        assert!(POST_COMMIT.contains(FLAG));
+        assert!(
+            POST_COMMIT.contains("if [ -f \"$FLAG\" ]"),
+            "the marker write must be gated on the transient flag pre-commit left behind:\n{POST_COMMIT}"
+        );
+        let if_pos = POST_COMMIT.find("if [ -f \"$FLAG\" ]").unwrap();
+        let marker_pos = POST_COMMIT.find("> .reposkein/local/indexed-at").unwrap();
+        assert!(
+            if_pos < marker_pos,
+            "marker write must be inside the flag-present branch"
+        );
     }
 
     #[test]

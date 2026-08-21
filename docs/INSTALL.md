@@ -6,6 +6,42 @@
 
 ---
 
+## 0. Joining an existing RepoSkein repo
+
+Skip everything below if you just cloned a repo that **already has RepoSkein set up** — meaning `.reposkein/meta.json` is already committed. This is the common case for every teammate after the first one: three commands, no questions asked.
+
+```sh
+git clone <repo-url>
+cd <repo>
+npx @reposkein/mcp init
+```
+
+`init` detects the committed `.reposkein/meta.json`, reuses its `repo_id` and `config.toml` (no re-scaffolding), fetches the platform indexer binary, installs git hooks, builds the local graph, and — because this is a **join**, not a first-time setup — automatically detects which agent(s) you have (Claude Code CLI on PATH, an existing `opencode.json`, a `.cursor/` directory, …) and writes their MCP config for you: `.mcp.json` (Claude Code, and the generic fallback), `opencode.json`, or `.cursor/mcp.json`, per the schemas in §6. It finishes by printing a `doctor` summary so you can see at a glance whether anything needs attention.
+
+Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `--agents claude,opencode,cursor` | Write exactly these agents' config, skipping auto-detection. |
+| `--dry-run` | Print what would be written/changed without touching disk. |
+| `--no-index` | Skip the initial index (you'll run `reposkein-mcp index` yourself). |
+
+Every config file `init` edits is idempotent (re-running never adds a duplicate entry) and, when it modifies an **existing** file, backs it up first to a timestamped `<file>.<timestamp>.bak` sibling. `.mcp.json`, `opencode.json` and `.cursor/mcp.json` all hold an absolute local path and are per-machine — `init` gitignores them for you (§6.1).
+
+Restart your agent afterward (most only read MCP config at startup), then verify with `reposkein-mcp doctor .`.
+
+**Devcontainer / CI**: to join automatically on container create, add to `.devcontainer/devcontainer.json`:
+
+```jsonc
+{
+  "postCreateCommand": "npx @reposkein/mcp init --agents claude && npx @reposkein/mcp doctor . --ci"
+}
+```
+
+Pin `--agents` explicitly in a devcontainer/CI image — auto-detection depends on what's installed on PATH, which is less predictable in an ephemeral container than on a developer's own machine. `doctor --ci` exits non-zero (failing the container build / CI job) on a stale committed graph, missing/foreign git hooks, or an unsplit legacy `summaries.jsonl` — the same checks `doctor` already reports, just promoted from a warning to a hard failure so drift gets caught before merge instead of at the next `init`.
+
+---
+
 ## TL;DR (the one-liner an agent should already know how to run)
 
 ```sh
@@ -100,7 +136,17 @@ uv --version             # optional (recommended for native embed-server venv)
 rg --version             # optional (only for running Track 1 benchmark)
 ```
 
-Platform support: macOS (Apple Silicon), Linux (x64/arm64), Windows (x64). Intel Macs are not built — use `REPOSKEIN_INDEXER_BIN` with a from-source build.
+Platform support: macOS (Apple Silicon), Linux (x64/arm64), Windows (x64). Intel Macs and Windows ARM64 have no prebuilt binary — `init`/`doctor`/`index` print cargo-install fallback instructions and **continue** (agent config still gets written; only the hooks/index step is skipped, with a warning) rather than failing outright. Build from source and point `REPOSKEIN_INDEXER_BIN` at the result:
+
+```sh
+git clone https://github.com/reposkein/reposkein.git && cd reposkein
+cargo install --path indexer/crates/cli --root ./cargo-out
+export REPOSKEIN_INDEXER_BIN=$PWD/cargo-out/bin/reposkein-indexer
+```
+
+`REPOSKEIN_INDEXER_BIN` also works as an **offline fallback on supported platforms** — set it to skip the GitHub Releases fetch entirely (air-gapped installs, vendored binaries, etc.).
+
+**Behind a proxy?** The binary fetch honors `HTTPS_PROXY`/`HTTP_PROXY` (either case) and `NO_PROXY` — set them the same way you would for any other tool (`export HTTPS_PROXY=http://proxy.internal:8080`) and `init`/`index` will route the download through it automatically.
 
 ---
 
@@ -138,7 +184,7 @@ reposkein-mcp init                    # or: npx @reposkein/mcp init
 
 This:
 1. Verifies/fetches the platform indexer binary.
-2. Installs git hooks (`pre-commit` re-indexes the local graph, staging nothing; `post-merge` reloads Neo4j if configured).
+2. Installs git hooks: `pre-commit` re-indexes the local graph (staging nothing) and `post-commit` records the commit it just became; `post-merge`/`post-checkout` re-index too (a merge/pull/branch switch can change the tree without going through your own commits) and reload Neo4j if configured. All four keep `.reposkein/local/indexed-at` current, which `reposkein-mcp doctor --ci` compares against HEAD to catch a graph nobody's re-indexed.
 3. Installs the `reposkein-graph-rag` skill into `.claude/skills/` (no-op on agents that ignore `.claude/`).
 4. Walks the tree with Tree-sitter → writes deterministic `.reposkein/nodes.jsonl` + `.reposkein/edges.jsonl` + `.reposkein/meta.json`, plus a `.reposkein/.gitignore` that keeps the two derived files out of git.
 5. **Prints an MCP config block** for the user to paste into their agent — you (the agent) should pick the right schema (§6) and write it directly.
@@ -390,7 +436,7 @@ For multi-repo workspaces under OpenCode, define one server **per repo** under d
 
 After everything is configured, restart the user's agent (most agents only read MCP config at startup), then ask the agent to run:
 
-1. **`reposkein-mcp doctor .`** in each indexed repo — expects `✓ binary  ✓ indexed (N nodes)  ✓ ready`.
+1. **`reposkein-mcp doctor .`** in each indexed repo — expects `✓ binary  ✓ indexed (N nodes)  ✓ ready`. Add `--ci` in CI/devcontainer contexts to fail the job on a stale graph, missing hooks, or an unsplit legacy `summaries.jsonl`; add `--json` for machine-readable output.
 2. **A `semantic_find` call** through the MCP tool — should return ranked candidates with one-line summaries.
 3. **A `get_context_profile` call** on one of those candidates — should return caller/callee neighborhood as prose.
 4. **If Neo4j:** open <http://localhost:7474> and run `MATCH (n) RETURN count(n)` — should match `meta.json` node counts (cumulative across loaded repos).
@@ -433,6 +479,7 @@ npx skills add reposkein/reposkein --all
 |---|---|---|
 | `REPOSKEIN_REPO_PATH (or REPOSKEIN_REPO_ID) must be set` | The env var is missing from the MCP server entry. | Add it to the agent's MCP config (§6). |
 | `npm install -g @reposkein/mcp` succeeds but no `reposkein-indexer` binary | Postinstall fetch failed. | Re-run `npm install -g @reposkein/mcp --force` with network access. Else point `REPOSKEIN_INDEXER_BIN` at a [from-source build](https://github.com/reposkein/reposkein#build-from-source). |
+| Binary fetch hangs or fails behind a corporate firewall | No proxy configured for the download. | Set `HTTPS_PROXY` (and `NO_PROXY` for internal hosts) — see §2 — or set `REPOSKEIN_INDEXER_BIN` to skip the fetch entirely. |
 | `TypeError: create_causal_mask() got an unexpected keyword argument 'input_embeds'` | Native embed-server with `transformers >= 5.0`. | `uv pip install 'transformers>=4.51,<5'` and restart. |
 | Neo4j gated tests skipping or `MATCH (n) RETURN count(n)` is 0 | Indexer never ran `load`. | Run `reposkein-indexer load .` once per repo. |
 | `semantic_find` returns nothing despite a real query | Index empty (no supported languages in the repo). | Check supported languages in the [README](../README.md#supported-languages). |

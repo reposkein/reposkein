@@ -9,6 +9,12 @@ export interface RepoMeta {
   commitSha: string | null;
   builtAt: string | null;
   repoUrl: string | null;
+  /** `[team] pages_url` from `.reposkein/config.toml`, or null when unset —
+   *  the team's canonical/CI-published constellation link, distinct from
+   *  whatever local `view`/export a viewer happens to be looking at.
+   *  Optional (not just nullable) so a manifest baked by an older server
+   *  build — before this field existed — still parses. */
+  pagesUrl?: string | null;
 }
 
 export interface GraphManifest {

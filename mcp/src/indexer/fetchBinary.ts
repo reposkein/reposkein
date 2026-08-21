@@ -1,8 +1,9 @@
 import { createWriteStream, existsSync, mkdirSync, chmodSync, statSync, readFileSync, unlinkSync, renameSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { get } from "node:https";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pipeline } from "node:stream/promises";
+import { request, EnvHttpProxyAgent, type Dispatcher } from "undici";
 
 /** Supported platform keys → must match the release asset suffixes (D2).
  *  Intel macOS (darwin-x64) is intentionally unsupported: all Macs have shipped
@@ -34,6 +35,62 @@ export function platformKey(
 
 export function isWindows(platform: string = process.platform): boolean {
   return platform === "win32";
+}
+
+/** Whether this host has a prebuilt indexer release asset. Convenience
+ *  wrapper over `platformKey()` for call sites that just need a boolean
+ *  (e.g. `init`'s pre-flight check, before attempting any fetch). */
+export function isSupportedPlatform(
+  platform: string = process.platform,
+  arch: string = process.arch
+): boolean {
+  return platformKey(platform, arch) !== null;
+}
+
+/** Printed when a host has no prebuilt indexer (darwin-x64, win32-arm64, …):
+ *  the from-source fallback plus the offline override env var, so `init` can
+ *  continue (write agent config, skip only the binary-dependent steps)
+ *  instead of crashing. See docs/INSTALL.md §2 "Platform support". */
+export function cargoInstallFallbackMessage(
+  platform: string = process.platform,
+  arch: string = process.arch
+): string {
+  return (
+    `reposkein: no prebuilt indexer for ${platform}-${arch}. Build from source:\n` +
+    "  git clone https://github.com/reposkein/reposkein.git && cd reposkein\n" +
+    "  cargo install --path indexer/crates/cli --root ./cargo-out\n" +
+    "  export REPOSKEIN_INDEXER_BIN=$PWD/cargo-out/bin/reposkein-indexer\n" +
+    "Then re-run `reposkein-mcp init` (or `doctor`/`index`) with that env var set — " +
+    "REPOSKEIN_INDEXER_BIN is also the offline fallback on supported platforms " +
+    "when the GitHub Releases fetch is unreachable."
+  );
+}
+
+/** Reads HTTP(S)_PROXY / NO_PROXY (either case) via undici's
+ *  `EnvHttpProxyAgent` — the standard way to proxy `undici.request()` once
+ *  undici is a direct dependency (the global `fetch`'s own undici instance
+ *  isn't importable to attach a dispatcher to). Returns `undefined` (use
+ *  undici's default, non-proxying dispatcher) when no proxy env var is set,
+ *  so the common case pays zero extra cost. Cached per-process — proxy env
+ *  vars don't change mid-run. */
+let _proxyDispatcher: Dispatcher | null | undefined;
+
+export function proxyDispatcher(): Dispatcher | undefined {
+  if (_proxyDispatcher !== undefined) return _proxyDispatcher ?? undefined;
+  const hasProxyEnv = !!(
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy
+  );
+  _proxyDispatcher = hasProxyEnv ? new EnvHttpProxyAgent() : null;
+  return _proxyDispatcher ?? undefined;
+}
+
+/** For testing only: reset the cached proxy dispatcher so env var changes
+ *  take effect on the next call. */
+export function _resetProxyDispatcherCache(): void {
+  _proxyDispatcher = undefined;
 }
 
 /** Release asset name for a platform key, e.g. reposkein-indexer-darwin-arm64. */
@@ -108,47 +165,45 @@ export function verifyDigest(tempPath: string, expected: string | null): void {
 
 /** Follows redirects (GitHub release assets redirect to a CDN) and streams the
  *  body to `dest`. Rejects on non-2xx (after redirects) or network error.
- *  Redirect hardening: only follows https:// redirects to github.com or *.githubusercontent.com. */
-function downloadTo(url: string, dest: string, redirects = 5): Promise<void> {
-  return new Promise((resolve, reject) => {
-    get(url, (res) => {
-      const status = res.statusCode ?? 0;
-      if (status >= 300 && status < 400 && res.headers.location) {
-        if (redirects <= 0) {
-          reject(new Error("too many redirects"));
-          return;
-        }
-        const location = res.headers.location;
-        const next = new URL(location, url);
-        if (next.protocol !== "https:") {
-          reject(new Error(`reposkein: redirect to non-https URL rejected: ${next.href}`));
-          return;
-        }
-        const host = next.hostname;
-        if (
-          host !== "github.com" &&
-          host !== "objects.githubusercontent.com" &&
-          !host.endsWith(".githubusercontent.com")
-        ) {
-          reject(new Error(`reposkein: redirect to non-allowlisted host rejected: ${host}`));
-          return;
-        }
-        res.resume();
-        downloadTo(next.href, dest, redirects - 1).then(resolve, reject);
-        return;
-      }
-      if (status !== 200) {
-        res.resume();
-        reject(new Error(`download failed: HTTP ${status} for ${url}`));
-        return;
-      }
-      mkdirSync(dirname(dest), { recursive: true });
-      const file = createWriteStream(dest);
-      res.pipe(file);
-      file.on("finish", () => file.close(() => resolve()));
-      file.on("error", reject);
-    }).on("error", reject);
-  });
+ *  Redirect hardening: only follows https:// redirects to github.com or
+ *  *.githubusercontent.com.
+ *
+ *  Uses undici's `request()` (not node:https) so a `proxyDispatcher()` can be
+ *  attached — that's the only way to honor HTTPS_PROXY/NO_PROXY for this
+ *  fetch, since the global `fetch()`'s own undici instance isn't reachable to
+ *  set a dispatcher on. `request()` never auto-follows redirects (no redirect
+ *  interceptor configured), so they're handled manually below to keep the
+ *  host allowlist in the loop. */
+async function downloadTo(url: string, dest: string, redirects = 5): Promise<void> {
+  const res = await request(url, { dispatcher: proxyDispatcher() });
+  const status = res.statusCode;
+  if (status >= 300 && status < 400 && res.headers.location) {
+    await res.body.dump().catch(() => {});
+    if (redirects <= 0) {
+      throw new Error("too many redirects");
+    }
+    const locationHeader = res.headers.location;
+    const location = Array.isArray(locationHeader) ? locationHeader[0]! : locationHeader;
+    const next = new URL(location, url);
+    if (next.protocol !== "https:") {
+      throw new Error(`reposkein: redirect to non-https URL rejected: ${next.href}`);
+    }
+    const host = next.hostname;
+    if (
+      host !== "github.com" &&
+      host !== "objects.githubusercontent.com" &&
+      !host.endsWith(".githubusercontent.com")
+    ) {
+      throw new Error(`reposkein: redirect to non-allowlisted host rejected: ${host}`);
+    }
+    return downloadTo(next.href, dest, redirects - 1);
+  }
+  if (status !== 200) {
+    await res.body.dump().catch(() => {});
+    throw new Error(`download failed: HTTP ${status} for ${url}`);
+  }
+  mkdirSync(dirname(dest), { recursive: true });
+  await pipeline(res.body, createWriteStream(dest));
 }
 
 /** Downloads the indexer binary for this host into the package cache, verifies

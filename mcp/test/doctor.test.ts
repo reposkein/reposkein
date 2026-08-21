@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks, resolveDoctorRepoPath } from "../src/cli/doctor.js";
+import { runChecks, resolveDoctorRepoPath, runDoctor, ciFailingChecks } from "../src/cli/doctor.js";
 import { decisionChecks } from "../src/cli/doctorDecisions.js";
 import { computeBodyHash, writeDecision, decisionsDir, type DecisionRecord } from "../src/store/decisions.js";
+import { writeIndexedAtMarker } from "../src/store/indexedAt.js";
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rs-doctor-")); });
@@ -145,5 +147,60 @@ describe("doctor decision checks", () => {
     const budget = decisionChecks(dir).find((c) => c.id === "decisions_budget")!;
     expect(budget.ok).toBe(false);
     expect(budget.detail).toMatch(/101/);
+  });
+});
+
+function git(args: string[], cwd = dir): void {
+  execFileSync("git", args, { cwd, stdio: "ignore" });
+}
+
+describe("doctor --ci exit codes", () => {
+  it("exits 0 without --ci even with non-critical checks failing (hooks missing, no index)", async () => {
+    // No .reposkein/, no .git/hooks — 'indexed' is critical so this repo
+    // fails outright; use an indexed-but-hookless repo to isolate the
+    // ci-only-failure case instead.
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), `{"id":"rs1:r:Function:a.py#f@0"}\n`);
+    const code = await runDoctor(dir, { json: true });
+    expect(code).toBe(0); // hooks_installed is non-critical outside --ci
+  });
+
+  it("exits non-zero under --ci when hooks are missing, even though the repo is otherwise healthy", async () => {
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), `{"id":"rs1:r:Function:a.py#f@0"}\n`);
+    const code = await runDoctor(dir, { json: true, ci: true });
+    expect(code).toBe(1);
+  });
+
+  it("exits 0 under --ci when hooks are installed, the graph is fresh, and there's no legacy summaries.jsonl", async () => {
+    git(["init", "-q"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "test"]);
+    writeFileSync(join(dir, "a.py"), "def f():\n    return 1\n");
+    git(["add", "a.py"]);
+    git(["commit", "-qm", "init"]);
+    mkdirSync(join(dir, ".git", "hooks"), { recursive: true });
+    writeFileSync(join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\n# reposkein-managed\nexit 0\n");
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), `{"id":"rs1:r:Function:a.py#f@0"}\n`);
+    writeIndexedAtMarker(dir); // records current HEAD as the indexed-at commit
+    const code = await runDoctor(dir, { json: true, ci: true });
+    expect(code).toBe(0);
+  });
+
+  it("accepts a bare boolean for `json` (pre-existing call signature)", async () => {
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), `{"id":"rs1:r:Function:a.py#f@0"}\n`);
+    const code = await runDoctor(dir, true);
+    expect(code).toBe(0);
+  });
+
+  it("ciFailingChecks lists only non-ok CI_FAIL_IDS checks", async () => {
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), `{"id":"rs1:r:Function:a.py#f@0"}\n`);
+    const report = await runChecks(dir);
+    const failing = ciFailingChecks(report).map((c) => c.id);
+    expect(failing).toContain("hooks_installed");
+    expect(failing).not.toContain("indexed"); // critical, not a CI_FAIL_IDS member
   });
 });

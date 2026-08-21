@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
+import { parseAgentsFlag } from "./cli/agentAdapters.js";
 import { runDoctor, resolveDoctorRepoPath } from "./cli/doctor.js";
 import { runAdr } from "./cli/adr.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
@@ -71,9 +72,9 @@ const HELP_TEXT = `reposkein-mcp — deterministic code-graph MCP server
 
 Usage:
   reposkein-mcp                 start the MCP server (stdio transport)
-  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph); --no-index skips the initial index, --ci also writes a GitHub Pages publish workflow (see docs/HOSTING.md)
+  reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph); --no-index skips the initial index, --ci also writes a GitHub Pages publish workflow (see docs/HOSTING.md). On a repo joined from a committed .reposkein/meta.json, also auto-writes local agent MCP config (--agents claude,opencode,cursor to override detection, --dry-run to preview)
   reposkein-mcp index [path]    (re)build the committed graph
-  reposkein-mcp doctor [path]   health check (indexer binary, index, repo id)
+  reposkein-mcp doctor [path]   health check (indexer binary, index, repo id, hooks, graph freshness); --json for machine output, --ci additionally fails on stale graph / missing hooks / unsplit legacy summaries
   reposkein-mcp adr <sub> ...   decision-log utilities
   reposkein-mcp stats [path]    session usage report (calls, tokens saved vs grep)
   reposkein-mcp view [path]     open the constellation viewer (--export <dir> for a static site)
@@ -571,8 +572,11 @@ if (invokedAsBin()) {
     const rest = process.argv.slice(3);
     const noIndex = rest.includes("--no-index");
     const ci = rest.includes("--ci");
-    const path = rest.find((a) => !a.startsWith("-")) ?? ".";
-    runInit(path, { index: !noIndex, ci })
+    const dryRun = rest.includes("--dry-run");
+    const agentsIdx = rest.indexOf("--agents");
+    const agents = agentsIdx !== -1 ? parseAgentsFlag(rest[agentsIdx + 1] ?? "") : undefined;
+    const path = rest.find((a, i) => !a.startsWith("-") && rest[i - 1] !== "--agents") ?? ".";
+    runInit(path, { index: !noIndex, ci, dryRun, agents })
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
   } else if (sub === "index") {
@@ -583,13 +587,14 @@ if (invokedAsBin()) {
   } else if (sub === "doctor") {
     const rest = process.argv.slice(3);
     const json = rest.includes("--json");
+    const ci = rest.includes("--ci");
     const explicitPath = rest.find((a) => !a.startsWith("-"));
     const { path, error } = resolveDoctorRepoPath(explicitPath, process.cwd(), process.env.REPOSKEIN_REPO_PATH);
     if (error) {
       console.error(`reposkein doctor: ${error}`);
       process.exit(1);
     }
-    runDoctor(path, json)
+    runDoctor(path, { json, ci })
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
   } else if (sub === "stats") {

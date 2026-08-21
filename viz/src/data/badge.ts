@@ -50,3 +50,12 @@ export function badgeInfo(meta: RepoMeta | null, now: number = Date.now()): Badg
   const href = meta.repoUrl ? `${meta.repoUrl}/commit/${meta.commitSha}` : null;
   return { label, href };
 }
+
+/** The header's "team constellation" link, or null when the repo has no
+ *  `[team] pages_url` configured (the common case — this is opt-in). Trims
+ *  whitespace and treats an empty string the same as absent, so a
+ *  hand-edited `pages_url = ""` doesn't render a dead link. */
+export function teamConstellationHref(meta: RepoMeta | null): string | null {
+  const url = meta?.pagesUrl?.trim();
+  return url ? url : null;
+}

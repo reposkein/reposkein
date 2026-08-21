@@ -13,6 +13,7 @@ import { join, resolve, normalize, extname } from "node:path";
 import { gzipSync } from "node:zlib";
 import { spawn, execFileSync } from "node:child_process";
 import { packageRoot } from "../indexer/fetchBinary.js";
+import { readTeamPagesUrl } from "../store/teamConfig.js";
 import { getTemporal } from "../temporal/temporal.js";
 import { discoverFederatedRepos } from "./federatedDiscovery.js";
 import { collectSourceSlices, type SourceSliceEntry } from "./sourceSlices.js";
@@ -87,13 +88,21 @@ export interface RepoBakeMeta {
   commitSha: string | null;
   builtAt: string | null;
   repoUrl: string | null;
+  /** `[team] pages_url` from `.reposkein/config.toml`, or null when unset.
+   *  The team's canonical/CI-published constellation link (e.g. a GitHub
+   *  Pages URL) — distinct from whatever local `view`/export a machine
+   *  happens to be looking at. Drives the viewer header's "team constellation"
+   *  link (viz/src/routes/Root.tsx). */
+  pagesUrl: string | null;
 }
 
 /** Best-effort git introspection for the live `view` server: the current HEAD
  *  sha + a guessed web URL for `origin` (github.com only; other hosts degrade
- *  to null rather than guessing wrong). Never throws — any git failure (not a
- *  repo, no origin, git missing) yields nulls so the badge just doesn't render.
- *  Computed ONCE at server start (not per-request) since it shells out to git. */
+ *  to null rather than guessing wrong), plus `[team] pages_url` from
+ *  config.toml. Never throws — any failure (not a repo, no origin, git
+ *  missing, no config.toml) yields nulls so the affected UI just doesn't
+ *  render. Computed ONCE at server start (not per-request) since it shells
+ *  out to git. */
 export function resolveServerRepoMeta(repoPath: string): RepoBakeMeta {
   const git = (args: string[]): string | null => {
     try {
@@ -105,7 +114,8 @@ export function resolveServerRepoMeta(repoPath: string): RepoBakeMeta {
   const commitSha = git(["rev-parse", "HEAD"]);
   const remote = git(["remote", "get-url", "origin"]);
   const repoUrl = remote ? githubHttpsUrl(remote) : null;
-  return { commitSha, builtAt: new Date().toISOString(), repoUrl };
+  const pagesUrl = readTeamPagesUrl(repoPath);
+  return { commitSha, builtAt: new Date().toISOString(), repoUrl, pagesUrl };
 }
 
 /** Normalizes a git remote URL (https or ssh form) to an https://github.com/...
@@ -329,6 +339,10 @@ export interface ExportBakeOptions {
   commitSha?: string | null;
   repoUrl?: string | null;
   builtAt?: string | null;
+  /** `[team] pages_url`; defaults to reading `.reposkein/config.toml` at
+   *  export time when omitted (same source resolveServerRepoMeta uses in
+   *  server mode) — pass explicitly only to override or pin it. */
+  pagesUrl?: string | null;
   /** Bake size-capped per-node source slices (design: optional, flag-gated). */
   withSource?: boolean;
   /** Byte cap for baked source slices; only consulted when withSource is true. */
@@ -350,6 +364,7 @@ export function parseViewArgs(argv: string[]): {
   let commitSha: string | null = null;
   let repoUrl: string | null = null;
   let builtAt: string | null = null;
+  let pagesUrl: string | undefined;
   let withSource = false;
   let sourceMaxBytes: number | undefined;
   const positional: string[] = [];
@@ -368,6 +383,8 @@ export function parseViewArgs(argv: string[]): {
     else if (a.startsWith("--repo-url=")) repoUrl = a.slice(11);
     else if (a === "--built-at") builtAt = argv[++i] ?? null;
     else if (a.startsWith("--built-at=")) builtAt = a.slice(11);
+    else if (a === "--pages-url") pagesUrl = argv[++i];
+    else if (a.startsWith("--pages-url=")) pagesUrl = a.slice(12);
     else if (a === "--with-source") {
       withSource = true;
       // Optional numeric byte-cap as the next bare token (e.g. `--with-source 500000`).
@@ -384,6 +401,7 @@ export function parseViewArgs(argv: string[]): {
     commitSha: commitSha ?? process.env.REPOSKEIN_COMMIT_SHA ?? null,
     repoUrl: repoUrl ?? process.env.REPOSKEIN_REPO_URL ?? null,
     builtAt,
+    pagesUrl: pagesUrl ?? process.env.REPOSKEIN_PAGES_URL, // undefined -> runExport reads config.toml itself
     withSource,
     sourceMaxBytes,
   };
@@ -453,7 +471,7 @@ export function buildGraphDataJs(
       nodesText: f.nodesText,
       edgesText: f.edgesText,
     })),
-    meta: extra.meta ?? { commitSha: null, builtAt: null, repoUrl: null },
+    meta: extra.meta ?? { commitSha: null, builtAt: null, repoUrl: null, pagesUrl: null },
     cochange: extra.cochange ?? {},
     ...(extra.sourceSlices ? { sourceSlices: extra.sourceSlices } : {}),
   };
@@ -525,6 +543,7 @@ export async function runExport(
       commitSha: bake.commitSha ?? null,
       repoUrl: bake.repoUrl ?? null,
       builtAt: bake.builtAt ?? new Date().toISOString(),
+      pagesUrl: bake.pagesUrl !== undefined ? bake.pagesUrl : readTeamPagesUrl(repoPath),
     };
 
     // Temporal co-change data: the SAME code path /api/temporal uses, called

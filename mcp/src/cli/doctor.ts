@@ -6,6 +6,7 @@ import { resolveRepoId } from "../store/repoId.js";
 import { resolveRepoPath } from "../store/resolveRepoPath.js";
 import { decisionChecks } from "./doctorDecisions.js";
 import { summaryChecks } from "./doctorSummaries.js";
+import { hooksCheck, graphStaleCheck } from "./doctorFreshness.js";
 
 export interface DoctorPathResolution {
   path: string;
@@ -119,11 +120,30 @@ export async function runChecks(repoPath: string): Promise<DoctorReport> {
   // 5) Decision log validation (all non-critical: degrade, don't block).
   checks.push(...decisionChecks(repoPath));
 
+  // 6) Git hooks installed + graph freshness (non-critical here; `doctor
+  //    --ci` promotes both to a failing exit code — see CI_FAIL_IDS below).
+  checks.push(hooksCheck(repoPath));
+  checks.push(graphStaleCheck(repoPath));
+
   const ok = checks.filter((c) => c.critical).every((c) => c.ok);
   return { repoPath, ok, checks };
 }
 
-function render(report: DoctorReport): string {
+/** Check ids that `doctor --ci` treats as build-breaking even though they're
+ *  non-critical for interactive use (degrade gracefully for a human at the
+ *  keyboard, but should fail a CI job so drift gets caught before it's
+ *  merged): missing/foreign git hooks, a stale committed graph, and an
+ *  unsplit legacy `summaries.jsonl` (see docs/INSTALL.md §4.2 — every branch
+ *  that writes a summary would conflict on it). */
+export const CI_FAIL_IDS = new Set(["hooks_installed", "graph_stale", "summaries_unsplit"]);
+
+/** Checks (by id) that `doctor --ci` additionally fails on, beyond the
+ *  normal critical-check gate. */
+export function ciFailingChecks(report: DoctorReport): Check[] {
+  return report.checks.filter((c) => CI_FAIL_IDS.has(c.id) && !c.ok);
+}
+
+export function renderDoctorReport(report: DoctorReport): string {
   const lines = [`reposkein doctor — ${report.repoPath}`, ""];
   for (const c of report.checks) {
     lines.push(`${c.ok ? "✓" : "✗"} ${c.label}: ${c.detail}`);
@@ -135,10 +155,30 @@ function render(report: DoctorReport): string {
   return lines.join("\n");
 }
 
-/** Entry point for `reposkein-mcp doctor [path] [--json]`. Returns process exit code. */
-export async function runDoctor(repoPath = ".", json = false): Promise<number> {
+export interface RunDoctorOptions {
+  json?: boolean;
+  /** `doctor --ci`: additionally fail (non-zero exit) when any CI_FAIL_IDS
+   *  check is non-ok, even though those checks are non-critical for
+   *  interactive use. Doesn't change what's printed — only the exit code. */
+  ci?: boolean;
+}
+
+/** Entry point for `reposkein-mcp doctor [path] [--json] [--ci]`. Returns the
+ *  process exit code. Accepts a bare boolean for `json` for backwards
+ *  compatibility with the pre-`--ci` call signature. */
+export async function runDoctor(
+  repoPath = ".",
+  opts: RunDoctorOptions | boolean = {}
+): Promise<number> {
+  const { json = false, ci = false } = typeof opts === "boolean" ? { json: opts } : opts;
   const report = await runChecks(repoPath);
   if (json) console.log(JSON.stringify(report, null, 2));
-  else console.error(render(report));
-  return report.ok ? 0 : 1;
+  else console.error(renderDoctorReport(report));
+  const ciFailures = ci ? ciFailingChecks(report) : [];
+  if (ci && ciFailures.length > 0 && !json) {
+    console.error(
+      `\n--ci: failing on ${ciFailures.length} additional check(s): ${ciFailures.map((c) => c.id).join(", ")}`
+    );
+  }
+  return report.ok && ciFailures.length === 0 ? 0 : 1;
 }

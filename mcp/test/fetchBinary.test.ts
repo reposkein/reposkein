@@ -3,6 +3,7 @@ import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
+import { EnvHttpProxyAgent } from "undici";
 import {
   platformKey,
   assetName,
@@ -13,6 +14,10 @@ import {
   verifyDigest,
   packageRoot,
   _resetDigestCache,
+  isSupportedPlatform,
+  cargoInstallFallbackMessage,
+  proxyDispatcher,
+  _resetProxyDispatcherCache,
 } from "../src/indexer/fetchBinary.js";
 
 describe("fetchBinary mapping", () => {
@@ -35,6 +40,74 @@ describe("fetchBinary mapping", () => {
     expect(releaseUrl("1.2.3", "linux-x64")).toBe(
       "https://github.com/reposkein/reposkein/releases/download/v1.2.3/reposkein-indexer-linux-x64"
     );
+  });
+});
+
+describe("isSupportedPlatform / cargoInstallFallbackMessage", () => {
+  it("matches platformKey's supported set", () => {
+    expect(isSupportedPlatform("darwin", "arm64")).toBe(true);
+    expect(isSupportedPlatform("linux", "x64")).toBe(true);
+    expect(isSupportedPlatform("darwin", "x64")).toBe(false);
+    expect(isSupportedPlatform("win32", "arm64")).toBe(false);
+  });
+  it("cargo-install fallback message names the platform, cargo, and REPOSKEIN_INDEXER_BIN", () => {
+    const msg = cargoInstallFallbackMessage("darwin", "x64");
+    expect(msg).toContain("darwin-x64");
+    expect(msg).toMatch(/cargo install/);
+    expect(msg).toContain("REPOSKEIN_INDEXER_BIN");
+  });
+});
+
+describe("proxyDispatcher", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+  const PROXY_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"];
+  beforeEach(() => {
+    for (const k of PROXY_KEYS) {
+      savedEnv[k] = process.env[k];
+      delete process.env[k];
+    }
+    _resetProxyDispatcherCache();
+  });
+  afterEach(() => {
+    for (const k of PROXY_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    _resetProxyDispatcherCache();
+  });
+
+  it("returns undefined (no dispatcher) when no proxy env var is set", () => {
+    expect(proxyDispatcher()).toBeUndefined();
+  });
+
+  it("returns an EnvHttpProxyAgent when HTTPS_PROXY is set", () => {
+    process.env.HTTPS_PROXY = "http://proxy.local:8080";
+    _resetProxyDispatcherCache();
+    const d = proxyDispatcher();
+    expect(d).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("also honors lowercase http_proxy", () => {
+    process.env.http_proxy = "http://proxy.local:8080";
+    _resetProxyDispatcherCache();
+    expect(proxyDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("caches the dispatcher across calls within a process", () => {
+    process.env.HTTPS_PROXY = "http://proxy.local:8080";
+    _resetProxyDispatcherCache();
+    const first = proxyDispatcher();
+    const second = proxyDispatcher();
+    expect(first).toBe(second);
+  });
+
+  it("_resetProxyDispatcherCache lets a changed env var take effect", () => {
+    expect(proxyDispatcher()).toBeUndefined();
+    process.env.HTTPS_PROXY = "http://proxy.local:8080";
+    // Without reset, the cached "no proxy" (undefined) sticks.
+    expect(proxyDispatcher()).toBeUndefined();
+    _resetProxyDispatcherCache();
+    expect(proxyDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
   });
 });
 

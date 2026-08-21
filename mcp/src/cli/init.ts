@@ -1,7 +1,11 @@
 import { mkdirSync, copyFileSync, existsSync, readFileSync, appendFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { ensureIndexerBinary, packageRoot } from "../indexer/fetchBinary.js";
+import { ensureIndexerBinary, packageRoot, platformKey, cargoInstallFallbackMessage } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
+import { writeAgentConfigs, formatAdapterResult, type AgentId, type WriteAgentConfigsOptions } from "./agentAdapters.js";
+import { runChecks, renderDoctorReport } from "./doctor.js";
+import { writeIndexedAtMarker } from "../store/indexedAt.js";
 
 /** Where the navigation skill is installed for a repo (Claude project skills). */
 export function skillTargetPath(repoPath: string): string {
@@ -30,8 +34,9 @@ export function mcpConfigSnippet(repoPath: string): string {
 }
 
 /** Per-machine MCP config files setup writes to a repo root: they hold absolute
- *  paths and a local backend password, so they must never be committed. */
-const LOCAL_MCP_CONFIG_FILES = [".mcp.json", "opencode.json"] as const;
+ *  paths and a local backend password, so they must never be committed.
+ *  Written as gitignore patterns (always forward-slash, regardless of OS). */
+const LOCAL_MCP_CONFIG_FILES = [".mcp.json", "opencode.json", ".cursor/mcp.json"] as const;
 
 /** Idempotently add the per-machine MCP config files to the repo's .gitignore
  *  (creating it if absent), so `reposkein-mcp init` never leaves them tracked. */
@@ -49,6 +54,29 @@ export function ensureLocalConfigGitignored(repoPath: string): void {
     `${missing.join("\n")}\n`;
   appendFileSync(gitignorePath, block);
   console.error(`reposkein: gitignored ${missing.join(", ")} (per-machine config, never commit)`);
+}
+
+/** True when `.reposkein/meta.json` is tracked by git — this clone joined a
+ *  repo that already has RepoSkein set up (someone else ran `init` and
+ *  committed it), rather than being the first machine to set it up (whose
+ *  meta.json exists on disk but isn't committed yet). Join mode skips
+ *  first-time scaffolding entirely and instead wires up the local agent(s)
+ *  automatically (REP-16 T5) — see `runInit`.
+ *
+ *  Falls back to plain existence when git itself is unavailable (no `git`
+ *  binary, or `repoPath` isn't a git repo yet) so `init` still behaves
+ *  sensibly outside a git repo rather than throwing. */
+export function detectJoinMode(repoPath: string): boolean {
+  if (!existsSync(join(repoPath, ".reposkein", "meta.json"))) return false;
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", ".reposkein/meta.json"], {
+      cwd: repoPath,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Where `init --ci` writes the Pages-publish workflow in the target repo. */
@@ -115,42 +143,109 @@ export function writeCiWorkflow(repoPath: string): { written: boolean; path: str
 
 /** `reposkein-mcp index [path]`: (re)build the code graph at `repoPath` using the
  *  native indexer. The package-friendly way to index — the `reposkein-indexer`
- *  binary is fetched into the package (not on PATH), so end users run this. */
+ *  binary is fetched into the package (not on PATH), so end users run this.
+ *  On success, also records the current git HEAD to `.reposkein/local/indexed-at`
+ *  — `doctor --ci`'s `graph_stale` check reads it back (see doctorFreshness.ts).
+ *  The installed git hooks maintain the same marker themselves (`post-commit`
+ *  after every commit, `post-merge`/`post-checkout` — which also re-index —
+ *  after a merge/pull/branch switch; see the hook templates in
+ *  indexer/crates/cli/src/main.rs), so this mcp-side write is the "manual
+ *  index" case, not the only path that keeps the marker current. */
 export async function runIndex(repoPath = "."): Promise<number> {
   const bin = await ensureIndexerBinary();
   const r = await spawnIndexer(bin, ["index", repoPath]);
   if (r.stdout.trim()) console.error(r.stdout.trim());
   if (r.code !== 0) {
     console.error(`reposkein: index failed: ${r.stderr || r.stdout}`);
+  } else {
+    writeIndexedAtMarker(repoPath);
   }
   return r.code;
 }
 
-/** `reposkein-mcp init [path] [--no-index] [--ci]`: ensure the indexer, install git
- *  hooks, build the initial graph, install the navigation skill, print the MCP
- *  config + next steps. Pass `index: false` to skip the initial index; `ci: true`
- *  to also write the GitHub Pages publish workflow (see docs/HOSTING.md). */
-export async function runInit(
-  repoPath = ".",
-  opts: { index?: boolean; ci?: boolean } = {}
-): Promise<number> {
-  // 1) Indexer binary (fetches it if needed).
-  const bin = await ensureIndexerBinary();
+export interface RunInitOptions {
+  index?: boolean;
+  ci?: boolean;
+  /** Explicit `--agents` override for join mode; detected when omitted. */
+  agents?: AgentId[];
+  /** `--dry-run`: plan agent config writes without touching disk. */
+  dryRun?: boolean;
+  /** Force join-mode on/off; auto-detected (committed .reposkein/meta.json)
+   *  when omitted — see `detectJoinMode`. */
+  join?: boolean;
+  /** Test-only injection point for the agent-adapter step (fake `exec`/`now`). */
+  agentWriteOpts?: Pick<WriteAgentConfigsOptions, "exec" | "now">;
+}
 
-  // 2) Git hooks (needs a git repo). Also strips any merge declaration an older
-  //    RepoSkein left behind for the derived JSONL, which is no longer committed.
-  const r = await spawnIndexer(bin, ["init", "--hooks", repoPath]);
-  if (r.code !== 0) {
-    console.error(`reposkein: indexer init failed: ${r.stderr || r.stdout}`);
-    console.error("  (is this a git repository? run `git init` first.)");
-    return 1;
+/** `reposkein-mcp init [path] [--no-index] [--ci] [--agents <list>] [--dry-run]`:
+ *  ensure the indexer, install git hooks, build the initial graph, install
+ *  the navigation skill, then either (join mode) auto-write the local
+ *  agent(s) MCP config, or (first-time) print the config snippet to paste in
+ *  by hand. Pass `index: false` to skip the initial index; `ci: true` to
+ *  also write the GitHub Pages publish workflow (see docs/HOSTING.md).
+ *
+ *  Join mode (REP-16 T5): auto-detected when `.reposkein/meta.json` is
+ *  already committed (`detectJoinMode`) — i.e. someone cloned a repo that
+ *  already has RepoSkein set up. Skips nothing structural (hooks/index/skill
+ *  still run so a stale local checkout gets caught up) but additionally
+ *  writes `.mcp.json` / `opencode.json` / `.cursor/mcp.json` for whichever
+ *  agent(s) are detected present (or `opts.agents`), then prints a doctor
+ *  summary instead of a config snippet to copy by hand.
+ *
+ *  Unsupported platform (darwin-x64, win32-arm64, no REPOSKEIN_INDEXER_BIN):
+ *  prints cargo-install fallback instructions and CONTINUES instead of
+ *  crashing — hooks + the initial index are skipped (nothing to run them
+ *  with), but the skill, CI workflow, and (in join mode) agent config are
+ *  still written, and the function returns 0. */
+export async function runInit(repoPath = ".", opts: RunInitOptions = {}): Promise<number> {
+  const joinMode = opts.join ?? detectJoinMode(repoPath);
+  if (joinMode) {
+    console.error(
+      "reposkein: found a committed .reposkein/meta.json — joining an existing repo " +
+        "(skipping first-time scaffolding; wiring up your agent(s) automatically)."
+    );
   }
 
-  // 2b) Keep the per-machine MCP config out of git; only .reposkein/ is shared.
-  ensureLocalConfigGitignored(repoPath);
+  // 1) Indexer binary — but only attempt it on a platform that has one (or
+  //    with an explicit offline override). Everything binary-dependent below
+  //    degrades to a warning instead of crashing when neither is true.
+  const platformSupported = platformKey() !== null || !!process.env.REPOSKEIN_INDEXER_BIN;
+  let bin: string | null = null;
+  if (!platformSupported) {
+    console.error(cargoInstallFallbackMessage());
+  } else {
+    bin = await ensureIndexerBinary();
+  }
+
+  // 2) Git hooks (needs the indexer binary + a git repo). Also strips any
+  //    merge declaration an older RepoSkein left behind for the derived
+  //    JSONL, which is no longer committed.
+  let hooksOk = false;
+  if (bin) {
+    try {
+      const r = await spawnIndexer(bin, ["init", "--hooks", repoPath]);
+      if (r.code !== 0) {
+        console.error(`reposkein: indexer init failed: ${r.stderr || r.stdout}`);
+        console.error("  (is this a git repository? run `git init` first.)");
+        return 1;
+      }
+      hooksOk = true;
+      // 2b) Keep the per-machine MCP config out of git; only .reposkein/ is shared.
+      ensureLocalConfigGitignored(repoPath);
+    } catch (err) {
+      console.error(
+        `reposkein: could not run the indexer binary (${err instanceof Error ? err.message : String(err)}).\n` +
+          "  Set REPOSKEIN_INDEXER_BIN to a working `reposkein-indexer` path and re-run."
+      );
+    }
+  } else {
+    console.error(
+      "reposkein: skipping git hook install and the initial index — no indexer binary for this platform."
+    );
+  }
 
   // 3) Build the initial code graph (the whole point of setup) unless opted out.
-  if (opts.index !== false) {
+  if (bin && hooksOk && opts.index !== false) {
     console.error("reposkein: building the initial code graph…");
     const ic = await runIndex(repoPath);
     if (ic !== 0) {
@@ -174,17 +269,33 @@ export async function runInit(
   // 5) Optionally write the GitHub Pages publish workflow.
   if (opts.ci) writeCiWorkflow(repoPath);
 
-  // 6) Next steps + MCP config.
-  console.error("\nreposkein: ready. Add this MCP server to your client config:\n");
-  console.error(mcpConfigSnippet(repoPath));
-  console.error(
-    "\nCommit .reposkein/meta.json, config.toml, .gitignore, .gitattributes and summaries/. " +
-      "nodes.jsonl and edges.jsonl are derived from your working tree and git-ignored: every clone " +
-      "rebuilds them in seconds, and committing them would conflict on every branch that touches code. " +
-      "Authored summaries live in .reposkein/summaries/<xx>.jsonl — one small file per hash bucket, so " +
-      "two branches summarising different code never touch the same file." +
-      "\nVerify anytime with `reposkein-mcp doctor`; re-index after big changes with `reposkein-mcp index` " +
-      "(or the agent's reindex_file / init_cpg_skeleton tools)."
-  );
+  // 6) Join mode: auto-write agent MCP config + a doctor summary. First-time
+  //    setup: print the config snippet for the user to paste in by hand.
+  if (joinMode) {
+    console.error("\nreposkein: wiring up local agent MCP config…");
+    const results = writeAgentConfigs(repoPath, {
+      agents: opts.agents,
+      dryRun: opts.dryRun,
+      ...opts.agentWriteOpts,
+    });
+    for (const r of results) console.error(formatAdapterResult(r));
+    if (opts.dryRun) {
+      console.error("\nreposkein: --dry-run — no config files were written. Re-run without --dry-run to apply.");
+    }
+    console.error("\nreposkein: doctor summary\n");
+    console.error(renderDoctorReport(await runChecks(repoPath)));
+  } else {
+    console.error("\nreposkein: ready. Add this MCP server to your client config:\n");
+    console.error(mcpConfigSnippet(repoPath));
+    console.error(
+      "\nCommit .reposkein/meta.json, config.toml, .gitignore, .gitattributes and summaries/. " +
+        "nodes.jsonl and edges.jsonl are derived from your working tree and git-ignored: every clone " +
+        "rebuilds them in seconds, and committing them would conflict on every branch that touches code. " +
+        "Authored summaries live in .reposkein/summaries/<xx>.jsonl — one small file per hash bucket, so " +
+        "two branches summarising different code never touch the same file." +
+        "\nVerify anytime with `reposkein-mcp doctor`; re-index after big changes with `reposkein-mcp index` " +
+        "(or the agent's reindex_file / init_cpg_skeleton tools)."
+    );
+  }
   return 0;
 }
