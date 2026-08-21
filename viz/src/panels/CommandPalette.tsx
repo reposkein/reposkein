@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { useStore } from "../state/store";
+import { setCommandPaletteOpen } from "./paletteOpenState";
 import { buildCommandRegistry, pushRecent, type CommandItem, type RecentEntry } from "../state/commands";
 import { rankSearch, searchBucket, type SearchBucket } from "../data/search";
 import { buildMinConfidenceIndex, nodeConfidence } from "../data/nodeConfidence";
@@ -64,7 +65,9 @@ function isRowDisabled(row: Row): boolean {
  *  reducer until a row is actually executed. That's the whole perf contract:
  *  every keystroke is a LOCAL setState, so it re-renders only this
  *  component's own subtree, never the R3F scene consumers living inside
- *  <Canvas> (see `commandPalette.render.test.tsx` for a render-count proof).
+ *  <Canvas> (see the "perf (keystrokes stay local, never dispatch)" describe
+ *  block in `CommandPalette.test.tsx` for a spy-based proof — no store action
+ *  fires while typing or arrow-key traversing).
  *
  *  Skeleton informed by the licensed React Bits Pro `command-menu-1` App UI
  *  block (Ultimate tier — REACTBITS_LICENSE_KEY is configured): its listbox
@@ -101,6 +104,7 @@ export function CommandPalette() {
 
   const close = useCallback(() => {
     setOpen(false);
+    setCommandPaletteOpen(false);
     setQuery("");
     setFilesOnly(false);
     setActiveIndex(0);
@@ -110,7 +114,12 @@ export function CommandPalette() {
   const openPalette = useCallback(() => {
     restoreFocusRef.current = document.activeElement as HTMLElement | null;
     setOpen(true);
+    setCommandPaletteOpen(true);
   }, []);
+
+  // Safety net: if this component ever unmounts while open (route change,
+  // test teardown), don't leave the singleton stuck reporting "open" forever.
+  useEffect(() => () => setCommandPaletteOpen(false), []);
 
   // Global ⌘K / Ctrl+K — works regardless of what currently has focus
   // (including the old SearchPanel's input), independent of Root.tsx's own
@@ -300,6 +309,11 @@ export function CommandPalette() {
   const listboxId = `${uid}-listbox`;
   const activeRow = flatRows[activeIndex];
   const activeRowId = activeRow ? `${uid}-row-${activeIndex}` : undefined;
+  const statusMessage = noResults
+    ? isCommandMode
+      ? `No commands match "${commandQuery}"`
+      : `No matches for "${query}"`
+    : `${flatRows.length} result${flatRows.length === 1 ? "" : "s"}`;
 
   let runningIndex = -1;
 
@@ -351,16 +365,15 @@ export function CommandPalette() {
         </div>
 
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1.5">
-          {noResults ? (
-            <NoResults
-              query={query}
-              isCommandMode={isCommandMode}
-              filesOnly={filesOnly}
-              onSearchFilesOnly={() => setFilesOnly(true)}
-            />
-          ) : (
-            <div id={listboxId} role="listbox" aria-label="Results">
-              {grouped.map(({ group, rows }) => (
+          {/* Always rendered (even empty) so `aria-controls` on the combobox
+           *  input never dangles — it used to reference this id only when
+           *  results existed, which is an axe violation the moment the list
+           *  is empty. NoResults renders as a SIBLING, not inside it, so the
+           *  listbox stays a real (if empty) listbox rather than switching
+           *  role entirely. */}
+          <div id={listboxId} role="listbox" aria-label="Results">
+            {!noResults &&
+              grouped.map(({ group, rows }) => (
                 <div key={group} role="group" aria-label={GROUP_LABEL[group]} className="mb-1 last:mb-0">
                   <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider opacity-45">
                     {GROUP_LABEL[group]}
@@ -385,8 +398,24 @@ export function CommandPalette() {
                   })}
                 </div>
               ))}
-            </div>
+          </div>
+          {noResults && (
+            <NoResults
+              query={query}
+              isCommandMode={isCommandMode}
+              filesOnly={filesOnly}
+              onSearchFilesOnly={() => setFilesOnly(true)}
+            />
           )}
+        </div>
+
+        {/* Visually hidden live region: announces the result count / the
+         *  no-results state to screen readers as the query changes (the
+         *  listbox's own role="option"/aria-selected updates are enough for
+         *  traversal, but a screen reader doesn't otherwise learn that a
+         *  keystroke just changed how many results there are). */}
+        <div aria-live="polite" className="sr-only">
+          {statusMessage}
         </div>
 
         <div className="flex h-9 shrink-0 items-center gap-3 border-t border-[rgba(148,163,207,0.14)] px-3 text-[11px] opacity-55">

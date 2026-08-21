@@ -239,13 +239,16 @@ export function reducer(state: State, a: Action): State {
       return { ...state, fitNonce: state.fitNonce + 1 };
     case "revealAndSelect": {
       // ONE transition for "make this node visible and inspect it": expand its
-      // ancestor chain, select it, optionally fly to it — with a SINGLE fitNonce
-      // bump. The callers used to dispatch toggleExpand per ancestor plus select
-      // plus setFocusTarget. React's auto-batching already collapsed those into
-      // one render, so this is not about firing the camera effect less; it is
-      // about atomicity — no half-expanded / selected-but-hidden intermediate
-      // state exists to be read or reasoned about, and fitNonce stays a
-      // truthful count of user intents rather than of dispatches.
+      // ancestor chain, select it, and — ONLY when `fly` is set — bump
+      // fitNonce once and set focusTarget so Controls flies there. `fly:false`
+      // ("reveal without flying") touches neither: no fitNonce bump, no
+      // camera consequence, period. The callers used to dispatch toggleExpand
+      // per ancestor plus select plus setFocusTarget. React's auto-batching
+      // already collapsed those into one render, so this is not about firing
+      // the camera effect less; it is about atomicity — no half-expanded /
+      // selected-but-hidden intermediate state exists to be read or reasoned
+      // about, and fitNonce stays a truthful count of user FLY intents rather
+      // than of dispatches.
       if (!state.model) return state;
       const model = state.model;
       const expanded = expandToReveal(model, state.expanded, [a.id]);
@@ -270,10 +273,20 @@ export function reducer(state: State, a: Action): State {
         ...state,
         expanded,
         selected: a.id,
-        focusTarget: a.fly ? a.id : state.focusTarget,
+        // INVARIANT: focusTarget is only ever valid for the fitNonce bump it
+        // accompanies. Controls' fit effect re-reads `store.focusTarget` on
+        // EVERY fitNonce change (not only the change that set it) — so a
+        // target left over from an earlier fly would hijack a later, unrelated
+        // reframe. Flying sets it; anything else (including a `fly:false`
+        // reveal) clears it outright, never inherits the prior value.
+        focusTarget: a.fly ? a.id : null,
         impact: sameSelection ? state.impact : null,
         focus: sameSelection ? state.focus : null,
-        fitNonce: state.fitNonce + 1,
+        // A `fly:false` reveal ("reveal without flying") must not move the
+        // camera AT ALL — not even via the "reframe to the current selection"
+        // fallback Controls' effect runs on any fitNonce bump. Only bump the
+        // refit trigger when actually flying.
+        fitNonce: a.fly ? state.fitNonce + 1 : state.fitNonce,
       };
     }
     case "revealWithoutRefit": {
@@ -445,9 +458,11 @@ export interface Actions {
   collapseLevel(): void;
   select(id: string | null): void;
   requestFit(): void;
-  /** Expand the ancestor chain of `id`, select it, and (with `fly`) frame it —
-   *  ONE reducer transition and ONE fitNonce bump. `collapseDeeper` additionally
-   *  shuts clusters below the target (breadcrumb "go up to here"). */
+  /** Expand the ancestor chain of `id`, select it, and — only when `fly` is
+   *  set — frame it: ONE reducer transition, and (only then) ONE fitNonce
+   *  bump. `fly:false` ("reveal without flying") never touches the camera —
+   *  no fitNonce bump, no focusTarget. `collapseDeeper` additionally shuts
+   *  clusters below the target (breadcrumb "go up to here"). */
   revealAndSelect(id: string, opts?: { fly?: boolean; collapseDeeper?: boolean }): void;
   /** Open explicit cluster keys without touching selection or the camera. */
   revealWithoutRefit(keys: string[]): void;

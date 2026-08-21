@@ -65,6 +65,20 @@ export function Controls() {
     if (!controls || !model) return;
 
     // focusTarget (from search): fly to a specific node.
+    //
+    // INVARIANT this effect relies on (guarded by state/reducer.test.ts's
+    // revealAndSelect suite, not by a test here — mounting this effect needs
+    // a full R3F/WebGL harness the fitNonce/focusTarget contract doesn't):
+    // `store.focusTarget` is read on EVERY fitNonce change, not only the one
+    // that set it. So every action that bumps fitNonce MUST also either set
+    // focusTarget to the node it wants framed, or null it out — never leave a
+    // PRIOR fly's target sitting here to be silently re-consumed by an
+    // unrelated later reframe (that was the REP-13 ⌘Enter "reveal without
+    // flying" bug: a stale focusTarget from an earlier fly hijacked a later
+    // fly:false select). `revealAndSelect` is the only producer today; it
+    // sets `focusTarget: fly ? id : null` and skips the fitNonce bump
+    // entirely when not flying, so a `fly:false` reveal never reaches this
+    // effect at all.
     if (store.focusTarget) {
       const clusterKey =
         model.clusterOfNode.get(store.focusTarget) ?? store.focusTarget;

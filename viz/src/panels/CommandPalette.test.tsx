@@ -207,11 +207,52 @@ describe("CommandPalette — no-results state", () => {
     // Matches nothing: no node, and no command label/subtitle contains this.
     fireEvent.change(input, { target: { value: "zzzznotfound" } });
 
-    expect(screen.getByText(/No matches for/)).toBeTruthy();
+    // The visible NoResults copy AND the sr-only aria-live announcement both
+    // say this — scope to the visible <p> so the assertion isn't ambiguous.
+    expect(screen.getByText(/No matches for/, { selector: "p" })).toBeTruthy();
     const filesOnlyBtn = screen.getByRole("button", { name: "Search files only" });
     fireEvent.click(filesOnlyBtn);
     // filesOnly is now active — a "Files only ✕" chip appears in the input row.
     expect(screen.getByRole("button", { name: "Files only ✕" })).toBeTruthy();
+  });
+
+  it("keeps aria-controls valid (the listbox always exists, even empty) and announces the no-results state", async () => {
+    const model = graphModel();
+    const { store } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    const input = screen.getByRole("combobox");
+    const listboxId = input.getAttribute("aria-controls");
+    expect(listboxId).toBeTruthy();
+    // Before: the listbox exists and has options.
+    expect(document.getElementById(listboxId!)).toBeTruthy();
+    expect(document.getElementById(listboxId!)!.querySelectorAll('[role="option"]').length).toBeGreaterThan(0);
+
+    fireEvent.change(input, { target: { value: "zzzznotfound" } });
+
+    // After: aria-controls still resolves to a REAL element (an empty
+    // listbox), not a dangling id — and it's still the SAME id (no
+    // re-render-driven id churn).
+    expect(input.getAttribute("aria-controls")).toBe(listboxId);
+    const listbox = document.getElementById(listboxId!);
+    expect(listbox).toBeTruthy();
+    expect(listbox!.getAttribute("role")).toBe("listbox");
+    expect(listbox!.querySelectorAll('[role="option"]')).toHaveLength(0);
+
+    // The live region announces it.
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live?.textContent).toMatch(/No matches for/);
+  });
+
+  it("announces the result count via the aria-live region when results exist", async () => {
+    const model = graphModel();
+    const { store } = makeStore({ model });
+    currentStore = store;
+    await openPalette();
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "graph" } });
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live?.textContent).toMatch(/result/);
   });
 });
 

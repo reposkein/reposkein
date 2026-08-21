@@ -92,13 +92,36 @@ describe("revealAndSelect", () => {
     expect(next.fitNonce).toBe(ready.fitNonce + 1);
   });
 
-  it("leaves focusTarget alone unless `fly` is set", () => {
+  it("`fly:false` clears focusTarget and does NOT bump fitNonce (no camera consequence at all)", () => {
     const model = clientModel(graph());
     const ready = readyState(model);
     const next = reducer(ready, { t: "revealAndSelect", id: B1 });
     expect(next.selected).toBe(B1);
     expect(next.focusTarget).toBeNull();
-    expect(next.fitNonce).toBe(ready.fitNonce + 1);
+    // CRITICAL: unlike a fly, a `fly:false` reveal must not touch fitNonce —
+    // Controls' fit effect re-runs on EVERY fitNonce change and would
+    // otherwise reframe the camera via its "frame the current selection"
+    // fallback, which is exactly the camera movement `fly:false` promises not
+    // to cause.
+    expect(next.fitNonce).toBe(ready.fitNonce);
+  });
+
+  it("a stale focusTarget from an earlier fly never survives a later `fly:false` reveal of a DIFFERENT node", () => {
+    const model = clientModel(graph());
+    const ready = readyState(model);
+    // Fly to A1 first: sets focusTarget=A1, bumps fitNonce once.
+    const flew = reducer(ready, { t: "revealAndSelect", id: A1, fly: true });
+    expect(flew.focusTarget).toBe(A1);
+    expect(flew.fitNonce).toBe(ready.fitNonce + 1);
+
+    // Now reveal-without-flying a DIFFERENT node (B1). Before the fix this
+    // inherited the OLD focusTarget (A1) while still bumping fitNonce, so
+    // Controls' effect would fly to the unrelated earlier target A1 instead
+    // of staying put for B1's reveal.
+    const revealed = reducer(flew, { t: "revealAndSelect", id: B1 });
+    expect(revealed.selected).toBe(B1);
+    expect(revealed.focusTarget).toBeNull();
+    expect(revealed.fitNonce).toBe(flew.fitNonce); // unchanged — no flight left to hijack.
   });
 
   it("clears impact/focus when the selection actually changes, keeps them when it doesn't", () => {
