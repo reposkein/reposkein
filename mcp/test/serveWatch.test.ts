@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { startHeadWatcher, watchTick, type WatchDeps } from "../src/serve/watch.js";
 import { parseServeArgs } from "../src/serve/serve.js";
+import { withIndexLock } from "../src/indexer/indexLock.js";
 
 /** A fake checkout: HEAD moves when the test says so, and `reindex` advances
  *  the indexed-at marker exactly the way the real one does (it writes the
  *  marker from HEAD), so idempotence is tested against the real contract. */
 function fakeRepo(head: string | null, indexed: string | null) {
-  const state = { head, indexed, reindexes: 0, fail: false as boolean };
+  const state = { head, indexed, reindexes: 0, fail: false as boolean, busy: false as boolean };
   const logs: string[] = [];
   const deps: WatchDeps = {
     headSha: () => state.head,
@@ -18,6 +19,7 @@ function fakeRepo(head: string | null, indexed: string | null) {
       return { ok: true, nodes: 7, edges: 3 };
     },
     log: (m) => logs.push(m),
+    indexBusy: () => state.busy,
   };
   return { state, logs, deps };
 }
@@ -66,6 +68,45 @@ describe("watchTick — idempotence", () => {
     const { state, deps } = fakeRepo(null, null);
     expect(await watchTick(deps)).toBe("no-head");
     expect(state.reindexes).toBe(0);
+  });
+
+  it("SKIPS (does not queue) while another indexer run holds the lock", async () => {
+    const { state, logs, deps } = fakeRepo("f".repeat(40), "a".repeat(40));
+    state.busy = true;
+    expect(await watchTick(deps)).toBe("locked");
+    expect(state.reindexes).toBe(0);
+    // Skipping must be silent: a busy server would otherwise log a line per
+    // tick for as long as a big index runs.
+    expect(logs).toEqual([]);
+    // Released → the very next tick does the work.
+    state.busy = false;
+    expect(await watchTick(deps)).toBe("reindexed");
+    expect(state.reindexes).toBe(1);
+  });
+
+  it("checks the lock only AFTER deciding work is needed (no spurious skip)", async () => {
+    // HEAD already indexed: a held lock is irrelevant, the answer is still
+    // "unchanged" — otherwise a long index would mask a genuinely quiet repo.
+    const { deps, state } = fakeRepo("a".repeat(40), "a".repeat(40));
+    state.busy = true;
+    expect(await watchTick(deps)).toBe("unchanged");
+  });
+
+  it("defaults indexBusy to the real process-wide index lock", async () => {
+    const { state, deps } = fakeRepo("b".repeat(40), "a".repeat(40));
+    const watcher = startHeadWatcher("/nonexistent", "repo", {
+      intervalMs: 0,
+      // Everything injected EXCEPT indexBusy, which must fall back to the lock.
+      deps: { headSha: deps.headSha, indexedSha: deps.indexedSha, reindex: deps.reindex, log: deps.log },
+    });
+    try {
+      const outcome = await withIndexLock(async () => watcher.tick());
+      expect(outcome).toBe("locked");
+      expect(state.reindexes).toBe(0);
+      expect(await watcher.tick()).toBe("reindexed");
+    } finally {
+      watcher.stop();
+    }
   });
 });
 

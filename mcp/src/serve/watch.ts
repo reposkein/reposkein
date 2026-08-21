@@ -2,11 +2,14 @@ import { execFileSync } from "node:child_process";
 import { readIndexedAtSha, writeIndexedAtMarker } from "../store/indexedAt.js";
 import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 import { spawnIndexer, parseJsonStats } from "../indexer/runIndexer.js";
+import { isIndexLockHeld } from "../indexer/indexLock.js";
 
 /** What one watch tick did. `unchanged` is the overwhelmingly common case and
  *  costs exactly one `git rev-parse` — the whole point of comparing against
- *  the indexed-at marker rather than re-indexing on a timer. */
-export type WatchOutcome = "unchanged" | "reindexed" | "failed" | "no-head";
+ *  the indexed-at marker rather than re-indexing on a timer. `locked` means
+ *  another indexer run (a write-capable tool call, or the previous tick) owns
+ *  the index lock; the tick is skipped, not queued. */
+export type WatchOutcome = "unchanged" | "reindexed" | "failed" | "no-head" | "locked";
 
 export interface ReindexResult {
   ok: boolean;
@@ -25,6 +28,9 @@ export interface WatchDeps {
   /** Where the one-line-per-reindex summary goes. MUST NOT be stdout in stdio
    *  mode; `serve` has no stdio transport, but stderr stays the convention. */
   log: (message: string) => void;
+  /** Whether an indexer run is already in progress or queued. Injectable so
+   *  the skip path is testable without spawning anything. */
+  indexBusy: () => boolean;
 }
 
 /** Reads HEAD of `repoPath`, or null. Never throws. */
@@ -57,6 +63,12 @@ export async function watchTick(deps: WatchDeps): Promise<WatchOutcome> {
   const head = deps.headSha();
   if (!head) return "no-head";
   if (head === deps.indexedSha()) return "unchanged";
+  // Someone else is indexing (a write tool call, or a still-running earlier
+  // tick). SKIP rather than queue: whatever they are building is being built
+  // from the same working tree, so by the time the lock frees, this tick's
+  // work is either done or the next tick will see it needs doing. Queueing
+  // here would fire a redundant full index behind every write tool call.
+  if (deps.indexBusy()) return "locked";
   const started = Date.now();
   const r = await deps.reindex();
   const secs = ((Date.now() - started) / 1000).toFixed(1);
@@ -134,6 +146,7 @@ export function startHeadWatcher(
     indexedSha: opts.deps?.indexedSha ?? (() => readIndexedAtSha(repoPath)),
     reindex: opts.deps?.reindex ?? makeDefaultReindex(repoPath, repoId),
     log: opts.deps?.log ?? log,
+    indexBusy: opts.deps?.indexBusy ?? isIndexLockHeld,
   };
 
   // Ticks never overlap: a slow index on a big repo must not stack up behind
@@ -143,7 +156,10 @@ export function startHeadWatcher(
   let stopped = false;
 
   const tick = async (): Promise<WatchOutcome> => {
-    if (busy || stopped) return "unchanged";
+    if (stopped) return "unchanged";
+    // A previous tick is still running (slow index on a big repo, fast
+    // interval). Same reasoning as the index-lock skip in `watchTick`.
+    if (busy) return "locked";
     busy = true;
     try {
       const outcome = await watchTick(deps);

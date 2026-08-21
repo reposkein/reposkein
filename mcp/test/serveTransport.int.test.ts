@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -127,6 +127,9 @@ describe("serve --http — auth", () => {
     const cookie = res.headers.get("set-cookie") ?? "";
     expect(cookie).toContain("reposkein_token=");
     expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Strict");
+    // Plain HTTP: `Secure` would make the browser discard the cookie outright.
+    expect(cookie).not.toContain("Secure");
 
     // The cookie then authenticates /api/* like a header would.
     const withCookie = await fetch(base + "/api/graph", {
@@ -142,6 +145,15 @@ describe("serve --http — auth", () => {
       body: "{}",
     });
     expect(res.status).toBe(401);
+  });
+
+  it("marks the cookie Secure behind an https-terminating proxy", async () => {
+    const res = await fetch(base + "/?token=" + encodeURIComponent(READ_TOKEN), {
+      redirect: "manual",
+      headers: { "X-Forwarded-Proto": "https, http" },
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("set-cookie")).toContain("Secure");
   });
 });
 
@@ -257,6 +269,40 @@ describe("serve --http — read-only vs write tokens", () => {
       await client.close();
     }
   });
+
+  it("405s a standalone GET stream (no server-initiated notifications)", async () => {
+    const res = await fetch(base + MCP_PATH, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${READ_TOKEN}`, Accept: "text/event-stream" },
+    });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("POST, DELETE");
+    expect(await res.json()).toMatchObject({ error: "sse_stream_not_supported" });
+  });
+
+  it("400s an empty POST body on an established session", async () => {
+    const client = await connect(base, WRITE_TOKEN);
+    try {
+      const sessionId = (client as unknown as { transport: { sessionId?: string } }).transport
+        .sessionId;
+      const res = await fetch(base + MCP_PATH, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${WRITE_TOKEN}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "Mcp-Session-Id": sessionId!,
+        },
+        body: "",
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; detail: string };
+      expect(body.error).toBe("bad_request");
+      expect(body.detail).toContain("Empty POST body");
+    } finally {
+      await client.close();
+    }
+  });
 });
 
 describe("serve --http — per-connection session isolation", () => {
@@ -333,8 +379,285 @@ describe("serve --http — per-connection session isolation", () => {
   });
 });
 
-describe("serve --http — /api/* parity with `view`", () => {
+describe("serve --http — session reaping", () => {
   let root: string;
+  let app: ServeApp;
+  let server: Server;
+  let base: string;
+  let clock: number;
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), "reposkein-serve-reap-"));
+    writeRepo(root, REPO_ID);
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  beforeEach(async () => {
+    clock = 1_000_000;
+    app = createServeApp({
+      repoPath: root,
+      repoId: REPO_ID,
+      tokens: TOKENS,
+      log: () => {},
+      maxSessions: 2,
+      idleMs: 60_000,
+      now: () => clock,
+    });
+    ({ server, base } = await listen(app.handler));
+  });
+  afterEach(async () => {
+    await app.close();
+    await close(server);
+  });
+
+  it("reaps a session idle past the threshold; its id then 404s", async () => {
+    const client = await connect(base, READ_TOKEN);
+    const sessionId = (client as unknown as { transport: { sessionId?: string } }).transport
+      .sessionId;
+    expect(app.sessionCount()).toBe(1);
+
+    // Not yet idle.
+    clock += 59_000;
+    expect(app.sweepIdleSessions()).toBe(0);
+    expect(app.sessionCount()).toBe(1);
+
+    clock += 2_000;
+    expect(app.sweepIdleSessions()).toBe(1);
+    expect(app.sessionCount()).toBe(0);
+
+    const res = await fetch(base + MCP_PATH, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${READ_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "Mcp-Session-Id": sessionId!,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "session_not_found" });
+    await client.close().catch(() => undefined);
+  });
+
+  it("an active client is never reaped (each request re-stamps it)", async () => {
+    const client = await connect(base, READ_TOKEN);
+    try {
+      clock += 59_000;
+      await client.listTools(); // touches the session at the new clock
+      clock += 30_000; // past idleMs since CONNECT, but not since that call
+      expect(app.sweepIdleSessions()).toBe(0);
+      expect(app.sessionCount()).toBe(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("frees the cap by reaping, so the next connect after eviction succeeds", async () => {
+    const a = await connect(base, READ_TOKEN);
+    const b = await connect(base, READ_TOKEN);
+    expect(app.sessionCount()).toBe(2); // maxSessions
+
+    // A third while both are live: refused, and the refusal is legible.
+    const refused = await fetch(base + MCP_PATH, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${READ_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "t", version: "0" },
+        },
+      }),
+    });
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ error: "too_many_sessions" });
+
+    // Both go idle. The next initialize sweeps them itself — no operator
+    // action, no timer — and is admitted.
+    clock += 120_000;
+    const third = await connect(base, READ_TOKEN);
+    try {
+      expect(app.sessionCount()).toBe(1);
+      expect((await third.listTools()).tools.length).toBeGreaterThan(0);
+    } finally {
+      await third.close();
+      await a.close().catch(() => undefined);
+      await b.close().catch(() => undefined);
+    }
+  });
+});
+
+describe("serve --http — the reaper never kills an in-flight request", () => {
+  let root: string;
+  let app: ServeApp;
+  let server: Server;
+  let base: string;
+  let clock = 1_000_000;
+  /** Resolved by the test to let the blocked tool call finish. */
+  let release: () => void;
+  let entered: Promise<void>;
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), "reposkein-serve-inflight-"));
+    writeRepo(root, REPO_ID);
+    let signalEntered!: () => void;
+    entered = new Promise<void>((r) => (signalEntered = r));
+    const gate = new Promise<void>((r) => (release = r));
+    app = createServeApp({
+      repoPath: root,
+      repoId: REPO_ID,
+      tokens: TOKENS,
+      log: () => {},
+      idleMs: 60_000,
+      now: () => clock,
+      // The first repo-scoped tool call on a write-capable connection goes
+      // through ensureGraph; blocking there gives a deterministic in-flight
+      // request without needing a slow tool.
+      ensureGraph: async () => {
+        signalEntered();
+        await gate;
+        return "present";
+      },
+    });
+    ({ server, base } = await listen(app.handler));
+  });
+  afterAll(async () => {
+    await app.close();
+    await close(server);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("skips a session with a request in flight, and that request still completes", async () => {
+    const client = await connect(base, WRITE_TOKEN);
+    try {
+      const pending = client.callTool({
+        name: "get_context_profile",
+        arguments: { name: "helper" },
+      });
+      await entered; // the handler is now inside ensureGraph
+
+      // Push the clock far past the idle window while the call is blocked.
+      clock += 600_000;
+      expect(app.sweepIdleSessions()).toBe(0);
+      expect(app.sessionCount()).toBe(1);
+
+      release();
+      const res = await pending;
+      expect(res.isError).toBeFalsy();
+      expect(textOf(res)).toContain("helper");
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+describe("serve --http — a read-only token never triggers an index build", () => {
+  let root: string;
+  let indexedRepo: string;
+  let unbuiltRepo: string;
+  let ensureGraphCalls: string[];
+  let app: ServeApp;
+  let server: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    // A workspace with one built repo and one that has meta.json but no
+    // nodes.jsonl — exactly a fresh clone, and exactly what would have made
+    // the old code spawn an indexer on first touch.
+    root = mkdtempSync(join(tmpdir(), "reposkein-serve-build-gate-"));
+    indexedRepo = join(root, "built");
+    unbuiltRepo = join(root, "unbuilt");
+    mkdirSync(indexedRepo);
+    mkdirSync(unbuiltRepo);
+    writeRepo(indexedRepo, "builtrepo");
+    mkdirSync(join(unbuiltRepo, ".reposkein"), { recursive: true });
+    writeFileSync(
+      join(unbuiltRepo, ".reposkein", "meta.json"),
+      JSON.stringify({ repo_id: "unbuiltrepo", schema_version: 1 })
+    );
+
+    ensureGraphCalls = [];
+    app = createServeApp({
+      repoPath: root,
+      repoId: "workspace",
+      tokens: TOKENS,
+      log: () => {},
+      viewHandlerFactory: () => (_req, res) => {
+        res.writeHead(404);
+        res.end();
+      },
+      ensureGraph: async (path) => {
+        ensureGraphCalls.push(String(path));
+        return "skipped";
+      },
+    });
+    ({ server, base } = await listen(app.handler));
+  });
+  afterAll(async () => {
+    await app.close();
+    await close(server);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses with a build-free explanation and never reaches ensureGraph", async () => {
+    ensureGraphCalls.length = 0;
+    const client = await connect(base, READ_TOKEN);
+    try {
+      await client.callTool({ name: "select_repo", arguments: { repo: unbuiltRepo } });
+      const res = await client.callTool({
+        name: "get_context_profile",
+        arguments: { name: "helper" },
+      });
+      expect(res.isError).toBe(true);
+      const text = textOf(res);
+      expect(text).toContain("read-only");
+      expect(text).toContain(`reposkein-mcp index ${unbuiltRepo}`);
+      expect(text).toContain("Nothing was changed");
+      // The point: no build was even attempted.
+      expect(ensureGraphCalls).toEqual([]);
+      // And nothing appeared on disk.
+      expect(existsSync(join(unbuiltRepo, ".reposkein", "nodes.jsonl"))).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("still serves a read-only token from a repo that IS built, with no build", async () => {
+    ensureGraphCalls.length = 0;
+    const client = await connect(base, READ_TOKEN);
+    try {
+      await client.callTool({ name: "select_repo", arguments: { repo: indexedRepo } });
+      const res = await client.callTool({ name: "semantic_find", arguments: { query: "helper" } });
+      expect(res.isError).toBeFalsy();
+      expect(textOf(res)).toContain("builtrepo");
+      expect(ensureGraphCalls).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("a write-capable token DOES get the build attempt for the same repo", async () => {
+    ensureGraphCalls.length = 0;
+    const client = await connect(base, WRITE_TOKEN);
+    try {
+      await client.callTool({ name: "select_repo", arguments: { repo: unbuiltRepo } });
+      await client.callTool({ name: "get_context_profile", arguments: { name: "helper" } });
+      expect(ensureGraphCalls).toEqual([unbuiltRepo]);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+describe("serve --http — /api/* parity with `view`", () => {  let root: string;
   let app: ServeApp;
   let serveServer: Server;
   let viewServer: Server;

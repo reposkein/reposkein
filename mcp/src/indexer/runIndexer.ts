@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { withIndexLock } from "./indexLock.js";
 
 const ALLOWED_KEYS = new Set(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD"]);
 
@@ -32,7 +33,19 @@ export interface SpawnResult {
 // env/cwd-based resolver here — see mcp/src/store/resolveRepoPath.ts for the
 // one central resolution algorithm.
 
+/** Runs the indexer binary, capped and timed out.
+ *
+ *  Serialized process-wide by `withIndexLock`: every invocation writes into
+ *  the target checkout's `.reposkein/`, and since REP-17 two callers (a
+ *  write-capable tool call on one connection, the HEAD watcher on another) can
+ *  arrive concurrently with no shared call stack to order them. The lock lives
+ *  HERE rather than at each call site so a new call site cannot forget it —
+ *  see `indexLock.ts`. */
 export function spawnIndexer(bin: string, args: string[]): Promise<SpawnResult> {
+  return withIndexLock(() => spawnIndexerUnlocked(bin, args));
+}
+
+function spawnIndexerUnlocked(bin: string, args: string[]): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { env: buildChildEnv() });
     let stdout = "";

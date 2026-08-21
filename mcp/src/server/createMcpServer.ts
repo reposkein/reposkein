@@ -103,6 +103,35 @@ export function repoUnindexedMessage(repoPath: string): string {
   );
 }
 
+/** Whether a graph is available to READ at `repoPath` without building one.
+ *
+ *  Mirrors `buildStore`'s backend choice exactly (same env, same order), so
+ *  "we can serve reads" and "we picked a real store" can never disagree:
+ *  explicit neo4j mode trusts the DB, otherwise the committed-derived JSONL
+ *  decides, and `auto` falls back to Neo4j when a password is configured. */
+export function graphAvailable(repoPath: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const mode = (env.REPOSKEIN_STORE ?? "auto").toLowerCase();
+  if (mode === "neo4j") return true;
+  if (existsSync(join(repoPath, ".reposkein", "nodes.jsonl"))) return true;
+  return mode === "auto" && !!env.NEO4J_PASSWORD;
+}
+
+/** A read-only connection resolved a repo whose derived graph isn't built.
+ *
+ *  Building it means spawning the indexer and writing `.reposkein/*.jsonl` —
+ *  a write, and the LAST write a read-only token could still trigger, since
+ *  `ensureGraph` used to run unconditionally on first touch of any repo. So a
+ *  read-only caller gets this instead: an explanation and the exact command
+ *  for whoever does hold write access, with nothing changed on disk. */
+export function readOnlyUnindexedMessage(repoPath: string): string {
+  return (
+    `${repoPath} has no built graph (.reposkein/nodes.jsonl is derived from the working tree ` +
+    "and git-ignored, so a fresh clone has none), and this connection is read-only — the " +
+    "server will not build one for it. Ask the operator to run " +
+    `\`reposkein-mcp index ${repoPath}\`, or use a write-capable token. Nothing was changed.`
+  );
+}
+
 /** Exported for schema tests. */
 export const getContextProfileInputSchema = {
   node_id: z.string().optional(),
@@ -182,6 +211,10 @@ export interface CreateMcpServerOptions {
   identity?: string;
   /** Defaults to `{ write: true }` — the stdio behaviour. */
   capabilities?: ToolCapabilities;
+  /** Test seam for the first-touch graph build. Defaults to the real
+   *  `ensureGraph`. Injected in tests so the read-only build gate can be
+   *  asserted (called / not called) without spawning an indexer. */
+  ensureGraph?: typeof ensureGraph;
 }
 
 /** Builds ONE MCP server with its own session state.
@@ -195,21 +228,36 @@ export interface CreateMcpServerOptions {
 export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   const caps: ToolCapabilities = opts.capabilities ?? { write: true };
   const identity = opts.identity;
+  const ensureGraphFn = opts.ensureGraph ?? ensureGraph;
 
   const session = new RepoSession({ cwd: opts.cwd, envRepoPath: opts.envRepoPath });
   const sessionLogger = new SessionLogger(opts.sessionId ?? resolveSessionId(process.env));
   const { withLog, cachedResolve } = createToolLogger(session, sessionLogger);
 
   const getRepoContext = makeCache(
-    async (path: string): Promise<{ repoId: string | undefined; store: GraphStore }> => {
+    async (
+      path: string
+    ): Promise<{ repoId: string | undefined; store: GraphStore; graphReady: boolean }> => {
       const id = resolveRepoId(path, process.env.REPOSKEIN_REPO_ID);
-      await ensureGraph(path, id, {
-        mode: (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase(),
-        neo4jConfigured: !!process.env.NEO4J_PASSWORD,
-      });
-      return { repoId: id, store: buildStore(path, id, identity) };
+      // REP-17: `ensureGraph` SPAWNS THE INDEXER and writes `.reposkein/*.jsonl`.
+      // That is a write, so a read-only connection must not reach it — it was
+      // the one mutation a read-only token could still cause, just by naming
+      // an unbuilt repo. Read-only callers get `readOnlyUnindexedMessage`
+      // below instead, and the repo is left exactly as it was found.
+      if (caps.write) {
+        await ensureGraphFn(path, id, {
+          mode: (process.env.REPOSKEIN_STORE ?? "auto").toLowerCase(),
+          neo4jConfigured: !!process.env.NEO4J_PASSWORD,
+        });
+      }
+      return { repoId: id, store: buildStore(path, id, identity), graphReady: graphAvailable(path) };
     },
-    (ctx) => !!ctx.repoId
+    // Write connections: cache exactly as before (repoId resolved). Read-only
+    // connections additionally refuse to cache a graph-less resolution, so a
+    // graph built out of band (by the operator, or by the HEAD watcher) is
+    // picked up on the next call instead of sticking for the connection's life
+    // — they have no way to fix it themselves.
+    (ctx) => !!ctx.repoId && (caps.write || ctx.graphReady)
   );
 
   type ActiveRepo =
@@ -225,6 +273,12 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
     if (!resolution.repoPath) return { ok: false, message: repoRequiredMessage(resolution) };
     const ctx = await getRepoContext(resolution.repoPath);
     if (!ctx.repoId) return { ok: false, message: repoUnindexedMessage(resolution.repoPath) };
+    if (!ctx.graphReady) {
+      // Only reachable on a read-only connection: a write one already tried to
+      // build above, and if THAT failed ensureGraph explained why on stderr and
+      // the store degrades to Unconfigured (whose own error names the fix).
+      if (!caps.write) return { ok: false, message: readOnlyUnindexedMessage(resolution.repoPath) };
+    }
     return { ok: true, repoPath: resolution.repoPath, repoId: ctx.repoId, store: ctx.store };
   }
   const errResult = (message: string): ToolResult => ({

@@ -1,14 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { makeViewHandler, vizDistDir } from "../cli/view.js";
-import { createMcpServer } from "../server/createMcpServer.js";
+import { createMcpServer, type CreateMcpServerOptions } from "../server/createMcpServer.js";
 import { agentSlug } from "../store/sidecar.js";
-import { defaultSessionId } from "../store/sessionLog.js";
+import { resolveSessionId } from "../store/sessionLog.js";
 import {
   bearerFromAuthHeader,
   loadServeTokens,
@@ -33,6 +34,16 @@ const MAX_BODY_BYTES = 4 * 1024 * 1024;
  *  the process allocate servers without bound; an operator hitting this has a
  *  problem worth an error, not silent growth. */
 const MAX_SESSIONS = 64;
+
+/** How long a session may sit untouched before it is reaped.
+ *
+ *  A crashed or network-partitioned client never sends the DELETE that closes
+ *  its session, so without this every such client permanently consumes one of
+ *  MAX_SESSIONS — and a long-lived server eventually wedges at the cap with
+ *  nothing but corpses. Five minutes is far longer than any tool call and far
+ *  shorter than a working day, so a live-but-idle agent that comes back gets a
+ *  clean `404 session_not_found` and re-initializes. */
+const SESSION_IDLE_MS = 5 * 60 * 1000;
 
 export interface ServeOptions {
   port: number;
@@ -87,6 +98,15 @@ interface McpSession {
    *  different token presenting a stolen session id gets 403, so a read-only
    *  credential can never inherit a write-capable session. */
   tokenName: string;
+  /** `now()` at the START of the most recent request on this session.
+   *  Stamped at start, not completion, so a request that outlives the idle
+   *  window is protected by `inFlight` rather than by a moving timestamp —
+   *  the two guards stay independent and each one is testable alone. */
+  lastSeen: number;
+  /** Requests currently executing on this session. A session is NEVER reaped
+   *  while this is above zero: killing a session mid-tool-call would drop the
+   *  response on the floor and leave the caller waiting forever. */
+  inFlight: number;
 }
 
 export interface CreateServeAppOptions {
@@ -97,6 +117,15 @@ export interface CreateServeAppOptions {
   /** Test seam: replaces `makeViewHandler` (which reads the repo's JSONL and
    *  shells out to git at construction time). */
   viewHandlerFactory?: (repoPath: string, repoId: string) => NodeHandler;
+  /** Test seam: passed through to every per-connection `createMcpServer`. */
+  ensureGraph?: CreateMcpServerOptions["ensureGraph"];
+  /** Concurrent-session cap. Defaults to `MAX_SESSIONS` (64); lowered in
+   *  tests so the cap and the reaper-then-retry path are cheap to exercise. */
+  maxSessions?: number;
+  /** Idle-session reap threshold. Defaults to `SESSION_IDLE_MS` (5 min). */
+  idleMs?: number;
+  /** Clock. Injectable so the reaper can be tested without waiting minutes. */
+  now?: () => number;
 }
 
 export interface ServeApp {
@@ -107,6 +136,11 @@ export interface ServeApp {
    *  watcher's `onReindexed` hook, and it is why the MCP tools and the viewer
    *  cannot drift apart: they are refreshed by the same event. */
   refresh: () => void;
+  /** Closes every session idle past `idleMs` with no request in flight, and
+   *  returns how many it closed. Called automatically before each new-session
+   *  attempt (so a server wedged at the cap by dead clients frees itself on
+   *  the next connect); exposed for tests. */
+  sweepIdleSessions: () => number;
   close: () => Promise<void>;
   sessionCount: () => number;
 }
@@ -121,23 +155,46 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
   res.end(text);
 }
 
+interface BodyOk {
+  ok: true;
+  /** `undefined` for an empty body — the caller decides whether that's legal. */
+  value: unknown;
+}
+interface BodyErr {
+  ok: false;
+  error: string;
+  /** True when the cap tripped: the caller must answer BEFORE destroying the
+   *  request, or the client gets a socket reset instead of the 400. */
+  oversize?: boolean;
+}
+
 /** Reads a request body as JSON, capped. Resolves `{ ok: false }` on a bad
- *  parse or an oversized body — never throws, never buffers past the cap. */
-function readJsonBody(req: IncomingMessage): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
-  return new Promise((resolve) => {
+ *  parse or an oversized body — never throws, never buffers past the cap.
+ *
+ *  Deliberately does NOT destroy the request itself: on oversize it stops
+ *  accumulating and resolves, leaving the caller to write its 400 first and
+ *  destroy afterwards. Destroying here raced the response and turned a clean
+ *  "body too large" into an unexplained connection reset. */
+function readJsonBody(req: IncomingMessage): Promise<BodyOk | BodyErr> {
+  return new Promise((resolvePromise) => {
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
-    const finish = (r: { ok: true; value: unknown } | { ok: false; error: string }): void => {
+    const finish = (r: BodyOk | BodyErr): void => {
       if (settled) return;
       settled = true;
-      resolve(r);
+      resolvePromise(r);
     };
     req.on("data", (chunk: Buffer) => {
+      if (settled) return; // over cap already; drain without buffering
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        finish({ ok: false, error: `request body exceeds ${MAX_BODY_BYTES} bytes` });
-        req.destroy();
+        chunks.length = 0;
+        finish({
+          ok: false,
+          error: `request body exceeds ${MAX_BODY_BYTES} bytes`,
+          oversize: true,
+        });
         return;
       }
       chunks.push(chunk);
@@ -188,8 +245,38 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
   const log = opts.log ?? ((m: string) => void process.stderr.write(`${m}\n`));
   const factory = opts.viewHandlerFactory ?? makeViewHandler;
   const repoPath = resolve(opts.repoPath);
+  const maxSessions = opts.maxSessions ?? MAX_SESSIONS;
+  const idleMs = opts.idleMs ?? SESSION_IDLE_MS;
+  const now = opts.now ?? Date.now;
+  // One session-log id per PROCESS (honoring REPOSKEIN_SESSION_ID), suffixed
+  // per token below. Computed once here rather than per connection: a
+  // reconnecting agent should append to the same file it was writing before,
+  // and `reposkein-mcp stats` groups by that id.
+  const logIdBase = resolveSessionId(process.env);
   let viewHandler = factory(repoPath, opts.repoId);
   const sessions = new Map<string, McpSession>();
+  // Slots claimed by an in-progress `initialize` that has not yet registered
+  // its session. The cap check and this increment are one synchronous pair,
+  // which is what closes the check-then-set race: without it, N concurrent
+  // initializes all saw `sessions.size` from before any of them had connected
+  // and every one of them was admitted.
+  let reservedSlots = 0;
+
+  /** Closes idle, quiescent sessions. See `ServeApp.sweepIdleSessions`. */
+  function sweepIdleSessions(): number {
+    const cutoff = now() - idleMs;
+    let closed = 0;
+    for (const [id, s] of [...sessions]) {
+      if (s.inFlight > 0) continue; // never kill a live request
+      if (s.lastSeen > cutoff) continue;
+      sessions.delete(id);
+      closed++;
+      log(`reposkein serve: reaped idle mcp session for "${s.tokenName}"`);
+      void s.transport.close().catch(() => undefined);
+      void s.server.close().catch(() => undefined);
+    }
+    return closed;
+  }
 
   const unauthorized = (res: ServerResponse, detail: string): void =>
     sendJson(
@@ -216,6 +303,28 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
   }
 
   async function handleMcp(req: IncomingMessage, res: ServerResponse, token: ServeToken): Promise<void> {
+    // No standalone notification stream. This server never sends anything the
+    // client didn't ask for (every tool is request/response, `enableJsonResponse`
+    // is on), so a GET would open a socket that stays open for the connection's
+    // whole life and produces nothing. Worse, it never completes — which meant
+    // it pinned `inFlight` above zero and made the idle reaper a no-op for any
+    // client that opened one. The spec allows 405 here; clients treat the
+    // stream as optional and carry on.
+    if (req.method === "GET") {
+      sendJson(
+        res,
+        405,
+        {
+          error: "sse_stream_not_supported",
+          detail:
+            "This server answers MCP over POST only (JSON responses, no server-initiated " +
+            "notifications). Use POST for requests and DELETE to end a session.",
+        },
+        { Allow: "POST, DELETE" }
+      );
+      return;
+    }
+
     const rawSessionId = req.headers["mcp-session-id"];
     const sessionId = Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId;
 
@@ -225,8 +334,8 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
         sendJson(res, 404, {
           error: "session_not_found",
           detail:
-            "This Mcp-Session-Id is unknown (expired, or the server restarted). " +
-            "Re-run initialize to open a new session.",
+            "This Mcp-Session-Id is unknown (expired after 5 minutes idle, closed, or the " +
+            "server restarted). Re-run initialize to open a new session.",
         });
         return;
       }
@@ -239,20 +348,37 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
         });
         return;
       }
-      const body =
-        req.method === "POST" ? await readJsonBody(req) : { ok: true as const, value: undefined };
-      if (!body.ok) {
-        sendJson(res, 400, { error: "bad_request", detail: body.error });
-        return;
+      // Claim the session for the duration of this request: `lastSeen` keeps
+      // the reaper away from an active client, `inFlight` keeps it away from
+      // an active REQUEST even if that request outlives the idle window.
+      existing.lastSeen = now();
+      existing.inFlight++;
+      try {
+        const body =
+          req.method === "POST" ? await readJsonBody(req) : { ok: true as const, value: undefined };
+        if (!body.ok) {
+          sendJson(res, 400, { error: "bad_request", detail: body.error });
+          if (body.oversize) req.destroy();
+          return;
+        }
+        if (req.method === "POST" && body.value === undefined) {
+          sendJson(res, 400, {
+            error: "bad_request",
+            detail: "Empty POST body. Send a JSON-RPC request, notification, or batch.",
+          });
+          return;
+        }
+        await existing.transport.handleRequest(req, res, body.value);
+      } finally {
+        existing.inFlight--;
       }
-      await existing.transport.handleRequest(req, res, body.value);
       return;
     }
 
     if (req.method !== "POST") {
       sendJson(res, 400, {
         error: "bad_request",
-        detail: "Mcp-Session-Id is required for GET and DELETE on /mcp.",
+        detail: "Mcp-Session-Id is required for DELETE on /mcp.",
       });
       return;
     }
@@ -260,6 +386,7 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
     const body = await readJsonBody(req);
     if (!body.ok) {
       sendJson(res, 400, { error: "bad_request", detail: body.error });
+      if (body.oversize) req.destroy();
       return;
     }
     if (!isInitializeRequest(body.value)) {
@@ -271,50 +398,71 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
       });
       return;
     }
-    if (sessions.size >= MAX_SESSIONS) {
+    // Free anything the network already abandoned before deciding we're full.
+    sweepIdleSessions();
+    if (sessions.size + reservedSlots >= maxSessions) {
       sendJson(res, 503, {
         error: "too_many_sessions",
-        detail: `This server holds the maximum of ${MAX_SESSIONS} MCP sessions. Retry later.`,
+        detail: `This server holds the maximum of ${maxSessions} MCP sessions. Retry later.`,
       });
       return;
     }
+    // Reserved synchronously, in the same tick as the check above.
+    reservedSlots++;
 
-    // A NEW connection: its own McpServer, its own RepoSession. Nothing in
-    // here is shared with any other session, which is what makes one
-    // caller's `select_repo` invisible to everybody else.
-    const server = createMcpServer({
-      cwd: repoPath,
-      envRepoPath: repoPath,
-      // One log file per token per process start, so an operator can see who
-      // did what without every connection sharing one file.
-      sessionId: `${defaultSessionId()}-${agentSlug(token.name)}`,
-      identity: token.name,
-      capabilities: { write: token.write },
-    });
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      // Plain JSON responses rather than an SSE stream per request: this
-      // server has no server-initiated notifications to push, and a
-      // request/response shape keeps sockets short-lived (and shutdown
-      // instant) on a long-running shared process.
-      enableJsonResponse: true,
-      onsessioninitialized: (id: string) => {
-        sessions.set(id, { transport, server, tokenName: token.name });
-        log(`reposkein serve: mcp session opened for "${token.name}" (write=${token.write})`);
-      },
-      onsessionclosed: (id: string) => {
-        sessions.delete(id);
-      },
-    });
-    transport.onclose = () => {
-      const id = transport.sessionId;
-      if (id) sessions.delete(id);
-      void server.close().catch(() => {
-        /* shutting down */
+    try {
+      // A NEW connection: its own McpServer, its own RepoSession. Nothing in
+      // here is shared with any other session, which is what makes one
+      // caller's `select_repo` invisible to everybody else.
+      const server = createMcpServer({
+        cwd: repoPath,
+        envRepoPath: repoPath,
+        // One log file per token per process, so an operator can see who did
+        // what without every connection sharing one file.
+        sessionId: `${logIdBase}-${agentSlug(token.name)}`,
+        identity: token.name,
+        capabilities: { write: token.write },
+        ...(opts.ensureGraph ? { ensureGraph: opts.ensureGraph } : {}),
       });
-    };
-    await server.connect(transport);
-    await transport.handleRequest(req, res, body.value);
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        // Plain JSON responses rather than an SSE stream per request: this
+        // server has no server-initiated notifications to push, and a
+        // request/response shape keeps sockets short-lived (and shutdown
+        // instant) on a long-running shared process.
+        enableJsonResponse: true,
+        onsessioninitialized: (id: string) => {
+          sessions.set(id, {
+            transport,
+            server,
+            tokenName: token.name,
+            lastSeen: now(),
+            // The initialize request itself is in flight right now.
+            inFlight: 1,
+          });
+          log(`reposkein serve: mcp session opened for "${token.name}" (write=${token.write})`);
+        },
+        onsessionclosed: (id: string) => {
+          sessions.delete(id);
+        },
+      });
+      transport.onclose = () => {
+        const id = transport.sessionId;
+        if (id) sessions.delete(id);
+        void server.close().catch(() => {
+          /* shutting down */
+        });
+      };
+      await server.connect(transport);
+      await transport.handleRequest(req, res, body.value);
+      const id = transport.sessionId;
+      if (id) {
+        const created = sessions.get(id);
+        if (created) created.inFlight--;
+      }
+    } finally {
+      reservedSlots--;
+    }
   }
 
   const handler: NodeHandler = (req, res) => {
@@ -356,9 +504,20 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
     if (fromQuery) {
       url.searchParams.delete("token");
       const q = url.searchParams.toString();
+      // `Secure` whenever the request reached us over TLS. We terminate plain
+      // HTTP ourselves, so the only evidence is the proxy's forwarded scheme —
+      // set it when that says https so the cookie can't leak back over a
+      // downgraded connection, and omit it otherwise (a `Secure` cookie on a
+      // genuinely plain-HTTP deployment is simply discarded by the browser,
+      // which would break the handshake this exists to provide).
+      const forwardedProto = req.headers["x-forwarded-proto"];
+      const rawProto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+      const proto = (rawProto ?? "").split(",")[0]!.trim().toLowerCase();
+      const secure = proto === "https" ? "; Secure" : "";
       res.writeHead(302, {
         Location: url.pathname + (q ? `?${q}` : ""),
-        "Set-Cookie": `${TOKEN_COOKIE}=${encodeURIComponent(token.token)}; Path=/; HttpOnly; SameSite=Strict`,
+        "Set-Cookie":
+          `${TOKEN_COOKIE}=${encodeURIComponent(token.token)}; Path=/; HttpOnly; SameSite=Strict${secure}`,
         "Cache-Control": "no-store",
       });
       res.end();
@@ -373,6 +532,7 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
     refresh: () => {
       viewHandler = factory(repoPath, opts.repoId);
     },
+    sweepIdleSessions,
     close: async () => {
       const open = [...sessions.values()];
       sessions.clear();
@@ -391,6 +551,50 @@ export function createServeApp(opts: CreateServeAppOptions): ServeApp {
     },
     sessionCount: () => sessions.size,
   };
+}
+
+/** `git status --porcelain` for the served checkout, or null when git is
+ *  unavailable / the path isn't a repo. Never throws. */
+export function gitPorcelainStatus(repoPath: string): string[] | null {
+  try {
+    const out = execFileSync("git", ["-C", repoPath, "status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.split("\n").filter((l) => l.trim() !== "");
+  } catch {
+    return null;
+  }
+}
+
+/** The startup warning for serving a checkout with local modifications, or
+ *  null when the tree is clean (or git can't tell us).
+ *
+ *  Serving a dirty checkout is legal and sometimes exactly what an operator
+ *  wants, so this WARNS and never refuses. But it is worth saying loudly:
+ *  `serve`'s own re-index writes into `.reposkein/` (the committed summary
+ *  shards absorb every `local/summaries-*.jsonl` sidecar), so a checkout that
+ *  someone also works in will accumulate diffs that look like the server's
+ *  fault — and a re-index landing on top of half-finished local edits indexes
+ *  those edits. A dedicated deploy clone has neither problem. */
+export function dirtyCheckoutWarning(
+  repoPath: string,
+  statusFn: (p: string) => string[] | null = gitPorcelainStatus
+): string | null {
+  const lines = statusFn(repoPath);
+  if (!lines || lines.length === 0) return null;
+  const sample = lines.slice(0, 5).map((l) => `    ${l}`);
+  const more = lines.length > sample.length ? `\n    … and ${lines.length - sample.length} more` : "";
+  return (
+    `reposkein serve: WARNING — the served checkout has ${lines.length} uncommitted ` +
+    `change(s):\n${sample.join("\n")}${more}\n` +
+    "  Serving it anyway. Two things to know:\n" +
+    "    - re-indexing writes into .reposkein/ (committed summary shards absorb the local\n" +
+    "      sidecars), so this working tree will keep accumulating diffs.\n" +
+    "    - a re-index picks up whatever is in the tree, including half-finished edits.\n" +
+    "  Recommended: serve a DEDICATED DEPLOY CLONE that only ever fast-forwards, not a\n" +
+    "  working copy someone edits. See docs/REMOTE.md."
+  );
 }
 
 /** `reposkein-mcp serve --http [path] [--port N] [--host H] [--watch-interval S]`.
@@ -428,6 +632,10 @@ export async function runServe(repoPath: string, repoId: string, opts: ServeOpti
         "but the SPA will 404. Rebuild the package (`npm run build` in mcp/) to serve it."
     );
   }
+
+  // Warn, never refuse: see `dirtyCheckoutWarning`.
+  const dirty = dirtyCheckoutWarning(repoPath);
+  if (dirty) console.error(dirty);
 
   const app = createServeApp({ repoPath, repoId, tokens: loaded.tokens });
   const watcher: HeadWatcher = startHeadWatcher(repoPath, repoId, {
