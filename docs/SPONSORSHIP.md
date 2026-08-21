@@ -1,9 +1,8 @@
 # Sponsorship
 
-**Status: implemented, OFF, and not yet ratified for this surface.** Nothing
-in this document happens on a normal install: the code ships inert, no
-credentials exist, and the placement below still needs a decision record
-before anyone turns it on. See [Placement status](#placement-status).
+**Status: implemented and OFF by default; the MCP-result placement is recorded as `proposed`, awaiting human ratification.** Nothing in this
+document happens on an install that has not opted in *and* supplied
+credentials. See [Placement](#placement).
 
 RepoSkein's infra and indexer maintenance are funded in part by
 [Ko-fi](https://ko-fi.com/mongx) support. REP-28 adds the other half of that
@@ -11,32 +10,37 @@ story: an **opt-in, disclosed, fail-open sponsored slot** delivered by
 [Lulu Ads](https://getlulu.dev) (CPA, 70% publisher share), implemented in
 `mcp/src/ads/`.
 
-## Placement status
+## Placement
 
-The governing decision record —
-`adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`
-(`reposkein-mcp adr export`, or `.reposkein/decisions/`) — authorizes **one**
-sponsorship surface: a disclosed chip in the **viewer's chrome**. It also
-rules, permanently, that `semantic_find`'s retrieval path and embed-server
-carry no sponsored content on any code path, and it binds three cross-cutting
-constraints on any sponsorship work: no sponsored data in `.reposkein/`
-artifacts, fixed-schema length-capped payloads, and an immutable `sponsored`
-label.
+Two decision records govern sponsorship, and both are live
+(`reposkein-mcp adr export`, or `.reposkein/decisions/`):
 
-What REP-28 implements is a **slot on an MCP tool-result envelope**, which is
-a different surface from the viewer chip. Every cross-cutting constraint above
-is honoured and enforced by tests (see [Invariants](#invariants-and-where-they-are-tested)),
-and `semantic_find` is excluded in code. But the surface itself is not one the
-ADR ruled on, and the ADR is explicit that a placement it did not authorize
-needs "a new ADR that explicitly supersedes this one, not a quiet exception".
+- `adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no`
+  — what may **never** carry ads: embed-server and the `semantic_find`
+  retrieval path, permanently and on every code path; no required ad
+  container; static exports stay ad-free with no view-time-fetch exception.
+  Plus the constraints binding every payload: no sponsored data in
+  `.reposkein/` artifacts, fixed-schema length-capped copy, an immutable
+  `sponsored` label. It also authorizes a disclosed chip in the **viewer
+  chrome**, which is still unbuilt.
+- `adr:2026-08-21-mcp-tool-result-sponsored-slot-ratified-companion-to-the-vie`
+  — **ratifies the MCP tool-result slot this document describes**, under
+  exactly those constraints. It complements rather than supersedes the record
+  above (whose exclusions all remain in force) and closes a drafting gap: the
+  MCP surface was the original ask REP-28 was cut for, and the earlier
+  record's silence about it was an omission, not a refusal.
 
-So, deliberately:
+Read them together: the first for what is forbidden everywhere, the second for
+this placement. Every constraint above is enforced in code and covered by
+tests — see [Invariants](#invariants-and-where-they-are-tested).
 
-- The mechanism ships **off**, and cannot be switched on by accident.
-- No publisher credentials exist, so even an opted-in machine is inert.
-- **Before enabling this on a real install, record and ratify a decision for
-  the MCP-result placement** (`record_decision` → `set_decision_status`), or
-  move the slot to the ADR-authorized viewer chip instead.
+One limitation is accepted on the record rather than designed around: a
+`_meta` field is **machine-visible**. Hosts that render MCP Apps surface it to
+a human; a plain CLI host does not render it at all, so there the disclosure
+reaches the model and not the person, which makes this slot commercially
+meaningful only in rendering hosts. That is *not* a licence to move sponsor
+copy into prose, an extra content block, or the tool's answer — all forbidden.
+The remedy for human-visible disclosure is the viewer chip.
 
 ## The gating chain
 
@@ -186,6 +190,11 @@ its low-level client is used — `new LuluAds({...}).sponsoredSlot({context,
 timeoutMs})` — and it is imported **dynamically**, so with ads off the package
 is never loaded at all.
 
+It is a regular `dependency`, deliberately: `optionalDependencies` would trade
+~280KB of never-executed code for a failure mode where an opted-in install
+silently serves no slots because the package isn't there. Inert-but-present is
+easier to reason about than absent-and-quiet.
+
 Deliberately unused:
 
 - `enableLuluAds` / `withLuluAds` — they proxy `registerTool` and mutate the
@@ -200,7 +209,7 @@ Deliberately unused:
   into prose.
 - The widget / MCP-Apps exports — no rendered ad surface is in scope.
 
-## Getting credentials (when the placement is ratified)
+## Getting credentials (to turn it on)
 
 1. Register at <https://getlulu.dev/publishers> — the API key is shown once.
 2. Export `LULU_ADS_PUBLISHER_ID` and `LULU_ADS_API_KEY` (see
