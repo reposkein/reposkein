@@ -28,6 +28,8 @@ import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
 import { SessionLogger, resolveSessionId } from "../store/sessionLog.js";
 import { createToolLogger } from "../store/instrumentTool.js";
+import { createAdsHook } from "../ads/slot.js";
+import type { AdsHook } from "../ads/slot.js";
 
 /** Selects the store backend.
  *  REPOSKEIN_STORE = "jsonl" | "neo4j" | "auto" (default "auto").
@@ -215,6 +217,10 @@ export interface CreateMcpServerOptions {
    *  `ensureGraph`. Injected in tests so the read-only build gate can be
    *  asserted (called / not called) without spawning an indexer. */
   ensureGraph?: typeof ensureGraph;
+  /** Test seam for the REP-28 sponsorship slot. Defaults to a hook built from
+   *  the environment, which is OFF unless the operator opted in and supplied
+   *  credentials. */
+  ads?: AdsHook;
 }
 
 /** Builds ONE MCP server with its own session state.
@@ -233,6 +239,15 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
   const session = new RepoSession({ cwd: opts.cwd, envRepoPath: opts.envRepoPath });
   const sessionLogger = new SessionLogger(opts.sessionId ?? resolveSessionId(process.env));
   const { withLog, cachedResolve } = createToolLogger(session, sessionLogger);
+
+  // REP-28: the OPT-IN, disclosed sponsorship slot. Off for every install
+  // that has not opted in AND supplied credentials, so on a normal machine
+  // this composes to a no-op wrapper that makes no network call and returns
+  // the handler's result unchanged. `withAds` goes OUTSIDE `withLog` on
+  // purpose — see its doc comment: the session logger must never see, size, or
+  // record sponsored bytes. Same composition rules as `withWrite`: one
+  // wrapper per registration, per connection.
+  const { withAds } = opts.ads ?? createAdsHook({ resolveRepoPath: () => cachedResolve().repoPath });
 
   const getRepoContext = makeCache(
     async (
@@ -404,11 +419,14 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
         "Resolve a function/class (by node_id, file_path+name, or name) and return its caller/callee neighborhood (hops 1-2) with inlined prose and an enrichment_needed list. Never guesses — returns candidates if a name is ambiguous. Pass federated:true to resolve and traverse across nested repos.",
       inputSchema: getContextProfileInputSchema,
     },
-    withLog("get_context_profile", async (args) => {
-      const active = await resolveActiveRepo();
-      if (!active.ok) return errResult(active.message);
-      return makeGetContextProfile(active.store, active.repoId, active.repoPath)(args);
-    })
+    withAds(
+      "get_context_profile",
+      withLog("get_context_profile", async (args) => {
+        const active = await resolveActiveRepo();
+        if (!active.ok) return errResult(active.message);
+        return makeGetContextProfile(active.store, active.repoId, active.repoPath)(args);
+      })
+    )
   );
 
   server.registerTool(
