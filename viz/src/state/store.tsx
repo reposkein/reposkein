@@ -327,10 +327,22 @@ export function reducer(state: State, a: Action): State {
     }
     case "select":
       // Selecting a different node invalidates a live impact / focus overlay.
+      //
+      // DESELECTION IS NOT A CAMERA MOVE (V4 §3). `select(null)` deliberately
+      // does NOT bump fitNonce: with nothing selected, Controls' fit effect
+      // falls through to "frame every visible cluster", so bumping would turn
+      // Esc — and a misclick on empty space — into an unrequested reframe of
+      // the whole constellation. Selecting a node still frames it.
+      //
+      // `focusTarget` is cleared either way: it is a one-shot fly request, and
+      // a stale one surviving into a later fitNonce bump is exactly the V1 bug
+      // ("flew to the node I looked at two clicks ago") that `revealAndSelect`
+      // already guards against.
       return {
         ...state,
         selected: a.id,
-        fitNonce: state.fitNonce + 1,
+        focusTarget: null,
+        fitNonce: a.id === null ? state.fitNonce : state.fitNonce + 1,
         impact: a.id === state.selected ? state.impact : null,
         focus: a.id === state.selected ? state.focus : null,
       };
@@ -563,6 +575,9 @@ export interface Actions {
   collapseBranch(): void;
   /** `⇧x` — close every expansion above file level, everywhere. */
   collapseToFileLevel(): void;
+  /** Select a node, or DESELECT with null. Deselection never moves the camera
+   *  (see the reducer's `select` case) — it is the tail of the layered Esc
+   *  stack and what a misclick on empty space does. */
   select(id: string | null): void;
   requestFit(): void;
   /** Expand the ancestor chain of `id`, select it, and — only when `fly` is

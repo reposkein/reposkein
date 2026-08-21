@@ -66,7 +66,7 @@ export const KEYMAP: KeymapGroup[] = [
       { keys: ["scroll"], description: "Zoom", binding: null },
       { keys: ["click cluster"], description: "Expand or collapse it", binding: null },
       { keys: ["click star"], description: "Inspect it (opens the Inspector)", binding: null },
-      { keys: ["click empty space"], description: "Collapse one level", binding: null },
+      { keys: ["click empty space"], description: "Deselect (never collapses, never moves the camera)", binding: null },
     ],
   },
 ];

@@ -26,6 +26,7 @@ import { ErrorScreen } from "../panels/ErrorScreen";
 import { toggleLayer } from "../panels/layerState";
 import { requestCommandPalette } from "../panels/paletteOpenState";
 import { handleGlobalKey } from "../panels/globalKeys";
+import { handlePointerMissed } from "../scene/pointerMissed";
 import { resolveNodeFallback } from "../data/nodeFallback";
 import { CaptureBridge } from "../scene/Screenshot";
 
@@ -97,9 +98,7 @@ function View() {
         frameloop="demand"
         gl={{ antialias: true, preserveDrawingBuffer: true }}
         style={{ background: "transparent" }}
-        onPointerMissed={(e) => {
-          if (e.button === 0) store.collapseLevel();
-        }}
+        onPointerMissed={(e) => handlePointerMissed(e, store)}
       >
         <fogExp2 attach="fog" args={[0x070a12, 0.0016]} />
         <ambientLight intensity={0.6} />
