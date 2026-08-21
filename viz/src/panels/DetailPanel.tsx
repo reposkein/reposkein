@@ -66,18 +66,9 @@ export function DetailPanel() {
   }, [model, store.selected]);
 
   function navigateToNode(id: string) {
-    const clusterKey = model.clusterOfNode.get(id) ?? id;
-    const chain = model.ancestors.get(clusterKey);
-    if (chain) {
-      for (const ak of chain) {
-        const c = model.byKey.get(ak);
-        if (c && c.children.length > 0 && !store.expanded.has(ak)) {
-          store.toggleExpand(ak);
-        }
-      }
-    }
-    store.select(id);
-    store.setFocusTarget(id);
+    // One transition: expand the ancestor chain, select, fly (see
+    // Actions.revealAndSelect).
+    store.revealAndSelect(id, { fly: true });
   }
 
   const columns = useMemo(

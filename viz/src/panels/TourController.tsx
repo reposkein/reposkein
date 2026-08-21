@@ -47,14 +47,14 @@ export function TourController() {
       if (stop.collapsePrevious) store.resetExpansion();
       // 2. LENS — per-stop single lens (no fitNonce bump → won't yank the camera).
       store.setLens(stop.lens);
-      // 3. EXPAND (bounded). The keys are computed against the INTENDED post-reset
-      //    expansion (resetExpansion sets expanded := {root}, but store.expanded
-      //    here is still the stale pre-reset render snapshot) — see tourExpandKeys.
-      //    Module: open expandKeys one level (files). Node: reveal the focus
-      //    node's ancestor chain. Each returned key is a real state change.
-      for (const key of tourExpandKeys(model, stop, store.expanded)) {
-        store.toggleExpand(key);
-      }
+      // 3. EXPAND (bounded), as ONE transition with no camera consequence — the
+      //    stop frames itself in step 5, so a refit per expansion would yank the
+      //    camera mid-sequence. The keys are computed against the INTENDED
+      //    post-reset expansion (resetExpansion sets expanded := {root}, but
+      //    store.expanded here is still the stale pre-reset render snapshot) —
+      //    see tourExpandKeys. Module: open expandKeys one level (files). Node:
+      //    reveal the focus node's ancestor chain.
+      store.revealWithoutRefit(tourExpandKeys(model, stop, store.expanded));
       // 4. FOCUS / ISOLATE — select strictly before toggleFocus.
       if (stop.focusNodeId) {
         store.select(stop.focusNodeId);

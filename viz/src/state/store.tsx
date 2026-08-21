@@ -4,7 +4,6 @@ import {
   useEffect,
   useMemo,
   useReducer,
-  type Dispatch,
   type ReactNode,
 } from "react";
 import GraphWorker from "../data/worker/graph.worker.ts?worker";
@@ -25,6 +24,12 @@ import {
 import { ALL_EDGE_TYPES } from "../data/lens";
 import type { CochangeMap } from "../data/temporal";
 import { buildStaticResult, staticPayload } from "../data/staticMode";
+import {
+  useChannelSetter,
+  useChannelValue,
+  useNewChannel,
+  type Channel,
+} from "./channel";
 
 type Status =
   | { kind: "loading"; phase: string }
@@ -37,12 +42,20 @@ interface Filters {
   minConfidence: number;   // 0..1, default 0
 }
 
-interface State {
+/** Live "showing N of M connections" readout: drawn = bundles rendered after
+ *  the cap, total = pre-cap bundle count. Published by EdgeLines through the
+ *  edgeStats CHANNEL (not the reducer) — it updates on every render pass, and
+ *  only the HeaderBar readout should re-render for it. */
+export interface EdgeStats {
+  drawn: number;
+  total: number;
+}
+
+export interface State {
   status: Status;
   model: ClientModel | null;
   expanded: Set<string>;
   selected: string | null;
-  hovered: string | null;
   /** Bumped whenever the visible set changes (load / expand / collapse) or a
    *  star is framed, so the camera-fit hook can refit to what's on screen. */
   fitNonce: number;
@@ -75,23 +88,26 @@ interface State {
   /** Holten edge-bundling straighten factor [0,1]: 1 = curves hug the
    *  hierarchy, 0 = straight chords (reproduces the pre-bundling render). */
   bundleBeta: number;
-  /** Live "showing N of M connections" readout: drawn = bundles rendered after
-   *  the cap, total = pre-cap bundle count. Dispatched post-commit by EdgeLines. */
-  edgeStats: { drawn: number; total: number };
+  /** Gentle idle azimuth drift after a few seconds of no interaction.
+   *  DEFAULT OFF: with `frameloop="demand"` an always-on drift means the GPU
+   *  never sleeps, and an unrequested camera move fights the reader. Controls
+   *  respects this flag; a keyboard binding lands with the shortcut pass. */
+  idleDrift: boolean;
 }
 
 /** Confidence-audit preset: which low-confidence buckets to keep visible. */
 export type AuditMode = "off" | "ambiguous" | "ambiguous+name";
 
-type Action =
+export type Action =
   | { t: "progress"; phase: string }
   | { t: "ready"; model: ClientModel }
   | { t: "error"; message: string }
   | { t: "toggleExpand"; key: string }
   | { t: "collapseLevel" }
   | { t: "select"; id: string | null }
-  | { t: "hover"; id: string | null }
   | { t: "requestFit" }
+  | { t: "revealAndSelect"; id: string; fly?: boolean; collapseDeeper?: boolean }
+  | { t: "revealWithoutRefit"; keys: string[] }
   | { t: "setKindFilter"; kind: string; hidden: boolean }
   | { t: "setEdgeTypeFilter"; type: string; hidden: boolean }
   | { t: "setMinConfidence"; value: number }
@@ -109,7 +125,7 @@ type Action =
   | { t: "resetView" }
   | { t: "resetExpansion" }
   | { t: "setBundleBeta"; value: number }
-  | { t: "setEdgeStats"; stats: { drawn: number; total: number } };
+  | { t: "setIdleDrift"; on: boolean };
 
 /** Depth of a cluster key in the tree (root galaxy = 0). Lets collapseLevel
  *  shut the deepest-expanded branch first ("one level up"). */
@@ -153,7 +169,7 @@ function defaultLensFilters(): Partial<State> {
   };
 }
 
-function reducer(state: State, a: Action): State {
+export function reducer(state: State, a: Action): State {
   switch (a.t) {
     case "progress":
       return { ...state, status: { kind: "loading", phase: a.phase } };
@@ -208,10 +224,61 @@ function reducer(state: State, a: Action): State {
         impact: a.id === state.selected ? state.impact : null,
         focus: a.id === state.selected ? state.focus : null,
       };
-    case "hover":
-      return { ...state, hovered: a.id };
     case "requestFit":
       return { ...state, fitNonce: state.fitNonce + 1 };
+    case "revealAndSelect": {
+      // ONE transition for "make this node visible and inspect it": expand its
+      // ancestor chain, select it, optionally fly to it — with a SINGLE fitNonce
+      // bump. The callers used to dispatch toggleExpand per ancestor plus select
+      // plus setFocusTarget, so a search hit bumped fitNonce N+2 times and every
+      // intermediate expansion was a separately-reduced state the scene could
+      // have rendered.
+      if (!state.model) return state;
+      const model = state.model;
+      const expanded = expandToReveal(model, state.expanded, [a.id]);
+      if (a.collapseDeeper) {
+        // Breadcrumb semantics: after opening the chain UP to this crumb, shut
+        // every still-expanded cluster strictly BELOW it (an ancestor chain is
+        // root→self, so its index in a descendant's chain is that descendant's
+        // depth measured from the root).
+        const targetKey = model.clusterOfNode.get(a.id) ?? a.id;
+        const targetDepth = depthOf(model, targetKey);
+        for (const key of [...expanded]) {
+          if (key === model.rootKey) continue;
+          const chain = model.ancestors.get(key);
+          if (!chain) continue;
+          if (chain.indexOf(targetKey) !== -1 && chain.length - 1 > targetDepth) {
+            expanded.delete(key);
+          }
+        }
+      }
+      const sameSelection = a.id === state.selected;
+      return {
+        ...state,
+        expanded,
+        selected: a.id,
+        focusTarget: a.fly ? a.id : state.focusTarget,
+        impact: sameSelection ? state.impact : null,
+        focus: sameSelection ? state.focus : null,
+        fitNonce: state.fitNonce + 1,
+      };
+    }
+    case "revealWithoutRefit": {
+      // Open explicit cluster keys with NO camera consequence: the tour computes
+      // its own stop framing afterwards, so refitting per expansion would yank
+      // the camera mid-sequence. Set-union (not toggle) so a key already open
+      // stays open instead of closing.
+      if (a.keys.length === 0) return state;
+      const expanded = new Set(state.expanded);
+      let changed = false;
+      for (const key of a.keys) {
+        if (expanded.has(key)) continue;
+        expanded.add(key);
+        changed = true;
+      }
+      if (!changed) return state;
+      return { ...state, expanded };
+    }
     case "setKindFilter": {
       const kinds = new Set(state.filters.kinds);
       if (a.hidden) kinds.add(a.kind);
@@ -345,20 +412,26 @@ function reducer(state: State, a: Action): State {
     case "setBundleBeta":
       // Clamp [0,1]; no fitNonce bump — restyling must not yank the camera.
       return { ...state, bundleBeta: Math.max(0, Math.min(1, a.value)) };
-    case "setEdgeStats": {
-      const { drawn, total } = a.stats;
-      if (state.edgeStats.drawn === drawn && state.edgeStats.total === total) return state;
-      return { ...state, edgeStats: { drawn, total } };
-    }
+    case "setIdleDrift":
+      if (state.idleDrift === a.on) return state;
+      return { ...state, idleDrift: a.on };
   }
 }
 
-interface Store extends State {
+/** The stable action surface. Every method is identity-stable for the lifetime
+ *  of the provider (it only closes over `dispatch` and the channels), so a
+ *  component that merely dispatches never re-renders when state changes. */
+export interface Actions {
   toggleExpand(key: string): void;
   collapseLevel(): void;
   select(id: string | null): void;
-  hover(id: string | null): void;
   requestFit(): void;
+  /** Expand the ancestor chain of `id`, select it, and (with `fly`) frame it —
+   *  ONE reducer transition and ONE fitNonce bump. `collapseDeeper` additionally
+   *  shuts clusters below the target (breadcrumb "go up to here"). */
+  revealAndSelect(id: string, opts?: { fly?: boolean; collapseDeeper?: boolean }): void;
+  /** Open explicit cluster keys without touching selection or the camera. */
+  revealWithoutRefit(keys: string[]): void;
   setKindFilter(kind: string, hidden: boolean): void;
   setEdgeTypeFilter(type: string, hidden: boolean): void;
   setMinConfidence(value: number): void;
@@ -376,35 +449,72 @@ interface Store extends State {
   resetView(): void;
   resetExpansion(): void;
   setBundleBeta(value: number): void;
-  setEdgeStats(stats: { drawn: number; total: number }): void;
+  setIdleDrift(on: boolean): void;
+  /** Pointer-rate: writes the hover CHANNEL, not the reducer. */
+  hover(id: string | null): void;
+  /** Per-pass: writes the edgeStats CHANNEL, not the reducer. */
+  setEdgeStats(stats: EdgeStats): void;
 }
 
-const Ctx = createContext<Store | null>(null);
+interface Channels {
+  hovered: Channel<string | null>;
+  edgeStats: Channel<EdgeStats>;
+}
+
+/** The merged read+write view kept for ergonomics at call sites that need both.
+ *  Consumers that only need one half should prefer `useStoreState()` /
+ *  `useActions()` so they re-render for less. */
+export type Store = State & Actions;
+
+const StateCtx = createContext<State | null>(null);
+const ActionsCtx = createContext<Actions | null>(null);
+const ChannelsCtx = createContext<Channels | null>(null);
+
+export const INITIAL_STATE: State = {
+  status: { kind: "loading", phase: "starting" },
+  model: null,
+  expanded: new Set<string>(),
+  selected: null,
+  fitNonce: 0,
+  filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
+  focusTarget: null,
+  lens: "all",
+  emphasis: "none",
+  audit: "off",
+  impact: null,
+  coupling: false,
+  cochange: null,
+  focus: null,
+  focusDepth: DEFAULT_FOCUS_DEPTH,
+  tour: false,
+  bundleBeta: 0.85,
+  idleDrift: false,
+};
+
+/** Fresh initial state per provider — the Sets must not be shared across mounts
+ *  (tests mount several) and the reducer treats them as owned values. */
+function initialState(): State {
+  return {
+    ...INITIAL_STATE,
+    expanded: new Set<string>(),
+    filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
+  };
+}
+
+const sameEdgeStats = (a: EdgeStats, b: EdgeStats) =>
+  a.drawn === b.drawn && a.total === b.total;
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch]: [State, Dispatch<Action>] = useReducer<
-    (state: State, action: Action) => State
-  >(reducer, {
-    status: { kind: "loading", phase: "starting" },
-    model: null,
-    expanded: new Set<string>(),
-    selected: null,
-    hovered: null,
-    fitNonce: 0,
-    filters: { kinds: new Set<string>(), edgeTypes: new Set<string>(), minConfidence: 0 },
-    focusTarget: null,
-    lens: "all",
-    emphasis: "none",
-    audit: "off",
-    impact: null,
-    coupling: false,
-    cochange: null,
-    focus: null,
-    focusDepth: DEFAULT_FOCUS_DEPTH,
-    tour: false,
-    bundleBeta: 0.85,
-    edgeStats: { drawn: 0, total: 0 },
-  });
+  // React 19 dropped the 2-arg `useReducer<Reducer>` overload; the plain
+  // (reducer, initialState) form infers [State, Dispatch<Action>] correctly.
+  const [state, dispatch] = useReducer(reducer, undefined, initialState);
+
+  // Pointer-rate / per-pass channels. Created once; the context value is the
+  // channel OBJECT, so publishing a value never re-renders a context consumer —
+  // only the components that subscribed to the value itself.
+  const hovered = useNewChannel<string | null>(null);
+  const edgeStats = useNewChannel<EdgeStats>({ drawn: 0, total: 0 }, sameEdgeStats);
+  const channels = useMemo<Channels>(() => ({ hovered, edgeStats }), [hovered, edgeStats]);
 
   useEffect(() => {
     // Static export mode (graph-data.js baked window.__REPOSKEIN_GRAPH__):
@@ -447,14 +557,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => worker.terminate();
   }, []);
 
-  const store = useMemo<Store>(
+  // Stable for the provider's lifetime: `dispatch` is stable and the channels
+  // are created once, so this object is created ONCE. That is the whole point of
+  // splitting dispatch from state.
+  const actions = useMemo<Actions>(
     () => ({
-      ...state,
       toggleExpand: (key) => dispatch({ t: "toggleExpand", key }),
       collapseLevel: () => dispatch({ t: "collapseLevel" }),
       select: (id) => dispatch({ t: "select", id }),
-      hover: (id) => dispatch({ t: "hover", id }),
       requestFit: () => dispatch({ t: "requestFit" }),
+      revealAndSelect: (id, opts) =>
+        dispatch({
+          t: "revealAndSelect",
+          id,
+          fly: opts?.fly,
+          collapseDeeper: opts?.collapseDeeper,
+        }),
+      revealWithoutRefit: (keys) => dispatch({ t: "revealWithoutRefit", keys }),
       setKindFilter: (kind, hidden) => dispatch({ t: "setKindFilter", kind, hidden }),
       setEdgeTypeFilter: (type, hidden) => dispatch({ t: "setEdgeTypeFilter", type, hidden }),
       setMinConfidence: (value) => dispatch({ t: "setMinConfidence", value }),
@@ -472,16 +591,68 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       resetView: () => dispatch({ t: "resetView" }),
       resetExpansion: () => dispatch({ t: "resetExpansion" }),
       setBundleBeta: (value) => dispatch({ t: "setBundleBeta", value }),
-      setEdgeStats: (stats) => dispatch({ t: "setEdgeStats", stats }),
+      setIdleDrift: (on) => dispatch({ t: "setIdleDrift", on }),
+      hover: (id) => hovered.set(id),
+      setEdgeStats: (stats) => edgeStats.set(stats),
     }),
-    [state]
+    [hovered, edgeStats]
   );
 
-  return <Ctx.Provider value={store}>{children}</Ctx.Provider>;
+  return (
+    <ChannelsCtx.Provider value={channels}>
+      <ActionsCtx.Provider value={actions}>
+        <StateCtx.Provider value={state}>{children}</StateCtx.Provider>
+      </ActionsCtx.Provider>
+    </ChannelsCtx.Provider>
+  );
 }
 
-export function useStore(): Store {
-  const s = useContext(Ctx);
-  if (!s) throw new Error("useStore must be used within StoreProvider");
+/** Reducer state. Re-renders on any reducer transition. */
+export function useStoreState(): State {
+  const s = useContext(StateCtx);
+  if (!s) throw new Error("useStoreState must be used within StoreProvider");
   return s;
+}
+
+/** The stable action surface. NEVER re-renders the caller. */
+export function useActions(): Actions {
+  const a = useContext(ActionsCtx);
+  if (!a) throw new Error("useActions must be used within StoreProvider");
+  return a;
+}
+
+function useChannels(): Channels {
+  const c = useContext(ChannelsCtx);
+  if (!c) throw new Error("channel hooks must be used within StoreProvider");
+  return c;
+}
+
+/** The hovered node id, at pointer rate. Subscribing re-renders ONLY the
+ *  caller — the HUD chrome must never read this. */
+export function useHovered(): string | null {
+  return useChannelValue(useChannels().hovered);
+}
+
+/** Stable hover publisher (scene pointer handlers). */
+export function useSetHovered(): (id: string | null) => void {
+  return useChannelSetter(useChannels().hovered);
+}
+
+/** The live bundle-draw counters, published per EdgeLines pass. */
+export function useEdgeStats(): EdgeStats {
+  return useChannelValue(useChannels().edgeStats);
+}
+
+/** Stable edgeStats publisher (EdgeLines). */
+export function useSetEdgeStats(): (stats: EdgeStats) => void {
+  return useChannelSetter(useChannels().edgeStats);
+}
+
+/** State + actions in one object, for the many call sites that need both.
+ *  Re-renders with reducer state (same as before the split) — hovered and
+ *  edgeStats are deliberately NOT part of it. */
+export function useStore(): Store {
+  const state = useStoreState();
+  const actions = useActions();
+  return useMemo(() => ({ ...state, ...actions }), [state, actions]);
 }

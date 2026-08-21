@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Html } from "@react-three/drei";
-import { useStore } from "../state/store";
+import { useHovered, useStoreState } from "../state/store";
 import { visibleClusters } from "../data/clientModel";
 
 /** Maximum number of cluster-level (dir/file) labels rendered when zoomed out. */
@@ -13,15 +13,16 @@ const MAX_CLUSTER_LABELS = 20;
  *    which crate/file is which without zooming in.
  *  Symbol names (stars) are shown only when hovered or selected. */
 export function Labels() {
-  const store = useStore();
+  const store = useStoreState();
   const model = store.model!;
+  const hovered = useHovered();
 
   const targets = useMemo(() => {
     const visible = visibleClusters(model, store.expanded);
 
     // Always-on: hovered + selected.
     const priorityIds = new Set<string>();
-    if (store.hovered) priorityIds.add(store.hovered);
+    if (hovered) priorityIds.add(hovered);
     if (store.selected) priorityIds.add(store.selected);
 
     const out: { key: string; label: string; pos: [number, number, number]; priority: boolean }[] = [];
@@ -82,7 +83,7 @@ export function Labels() {
     }
 
     return out;
-  }, [model, store.hovered, store.selected, store.expanded]);
+  }, [model, hovered, store.selected, store.expanded]);
 
   return (
     <>

@@ -25,20 +25,10 @@ export function SearchPanel() {
 
   function selectResult(id: string) {
     if (!model) return;
-    const clusterKey = model.clusterOfNode.get(id) ?? id;
-    // Walk ancestors and expand them so the node becomes visible.
-    const chain = model.ancestors.get(clusterKey);
-    if (chain) {
-      for (const ak of chain) {
-        const c = model.byKey.get(ak);
-        // Expand non-leaf ancestors that are not yet expanded.
-        if (c && c.children.length > 0 && !store.expanded.has(ak)) {
-          store.toggleExpand(ak);
-        }
-      }
-    }
-    store.select(id);
-    store.setFocusTarget(id);
+    // One transition: expand the ancestor chain, select, fly. (Was a
+    // toggleExpand-per-ancestor walk plus select plus setFocusTarget — N+2
+    // fitNonce bumps for one user intent.)
+    store.revealAndSelect(id, { fly: true });
     setQuery("");
     setOpen(false);
   }
