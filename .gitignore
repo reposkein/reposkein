@@ -28,6 +28,7 @@ docs/prd.md
 
 # Local-only working docs (plans, skill scratch) — never commit.
 docs/superpowers/
+.superpowers/
 
 # Cached indexer binary (postinstall fetch, M4-D1) — never commit.
 mcp/bin/
@@ -54,3 +55,16 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# REP-29 supporter entitlement — the Ed25519 SIGNING (private) key. Its public
+# half is committed on purpose (mcp/src/ads/supporterKey.ts); the private half
+# mints entitlement tokens, belongs in a secret store, and must never reach
+# git. Matched by name AND by suffix so a copy under a different name is still
+# caught. Cloudflare's local secret file (.dev.vars) is ignored for the same
+# reason — it holds the same key while testing the fulfilment worker.
+supporter-signing-key*
+*.local.pem
+*.private.pem
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

@@ -11,7 +11,13 @@ import { createToolLogger } from "../src/store/instrumentTool.js";
 
 const TOOL = "get_context_profile";
 const CREDS = { LULU_ADS_PUBLISHER_ID: "pub_test", LULU_ADS_API_KEY: "lk_test" };
-const ON = { REPOSKEIN_ADS: "on", ...CREDS };
+/** `createAdsHook` consults the real supporter gate unless one is injected,
+ *  and that gate reads `~/.config/reposkein/supporter.jwt`. Pinning the
+ *  entitlement path at a location that holds nothing keeps these tests about
+ *  the ads code rather than about whether the person running them happens to
+ *  have bought a membership. */
+const NO_ENTITLEMENT = join(mkdtempSync(join(tmpdir(), "reposkein-ads-noent-")), "supporter.jwt");
+const ON = { REPOSKEIN_ADS: "on", ...CREDS, REPOSKEIN_SUPPORTER_FILE: NO_ENTITLEMENT };
 const GOOD_PAYLOAD = { label: "Sponsored", text: "Widget CI builds in 20s.", url: "https://ads.getlulu.dev/c/tok" };
 
 /** The result a tool computes. Deliberately shaped like the real ones: one
