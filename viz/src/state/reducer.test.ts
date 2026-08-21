@@ -204,8 +204,7 @@ describe("revealWithoutRefit", () => {
   });
 });
 
-describe("setIdleDrift", () => {
-  it("defaults off and toggles without touching the camera", () => {
+describe("setIdleDrift", () => {  it("defaults off and toggles without touching the camera", () => {
     const model = clientModel(graph());
     const ready = readyState(model);
     expect(ready.idleDrift).toBe(false);
@@ -214,5 +213,145 @@ describe("setIdleDrift", () => {
     expect(on.fitNonce).toBe(ready.fitNonce);
     // Idempotent: setting the same value is not a state change.
     expect(reducer(on, { t: "setIdleDrift", on: true })).toBe(on);
+  });
+});
+
+/** SCOPED COLLAPSE (Astrolabe V4 §2). V3 had ONE collapse: shut the
+ *  globally-deepest expanded cluster, wherever it was. That could close a
+ *  branch on the far side of the graph from the one you were reading, and it
+ *  was bound to Esc, so a stray Esc silently rearranged the scene. `x` and
+ *  `⇧x` replace it with two collapses that are both anchored to something the
+ *  reader can point at: the selection, and the file level. */
+describe("collapseBranch — `x`", () => {
+  it("a selected symbol closes ITS file, and the selection climbs to that file", () => {
+    const model = clientModel(graph());
+    const deep = reducer(readyState(model), { t: "revealAndSelect", id: B1, fly: true });
+    const fileKey = "file:r:mcp/deep/b.ts";
+    expect(deep.expanded.has(fileKey)).toBe(true);
+
+    const next = reducer(deep, { t: "collapseBranch" });
+    expect(next.expanded.has(fileKey)).toBe(false);
+    // The directory chain above it stays open — this is a one-level climb.
+    expect(next.expanded.has("dir:r:mcp/deep")).toBe(true);
+    expect(next.expanded.has("dir:r:mcp")).toBe(true);
+    // …and the selection re-anchors to the cluster that just closed, so the
+    // breadcrumb never names an invisible star and `x` can be pressed again.
+    expect(next.selected).toBe(model.byKey.get(fileKey)!.nodeId);
+    expect(next.fitNonce).toBe(deep.fitNonce + 1);
+    // A collapse is never a flight.
+    expect(next.focusTarget).toBeNull();
+  });
+
+  it("is repeatable: symbol → file → folder → folder, terminating at the root", () => {
+    const model = clientModel(graph());
+    let s = reducer(readyState(model), { t: "revealAndSelect", id: B1, fly: true });
+
+    s = reducer(s, { t: "collapseBranch" }); // closes the file
+    expect(s.expanded.has("file:r:mcp/deep/b.ts")).toBe(false);
+
+    s = reducer(s, { t: "collapseBranch" }); // selection is the file → closes mcp/deep
+    expect(s.expanded.has("dir:r:mcp/deep")).toBe(false);
+    expect(s.expanded.has("dir:r:mcp")).toBe(true);
+
+    s = reducer(s, { t: "collapseBranch" }); // selection is mcp/deep → closes mcp
+    expect(s.expanded.has("dir:r:mcp")).toBe(false);
+    expect(s.expanded.has(model.rootKey)).toBe(true);
+
+    // Keep climbing (this fixture has a "." directory between the galaxy and
+    // `mcp`) until the terminal contract holds: only the root galaxy is left
+    // open, the root never closes, so the reducer returns the SAME state — no
+    // wasted render, no refit.
+    for (let i = 0; i < 8; i++) {
+      const next = reducer(s, { t: "collapseBranch" });
+      if (next === s) break;
+      s = next;
+    }
+    expect(s.expanded.has(model.rootKey)).toBe(true);
+    expect(reducer(s, { t: "collapseBranch" })).toBe(s);
+  });
+
+  it("leaves a sibling branch alone — the whole point of scoping", () => {
+    const model = clientModel(graph());
+    // Open both files: a.ts under mcp, b.ts under mcp/deep.
+    let s = reducer(readyState(model), { t: "revealAndSelect", id: A1, fly: true });
+    s = reducer(s, { t: "revealAndSelect", id: B1, fly: true });
+    expect(s.expanded.has("file:r:mcp/a.ts")).toBe(true);
+    expect(s.expanded.has("file:r:mcp/deep/b.ts")).toBe(true);
+
+    // B1 is selected; `x` closes b.ts only. V3's global-deepest collapse had
+    // no way to express that.
+    const next = reducer(s, { t: "collapseBranch" });
+    expect(next.expanded.has("file:r:mcp/deep/b.ts")).toBe(false);
+    expect(next.expanded.has("file:r:mcp/a.ts")).toBe(true);
+  });
+
+  it("is a no-op with no selection (there is no branch to scope to)", () => {
+    const model = clientModel(graph());
+    const ready = readyState(model);
+    expect(ready.selected).toBeNull();
+    expect(reducer(ready, { t: "collapseBranch" })).toBe(ready);
+  });
+
+  it("is a no-op before the model loads", () => {
+    const cold = createInitialState();
+    expect(reducer(cold, { t: "collapseBranch" })).toBe(cold);
+  });
+
+  it("drops overlays anchored to a selection it moved, and keeps them otherwise", () => {
+    const model = clientModel(graph());
+    const deep = reducer(readyState(model), { t: "revealAndSelect", id: B1, fly: true });
+    const withOverlay: State = {
+      ...deep,
+      impact: { sourceId: B1, impacted: new Set([A1]), coveringTests: new Set() },
+      focus: { nodes: new Set([B1]), depth: 1 },
+    } as State;
+    const next = reducer(withOverlay, { t: "collapseBranch" });
+    expect(next.selected).not.toBe(B1);
+    expect(next.impact).toBeNull();
+    expect(next.focus).toBeNull();
+  });
+});
+
+describe("collapseToFileLevel — `⇧x`", () => {
+  it("closes every file expansion and keeps the directory chain open", () => {
+    const model = clientModel(graph());
+    let s = reducer(readyState(model), { t: "revealAndSelect", id: A1, fly: true });
+    s = reducer(s, { t: "revealAndSelect", id: B1, fly: true });
+
+    const flat = reducer(s, { t: "collapseToFileLevel" });
+    expect(flat.expanded.has("file:r:mcp/a.ts")).toBe(false);
+    expect(flat.expanded.has("file:r:mcp/deep/b.ts")).toBe(false);
+    expect(flat.expanded.has("dir:r:mcp")).toBe(true);
+    expect(flat.expanded.has("dir:r:mcp/deep")).toBe(true);
+    expect(flat.expanded.has(model.rootKey)).toBe(true);
+    expect(flat.fitNonce).toBe(s.fitNonce + 1);
+  });
+
+  it("re-anchors a symbol selection to its file rather than hiding it", () => {
+    const model = clientModel(graph());
+    const s = reducer(readyState(model), { t: "revealAndSelect", id: B1, fly: true });
+    const flat = reducer(s, { t: "collapseToFileLevel" });
+    expect(flat.selected).toBe(model.byKey.get("file:r:mcp/deep/b.ts")!.nodeId);
+  });
+
+  it("keeps lens, filters and overlays — a zoom-out, NOT a clean slate", () => {
+    const model = clientModel(graph());
+    let s = reducer(readyState(model), { t: "revealAndSelect", id: B1, fly: true });
+    s = reducer(s, { t: "setLens", lens: "calls" });
+    s = reducer(s, { t: "toggleCoupling" });
+    const flat = reducer(s, { t: "collapseToFileLevel" });
+    expect(flat.lens).toBe("calls");
+    expect(flat.coupling).toBe(true);
+  });
+
+  it("is the same state when nothing above file level is open", () => {
+    const model = clientModel(graph());
+    const ready = readyState(model);
+    expect(reducer(ready, { t: "collapseToFileLevel" })).toBe(ready);
+  });
+
+  it("is a no-op before the model loads", () => {
+    const cold = createInitialState();
+    expect(reducer(cold, { t: "collapseToFileLevel" })).toBe(cold);
   });
 });

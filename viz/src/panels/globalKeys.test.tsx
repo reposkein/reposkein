@@ -40,6 +40,8 @@ function mockActions(): Actions {
   return {
     toggleExpand: vi.fn(),
     collapseLevel: vi.fn(),
+    collapseBranch: vi.fn(),
+    collapseToFileLevel: vi.fn(),
     select: vi.fn(),
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
@@ -239,6 +241,41 @@ describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
 
   it("an unbound key is not consumed", () => {
     expect(handleGlobalKey(key("q"), stateWith(), mockActions(), mockEnv())).toBe(false);
+  });
+});
+
+/** SCOPED COLLAPSE (V4 §2). LOD collapse is now a DELIBERATE key, not what Esc
+ *  or a misclick happens to do. */
+describe("handleGlobalKey — x / ⇧x collapse", () => {
+  it("'x' collapses the selected branch", () => {
+    const actions = mockActions();
+    const e = key("x");
+    expect(handleGlobalKey(e, stateWith(), actions, mockEnv())).toBe(true);
+    expect(actions.collapseBranch).toHaveBeenCalledOnce();
+    expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
+    expect(e.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("'X' (shifted) collapses to file level globally", () => {
+    const actions = mockActions();
+    expect(handleGlobalKey(key("X"), stateWith(), actions, mockEnv())).toBe(true);
+    expect(actions.collapseToFileLevel).toHaveBeenCalledOnce();
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+  });
+
+  it("'x' with shiftKey set also means file level (never both)", () => {
+    const actions = mockActions();
+    handleGlobalKey(key("x", { shiftKey: true }), stateWith(), actions, mockEnv());
+    expect(actions.collapseToFileLevel).toHaveBeenCalledOnce();
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+  });
+
+  it("neither fires while typing", () => {
+    const actions = mockActions();
+    handleGlobalKey(key("x", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    handleGlobalKey(key("X", { target: { tagName: "INPUT" } }), stateWith(), actions, mockEnv());
+    expect(actions.collapseBranch).not.toHaveBeenCalled();
+    expect(actions.collapseToFileLevel).not.toHaveBeenCalled();
   });
 });
 

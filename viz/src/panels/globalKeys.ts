@@ -121,6 +121,14 @@ export function handleGlobalKey(
       e.preventDefault();
       actions.resetView();
       return true;
+    // SCOPED COLLAPSE (V4 §2). LOD collapse happens ONLY here, on a breadcrumb
+    // click, or on a cluster click — never on Esc and never on a misclick.
+    case "x":
+    case "X":
+      e.preventDefault();
+      if (e.shiftKey || e.key === "X") actions.collapseToFileLevel();
+      else actions.collapseBranch();
+      return true;
   }
 
   // Neighbor hopping needs both a model and a selection to hop from.

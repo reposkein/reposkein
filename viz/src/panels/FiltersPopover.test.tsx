@@ -26,6 +26,8 @@ function mockActions(): Actions {
   return {
     toggleExpand: vi.fn(),
     collapseLevel: vi.fn(),
+    collapseBranch: vi.fn(),
+    collapseToFileLevel: vi.fn(),
     select: vi.fn(),
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),

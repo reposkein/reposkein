@@ -13,6 +13,8 @@ function mockActions(): Actions & Record<keyof Actions, ReturnType<typeof vi.fn>
   return {
     toggleExpand: vi.fn(),
     collapseLevel: vi.fn(),
+    collapseBranch: vi.fn(),
+    collapseToFileLevel: vi.fn(),
     select: vi.fn(),
     requestFit: vi.fn(),
     revealAndSelect: vi.fn(),
@@ -185,6 +187,21 @@ describe("buildCommandRegistry — completeness (every REP-13-listed store actio
     const actions = mockActions();
     find("clean-slate").run(actions, notSelected, mockEnv());
     expect(actions.resetView).toHaveBeenCalledOnce();
+  });
+
+  it("Collapse branch needs a selection; Collapse to file level does not (V4 §2)", () => {
+    const branch = find("collapse-branch");
+    expect(branch.disabled(notSelected)).toBe(true);
+    expect(branch.disabled(selected)).toBe(false);
+    const a1 = mockActions();
+    branch.run(a1, selected, mockEnv());
+    expect(a1.collapseBranch).toHaveBeenCalledOnce();
+
+    const global = find("collapse-to-file-level");
+    expect(global.disabled(notSelected)).toBe(false);
+    const a2 = mockActions();
+    global.run(a2, notSelected, mockEnv());
+    expect(a2.collapseToFileLevel).toHaveBeenCalledOnce();
   });
 
   it("Start tour calls startTour and is disabled while already touring or with no model", () => {

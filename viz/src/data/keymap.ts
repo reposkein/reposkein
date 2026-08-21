@@ -45,6 +45,13 @@ export const KEYMAP: KeymapGroup[] = [
     ],
   },
   {
+    title: "Zoom out",
+    bindings: [
+      { keys: ["x"], description: "Collapse the selected branch one level (symbol → file → folder)", binding: "x" },
+      { keys: ["⇧X"], description: "Collapse everything to file level", binding: "X" },
+    ],
+  },
+  {
     title: "Summon a layer",
     bindings: [
       { keys: ["m"], description: "Map — overview of the visible clusters", binding: "m" },

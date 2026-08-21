@@ -7,7 +7,13 @@ import {
   type ReactNode,
 } from "react";
 import GraphWorker from "../data/worker/graph.worker.ts?worker";
-import { fromWorker, expandToReveal, type ClientModel } from "../data/clientModel";
+import {
+  fromWorker,
+  expandToReveal,
+  representativeFor,
+  visibleClusters,
+  type ClientModel,
+} from "../data/clientModel";
 import type {
   WorkerError,
   WorkerProgress,
@@ -116,6 +122,8 @@ export type Action =
   | { t: "error"; message: string }
   | { t: "toggleExpand"; key: string }
   | { t: "collapseLevel" }
+  | { t: "collapseBranch" }
+  | { t: "collapseToFileLevel" }
   | { t: "select"; id: string | null }
   | { t: "requestFit" }
   | { t: "revealAndSelect"; id: string; fly?: boolean; collapseDeeper?: boolean }
@@ -152,6 +160,47 @@ function depthOf(model: ClientModel, key: string): number {
 function focusEdgeTypes(hidden: Set<string>): Set<string> {
   if (hidden.size === 0) return new Set(ALL_EDGE_TYPES);
   return new Set(ALL_EDGE_TYPES.filter((t) => !hidden.has(t)));
+}
+
+/** Re-anchor the selection after a collapse that may have hidden it.
+ *
+ *  A collapse must never leave `selected` pointing at a star nobody can see:
+ *  the breadcrumb would name an invisible node and Controls would frame an
+ *  empty layout slot. So the selection moves to the backing graph node of the
+ *  DEEPEST cluster still visible on its own chain — which is exactly the
+ *  cluster that just closed. That is what makes `x` read as "climb one level"
+ *  and be pressable again (symbol → file → directory → …).
+ *
+ *  Returns the unchanged selection when it is still visible, and null when the
+ *  surviving cluster has no graph node behind it (a synthetic directory). */
+function reanchorSelection(
+  model: ClientModel,
+  selected: string | null,
+  expanded: Set<string>,
+): string | null {
+  if (!selected) return null;
+  const own = model.clusterOfNode.get(selected) ?? selected;
+  const rep = representativeFor(model, selected, visibleClusters(model, expanded));
+  if (!rep) return null;
+  if (rep === own) return selected; // still on screen — nothing to re-anchor
+  return model.byKey.get(rep)?.nodeId ?? null;
+}
+
+/** Shared tail of both collapse semantics (`x` and `⇧x`): install the new
+ *  expansion, re-anchor the selection, drop overlays that were anchored to a
+ *  selection that just changed, and refit (the visible set moved). */
+function afterCollapse(state: State, expanded: Set<string>): State {
+  const selected = reanchorSelection(state.model!, state.selected, expanded);
+  const sameSelection = selected === state.selected;
+  return {
+    ...state,
+    expanded,
+    selected,
+    focusTarget: null,
+    impact: sameSelection ? state.impact : null,
+    focus: sameSelection ? state.focus : null,
+    fitNonce: state.fitNonce + 1,
+  };
 }
 
 /** The single source of truth for "wipe expansion + overlays back to a clean
@@ -228,6 +277,53 @@ export function reducer(state: State, a: Action): State {
       const expanded = new Set(state.expanded);
       expanded.delete(deepest);
       return { ...state, expanded, selected: null, fitNonce: state.fitNonce + 1 };
+    }
+    /** `x` — SCOPED collapse (Astrolabe V4 §2). Closes the deepest expanded
+     *  STRICT ancestor of the selection: a selected symbol closes its file, a
+     *  selected file closes its directory, and so on up to (never including)
+     *  the root galaxy. Siblings elsewhere in the tree are untouched — that is
+     *  the whole difference from V3's global-deepest `collapseLevel`, which
+     *  could shut a branch on the other side of the graph from what you were
+     *  reading. No selection → nothing to scope to, so it is a no-op. */
+    case "collapseBranch": {
+      const model = state.model;
+      if (!model || !state.selected) return state;
+      const own = model.clusterOfNode.get(state.selected) ?? state.selected;
+      const chain = model.ancestors.get(own);
+      if (!chain) return state;
+      let victim: string | null = null;
+      for (let i = chain.length - 2; i >= 0; i--) {
+        const key = chain[i]!;
+        if (key === model.rootKey) break; // the root galaxy never closes
+        if (state.expanded.has(key)) {
+          victim = key;
+          break;
+        }
+      }
+      if (victim === null) return state;
+      const expanded = new Set(state.expanded);
+      expanded.delete(victim);
+      return afterCollapse(state, expanded);
+    }
+    /** `⇧x` — collapse to FILE level, globally (Astrolabe V4 §2). Every
+     *  expansion ABOVE file level closes, so the scene returns to clean
+     *  file-level arcs while the directory structure you navigated to stays
+     *  open. Deliberately not `resetExpansion`: this is a zoom-out, not a
+     *  clean slate — lens, filters and overlays survive it. */
+    case "collapseToFileLevel": {
+      const model = state.model;
+      if (!model) return state;
+      const expanded = new Set<string>();
+      let changed = false;
+      for (const key of state.expanded) {
+        if (model.byKey.get(key)?.kind === "file") {
+          changed = true;
+          continue;
+        }
+        expanded.add(key);
+      }
+      if (!changed) return state;
+      return afterCollapse(state, expanded);
     }
     case "select":
       // Selecting a different node invalidates a live impact / focus overlay.
@@ -462,6 +558,11 @@ export function reducer(state: State, a: Action): State {
 export interface Actions {
   toggleExpand(key: string): void;
   collapseLevel(): void;
+  /** `x` — close the deepest expanded cluster ABOVE the selection (symbol →
+   *  its file, file → its directory). Scoped: nothing else in the tree moves. */
+  collapseBranch(): void;
+  /** `⇧x` — close every expansion above file level, everywhere. */
+  collapseToFileLevel(): void;
   select(id: string | null): void;
   requestFit(): void;
   /** Expand the ancestor chain of `id`, select it, and — only when `fly` is
@@ -608,6 +709,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     () => ({
       toggleExpand: (key) => dispatch({ t: "toggleExpand", key }),
       collapseLevel: () => dispatch({ t: "collapseLevel" }),
+      collapseBranch: () => dispatch({ t: "collapseBranch" }),
+      collapseToFileLevel: () => dispatch({ t: "collapseToFileLevel" }),
       select: (id) => dispatch({ t: "select", id }),
       requestFit: () => dispatch({ t: "requestFit" }),
       revealAndSelect: (id, opts) =>
