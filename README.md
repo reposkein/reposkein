@@ -118,7 +118,7 @@ For complex setups — multi-repo workspaces, Neo4j backend, the local embedding
 Python, TypeScript, JavaScript, Rust, Go, Java, C# — with an honest per-language matrix of what resolves `exact` vs by-name vs `ambiguous`. Full table + the resolution rules: **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#supported-languages)**. [Adding a language](CONTRIBUTING.md#adding-a-new-language) is a well-trodden path — contributions welcome.
 
 <a id="how-it-works"></a><a id="cross-repo-federation"></a><a id="visualize-the-graph--the-constellation-viewer"></a><a id="optional-semantic-embeddings"></a><a id="optional-neo4j-backend"></a><a id="build-from-source"></a><a id="repository-layout"></a>
-**Going deeper:** [how the graph is built + cross-repo federation](docs/ARCHITECTURE.md) · [the constellation viewer](docs/VIEWER.md) · [semantic embeddings](docs/EMBEDDINGS.md) · [Neo4j backend](docs/NEO4J.md) · [building from source + repo layout](CONTRIBUTING.md).
+**Going deeper:** [how the graph is built + cross-repo federation](docs/ARCHITECTURE.md) · [the constellation viewer](docs/VIEWER.md) · [semantic embeddings](docs/EMBEDDINGS.md) · [Neo4j backend](docs/NEO4J.md) · [shared remote server](docs/REMOTE.md) · [building from source + repo layout](CONTRIBUTING.md).
 
 ## Documentation
 

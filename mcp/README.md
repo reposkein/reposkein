@@ -75,6 +75,7 @@ Then ask your agent *"what calls this function?"* or *"what breaks if I change X
 - `reposkein-mcp index` — rebuild the committed graph after big changes.
 - `reposkein-mcp stats [--last | --session <id> | --all] [--json]` — session usage report: calls by tool, top queried nodes/files, ADRs/summaries written, session duration, and an *estimated* context-tokens-saved-vs-grep number. See [Session usage stats](#session-usage-stats) below.
 - `reposkein-mcp view [path]` — open the **constellation viewer**: a local, read-only, zero-infra web app (bound to `127.0.0.1`) that renders the committed `.reposkein` graph as an interactive 3D astronomy-style map. `--export <dir>` instead writes a self-contained static site (works from `file://` or any static host). See the [viewer section in the main README](https://github.com/reposkein/reposkein#visualize-the-graph--the-constellation-viewer), or **[try the live demo](https://reposkein.github.io/reposkein/)** (RepoSkein viewing its own graph).
+- `reposkein-mcp serve --http [path]` — **advanced, optional**: one shared server for agents that have no clone. Speaks MCP over Streamable HTTP and serves the viewer + `/api/*` from the same process, behind bearer-token auth, read-only by default, re-indexing when the served checkout's HEAD moves. Nothing binds a socket unless you run it; stdio remains the default transport. See [`docs/REMOTE.md`](https://github.com/reposkein/reposkein/blob/main/docs/REMOTE.md).
 
 ## How your agent uses it
 
@@ -170,6 +171,8 @@ a resolved repo. See `mcp/src/store/resolveRepoPath.ts` and
 | `REPOSKEIN_REPO_PATH` | pins the repository the server operates on — optional, see repo resolution above |
 | `REPOSKEIN_SESSION_ID` | override the session id used for `reposkein-mcp stats` logging (default: start-timestamp + pid) |
 | `REPOSKEIN_STORE` | `auto` (default) · `jsonl` (zero-infra) · `neo4j` |
+| `REPOSKEIN_AGENT` | names the writer in `summary_by` / `decided_by` and picks its `local/summaries-<agent>.jsonl` sidecar (default `agent`) |
+| `REPOSKEIN_SERVE_TOKENS` | `serve --http` only — `name:secret[:write]` entries, comma- or whitespace-separated. Required for that mode; see [`docs/REMOTE.md`](https://github.com/reposkein/reposkein/blob/main/docs/REMOTE.md) |
 | `REPOSKEIN_INDEXER_BIN` | override the `reposkein-indexer` binary path (unsupported platforms) |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | optional Neo4j backend (large graphs / Cypher at scale) |
 | `REPOSKEIN_EMBED_PROVIDER` | `none` (default) · `voyage` · `http` — see below |

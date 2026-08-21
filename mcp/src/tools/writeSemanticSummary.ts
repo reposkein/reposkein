@@ -13,7 +13,10 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function makeWriteSemanticSummary(store: GraphStore, repoId: string) {
+/** `identity` names the writer for `summary_by` (REP-17: a remote connection's
+ *  bearer-token name, which is more specific than the process-wide
+ *  REPOSKEIN_AGENT). Omitted over stdio, where the env fallback stands. */
+export function makeWriteSemanticSummary(store: GraphStore, repoId: string, identity?: string) {
   return async (args: WriteSummaryArgs): Promise<ToolResult> => {
     const v = sanitizeSummary(args.summary);
     if (!v.ok) {
@@ -24,7 +27,7 @@ export function makeWriteSemanticSummary(store: GraphStore, repoId: string) {
         summary: v.value,
         model: args.model ?? "unknown",
         at: today(),
-        by: process.env.REPOSKEIN_AGENT ?? "agent",
+        by: identity ?? process.env.REPOSKEIN_AGENT ?? "agent",
       });
       if (res.kind === "not_found") {
         return {

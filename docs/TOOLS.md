@@ -75,6 +75,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
 | `reposkein-mcp view [path]` | open the [constellation viewer](VIEWER.md) (`--export <dir>` for a static site). |
 | `reposkein-mcp stats [path]` | session usage report — calls by tool, top queried nodes/files, ADRs/summaries written, session duration, and an estimated context-tokens-saved-vs-grep number. |
 | `reposkein-mcp adr export/import [path] [dir]` | see [Architecture decisions](#architecture-decisions-adrs) below. |
+| `reposkein-mcp serve --http [path]` | **advanced, optional** — one shared server: MCP over Streamable HTTP + the viewer and `/api/*` in one process, bearer-token auth, read-only by default, re-indexing when the served checkout's HEAD moves. Not needed for normal use; stdio is the default transport. See [`REMOTE.md`](REMOTE.md). |
 
 ## Architecture decisions (ADRs)
 

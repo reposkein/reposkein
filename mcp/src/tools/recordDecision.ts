@@ -35,6 +35,9 @@ export interface DecisionToolDeps {
    *  index snapshot). Failures are swallowed — recording must not break. */
   refresh?: () => Promise<void>;
   today?: () => string;
+  /** Writer identity for `decided_by` (REP-17: a remote connection's
+   *  bearer-token name). Omitted over stdio, where REPOSKEIN_AGENT stands. */
+  decidedBy?: string;
 }
 
 function isoToday(): string {
@@ -144,7 +147,7 @@ export function makeRecordDecision(
         paths,
         supersedes,
         decided_at: date,
-        decided_by: process.env.REPOSKEIN_AGENT ?? "agent",
+        decided_by: deps.decidedBy ?? process.env.REPOSKEIN_AGENT ?? "agent",
         trigger,
         body_hash: "",
       };

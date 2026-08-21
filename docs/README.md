@@ -18,6 +18,7 @@ the [root README's Documentation table](../README.md#documentation).
 - **Visualizing the graph?** → [`VIEWER.md`](VIEWER.md) — the 3D constellation viewer (`reposkein-mcp view`), its lenses/overlays, and static export.
 - **Wiring up semantic search?** → [`EMBEDDINGS.md`](EMBEDDINGS.md) — the optional hybrid embeddings tier: cloud (Voyage), local (Ollama), or self-hosted (`voyage-4-nano`).
 - **Scaling past the default store?** → [`NEO4J.md`](NEO4J.md) — the optional Neo4j backend, for very large graphs or raw Cypher.
+- **Need one shared, always-current server for agents that have no clone?** → [`REMOTE.md`](REMOTE.md) — the **advanced, optional** `serve --http` mode: MCP over Streamable HTTP + the viewer in one process, bearer tokens, read-only by default. Not needed for normal use (stdio is the default).
 
 ## Understanding the system
 

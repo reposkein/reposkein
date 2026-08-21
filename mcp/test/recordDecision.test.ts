@@ -69,8 +69,26 @@ describe("record_decision", () => {
     expect(rec.body_hash).toBe(computeBodyHash(rec));
   });
 
-  it("reports unresolved anchor ids instead of failing", async () => {
+  it("attributes the record to an explicit writer identity when one is given", async () => {
     const store = fakeStore({ getNode: async () => null });
+    // REP-17: a remote connection's bearer-token name is more specific than
+    // the process-wide REPOSKEIN_AGENT, and must win.
+    const previous = process.env.REPOSKEIN_AGENT;
+    process.env.REPOSKEIN_AGENT = "env-agent";
+    try {
+      const record = makeRecordDecision(store, REPO_ID, root, {
+        today: TODAY,
+        decidedBy: "ci-writer",
+      });
+      await record(baseArgs);
+      expect(loadDecisions(root).decisions[0]!.decided_by).toBe("ci-writer");
+    } finally {
+      if (previous === undefined) delete process.env.REPOSKEIN_AGENT;
+      else process.env.REPOSKEIN_AGENT = previous;
+    }
+  });
+
+  it("reports unresolved anchor ids instead of failing", async () => {    const store = fakeStore({ getNode: async () => null });
     const record = makeRecordDecision(store, REPO_ID, root, { today: TODAY });
     const res = await record({ ...baseArgs, anchor_node_ids: ["rs1:abc123:func:gone@0"] });
     const out = parse(res);
