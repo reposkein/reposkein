@@ -77,6 +77,21 @@ export const KEYMAP: KeymapGroup[] = [
       { keys: ["click empty space"], description: "Deselect (never collapses, never moves the camera)", binding: null },
     ],
   },
+  {
+    // Astrolabe V5 §2 (responsive): every pointer gesture above already
+    // fires from POINTER events (react-three-fiber's onClick/onPointerDown),
+    // which browsers dispatch for touch the same as for a mouse — a tap IS a
+    // click here, nothing touch-specific had to be wired up. This group only
+    // spells that out in touch vocabulary so a tablet/phone viewer isn't left
+    // guessing whether "click" applies to them.
+    title: "Touch",
+    bindings: [
+      { keys: ["tap"], description: "Same as click — inspect a star, expand or collapse a cluster", binding: null },
+      { keys: ["tap empty space"], description: "Deselect", binding: null },
+      { keys: ["drag"], description: "Orbit (one finger)", binding: null },
+      { keys: ["pinch"], description: "Zoom (two fingers)", binding: null },
+    ],
+  },
 ];
 
 /** Every distinct global `KeyboardEvent.key` the keymap claims is bound. */

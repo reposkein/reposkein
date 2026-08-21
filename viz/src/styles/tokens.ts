@@ -18,6 +18,7 @@ import {
   LANGUAGE_DEFAULT_HEX,
   LANGUAGE_HEX,
   NODE_KIND_META,
+  STATUS_META,
 } from "../scene/encoding";
 
 /** CSS-identifier-safe slug for a token name segment: lower-case, non
@@ -60,11 +61,17 @@ export function tokenGroups(): { title: string; tokens: Token[] }[] {
     { name: "--color-lang-default", value: LANGUAGE_DEFAULT_HEX },
   ].sort(byName);
 
+  const status: Token[] = STATUS_META.map((m) => ({
+    name: `--color-status-${tokenSlug(m.status)}`,
+    value: m.color,
+  })).sort(byName);
+
   return [
     { title: "brand accents (BRAND)", tokens: brand },
     { title: "node kinds (NODE_KIND_META)", tokens: nodeKinds },
     { title: "edge types (EDGE_TYPE_META)", tokens: edgeTypes },
     { title: "languages (LANGUAGE_HEX + LANGUAGE_DEFAULT_HEX)", tokens: languages },
+    { title: "status (STATUS_META)", tokens: status },
   ];
 }
 

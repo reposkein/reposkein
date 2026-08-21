@@ -16,11 +16,12 @@ import {
 import { useStore } from "../state/store";
 import { MAX_FOCUS_DEPTH, MIN_FOCUS_DEPTH } from "../data/neighborhood";
 import { buildMinConfidenceIndex, nodeConfidence } from "../data/nodeConfidence";
-import { nodeKindColorVar } from "../data/encodingVars";
+import { nodeKindColorVar, statusColorVar } from "../data/encodingVars";
 import { nodeKindGlyph } from "../data/nodeGlyph";
 import { fetchSource, type SourceSlice } from "../data/api";
 import { isStaticMode } from "../data/staticMode";
 import { keyScopeProps } from "./globalKeys";
+import { useViewportWidth, BP_INSPECTOR_SHEET } from "./viewport";
 import type { NodeRecord } from "../data/model";
 
 interface IncidentRow {
@@ -63,11 +64,20 @@ const COLUMN_HEADER: Record<ColumnId, string> = {
  *  edges, source peek, semantic summary) → action footer (fixed). The footer is
  *  pinned so Impact / Focus are reachable without scrolling past a long summary,
  *  and every action there dispatches the SAME store action its command-palette
- *  twin does (`state/commands.ts`) — one code path, two entry points. */
+ *  twin does (`state/commands.ts`) — one code path, two entry points.
+ *
+ *  RESPONSIVE <900px (Astrolabe V5 §2): there is no 360px column to spare on a
+ *  narrow/tablet viewport, so below `BP_INSPECTOR_SHEET` the drawer becomes a
+ *  fixed-height BOTTOM SHEET instead — full width, docked above the status
+ *  bar, with the same header/body/footer structure and the same close button.
+ *  Drag-to-resize / drag-to-collapse are explicitly out of scope (brief: "a
+ *  fixed-height sheet with close is fine"). */
 export function Inspector() {
   const store = useStore();
   const model = store.model;
   const rec = model && store.selected ? model.records.get(store.selected) : null;
+  const width = useViewportWidth();
+  const sheet = width < BP_INSPECTOR_SHEET;
 
   // Drawer only exists on a live selection (see docstring): no empty state.
   if (!model || !rec) return null;
@@ -76,7 +86,12 @@ export function Inspector() {
     <aside
       aria-label={`Inspector — ${rec.name || rec.id}`}
       data-testid="inspector"
-      className="pointer-events-auto fixed right-0 top-0 bottom-7 z-[110] flex w-[360px] max-w-[calc(100vw-1rem)] flex-col border-l border-[rgba(148,163,207,0.18)] bg-[color-mix(in_srgb,var(--color-brand-navy)_96%,white_3%)] text-[13px] text-[var(--color-brand-cream)] shadow-[-12px_0_32px_-16px_rgba(0,0,0,0.8)] motion-safe:animate-[rs-drawer-in_180ms_ease-out]"
+      data-mode={sheet ? "sheet" : "drawer"}
+      className={
+        sheet
+          ? "pointer-events-auto fixed inset-x-0 bottom-7 z-[110] flex h-[45vh] max-h-[420px] flex-col border-t border-[rgba(148,163,207,0.18)] bg-[color-mix(in_srgb,var(--color-brand-navy)_96%,white_3%)] text-[13px] text-[var(--color-brand-cream)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] motion-safe:animate-[rs-sheet-in_180ms_ease-out]"
+          : "pointer-events-auto fixed right-0 top-0 bottom-7 z-[110] flex w-[360px] max-w-[calc(100vw-1rem)] flex-col border-l border-[rgba(148,163,207,0.18)] bg-[color-mix(in_srgb,var(--color-brand-navy)_96%,white_3%)] text-[13px] text-[var(--color-brand-cream)] shadow-[-12px_0_32px_-16px_rgba(0,0,0,0.8)] motion-safe:animate-[rs-drawer-in_180ms_ease-out]"
+      }
     >
       <IdentityHeader rec={rec} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2.5">
@@ -124,7 +139,7 @@ function IdentityHeader({ rec }: { rec: NodeRecord }) {
           type="button"
           onClick={() => store.select(null)}
           aria-label="Close inspector"
-          className="min-h-6 min-w-6 shrink-0 text-[13px] opacity-50 hover:opacity-100"
+          className="min-h-6 min-w-6 shrink-0 text-[13px] opacity-70 hover:opacity-100"
         >
           ✕
         </button>
@@ -154,7 +169,7 @@ function IdentityHeader({ rec }: { rec: NodeRecord }) {
         <p
           data-testid="inspector-path"
           title={`${rec.filePath}${lines}`}
-          className="mt-1.5 truncate font-mono text-[11px] opacity-65"
+          className="mt-1.5 truncate font-mono text-[11px] opacity-70"
         >
           {rec.filePath}
           {lines}
@@ -182,7 +197,7 @@ function Overview({ rec }: { rec: NodeRecord }) {
       <dl className="flex flex-col gap-1">
         {rows.map((r) => (
           <div key={r.label} className="flex items-baseline gap-2">
-            <dt className="w-24 shrink-0 text-[11px] uppercase tracking-wide opacity-45">
+            <dt className="w-24 shrink-0 text-[11px] uppercase tracking-wide opacity-70">
               {r.label}
             </dt>
             <dd
@@ -326,7 +341,7 @@ function IncidentEdges() {
   return (
     <Section title={`Incident edges (${incident.length})`}>
       {incident.length === 0 ? (
-        <p className="text-[11px] opacity-50">No relationship edges touch this node.</p>
+        <p className="text-[11px] opacity-70">No relationship edges touch this node.</p>
       ) : (
         <table
           data-testid="inspector-edges"
@@ -359,7 +374,7 @@ function IncidentEdges() {
                         type="button"
                         data-testid={`inspector-sort-${h.column.id}`}
                         onClick={h.column.getToggleSortingHandler()}
-                        className="flex w-full items-center gap-0.5 px-1 py-1 text-left text-[11px] uppercase tracking-wide opacity-60 hover:opacity-100"
+                        className="flex w-full items-center gap-0.5 px-1 py-1 text-left text-[11px] uppercase tracking-wide opacity-70 hover:opacity-100"
                       >
                         {COLUMN_HEADER[h.column.id as ColumnId]}
                         <span aria-hidden="true" className="opacity-70">
@@ -385,16 +400,16 @@ function IncidentEdges() {
                   onFocus={() => setActiveRow(i)}
                   onClick={() => store.revealAndSelect(r.neighborId, { fly: true })}
                   onKeyDown={(e) => onRowKeyDown(e, i, r.neighborId)}
-                  className="cursor-pointer border-b border-[rgba(148,163,207,0.1)] hover:bg-white/5 focus:bg-white/10 focus:outline focus:outline-1 focus:outline-[var(--color-brand-amber)]"
+                  className="cursor-pointer border-b border-[rgba(148,163,207,0.1)] hover:bg-white/5 focus-visible:bg-white/10"
                 >
-                  <td className="px-1 py-1 font-mono opacity-60">
+                  <td className="px-1 py-1 font-mono opacity-70">
                     {r.direction === "out" ? "→" : "←"}
                   </td>
                   <td className="px-1 py-1 opacity-80">{r.type}</td>
                   <td className="max-w-[7rem] truncate px-1 py-1" title={r.neighbor}>
                     {r.neighbor}
                   </td>
-                  <td className="px-1 py-1 opacity-60">{r.resolution}</td>
+                  <td className="px-1 py-1 opacity-70">{r.resolution}</td>
                   <td className="px-1 py-1 font-mono tabular-nums opacity-70">
                     {r.confidence.toFixed(2)}
                   </td>
@@ -462,15 +477,15 @@ function SourcePeek({ rec, repoRoot }: { rec: NodeRecord; repoRoot: string | nul
           Open in editor ↗
         </a>
       )}
-      {state === "loading" && <p className="text-[11px] opacity-50">Loading source…</p>}
-      {state === "missing" && <p className="text-[11px] opacity-50">Source unavailable.</p>}
+      {state === "loading" && <p className="text-[11px] opacity-70">Loading source…</p>}
+      {state === "missing" && <p className="text-[11px] opacity-70">Source unavailable.</p>}
       {slice && (
         <pre className="m-0 max-h-56 overflow-auto rounded-[6px] border border-[rgba(148,163,207,0.16)] bg-black/35 px-2 py-1.5 font-mono text-[11px] leading-relaxed opacity-90">
           {slice.lines.map((line, i) => {
             const lineNo = slice.start + i;
             return (
               <div key={lineNo} className="flex whitespace-pre">
-                <span className="inline-block w-10 shrink-0 select-none pr-2.5 text-right opacity-40">
+                <span className="inline-block w-10 shrink-0 select-none pr-2.5 text-right opacity-70">
                   {lineNo}
                 </span>
                 <span className="flex-1">{line || " "}</span>
@@ -495,7 +510,7 @@ function SummarySection({ rec }: { rec: NodeRecord }) {
   return (
     <Section title="Semantic summary">
       {!rec.semanticSummary ? (
-        <p className="text-[11px] opacity-50">No summary yet — agents write these as they explore.</p>
+        <p className="text-[11px] opacity-70">No summary yet — agents write these as they explore.</p>
       ) : (
         <div>
           {stale && (
@@ -564,7 +579,7 @@ function ActionRow() {
       </div>
 
       <div className="mt-2 flex items-center gap-1.5">
-        <span className="text-[11px] uppercase tracking-wide opacity-45">Depth</span>
+        <span className="text-[11px] uppercase tracking-wide opacity-70">Depth</span>
         {Array.from({ length: MAX_FOCUS_DEPTH - MIN_FOCUS_DEPTH + 1 }, (_, i) => {
           const d = MIN_FOCUS_DEPTH + i;
           const on = store.focusDepth === d;
@@ -579,7 +594,7 @@ function ActionRow() {
               className={`min-h-6 min-w-6 rounded-[5px] border font-mono text-[11px] transition-colors ${
                 on
                   ? "border-[color-mix(in_srgb,var(--color-brand-teal)_55%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-teal)_16%,transparent)] text-[var(--color-brand-teal)]"
-                  : "border-[rgba(148,163,207,0.2)] opacity-65 hover:opacity-100"
+                  : "border-[rgba(148,163,207,0.2)] opacity-70 hover:opacity-100"
               }`}
             >
               {d}
@@ -595,8 +610,8 @@ function ActionRow() {
 
       {impactOn && (
         <p className="mt-1.5 flex gap-3 font-mono text-[11px] tabular-nums">
-          <span className="text-[#ff8a73]">● {impacted} impacted</span>
-          <span className="text-[#74ff8e]">
+          <span style={{ color: statusColorVar("danger") }}>● {impacted} impacted</span>
+          <span style={{ color: statusColorVar("ok") }}>
             ● {covering} covering test{covering === 1 ? "" : "s"}
           </span>
         </p>
@@ -639,7 +654,7 @@ function ActionButton({
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="mb-3 last:mb-0">
-      <h3 className="mb-1 text-[11px] font-medium uppercase tracking-wider opacity-45">{title}</h3>
+      <h3 className="mb-1 text-[11px] font-medium uppercase tracking-wider opacity-70">{title}</h3>
       {children}
     </section>
   );

@@ -187,6 +187,18 @@ describe("ErrorScreen — actionable, with Retry", () => {
     expect(root.className).not.toMatch(/pointer-events-none/);
   });
 
+  /** Fix round 2 / REP-22 polish: this surface used to carry
+   *  `backdrop-blur-sm`, violating the "blur only on transient surfaces"
+   *  rule (V3 §6) — an error screen persists for as long as the underlying
+   *  failure does, which is the opposite of transient. It should now be a
+   *  flat, opaque navy instead. */
+  it("is opaque, not blurred — it can persist indefinitely, unlike a summoned layer", () => {
+    currentStore = makeStore().store;
+    render(<ErrorScreen message="boom" />);
+    const root = screen.getByTestId("error-screen");
+    expect(root.className).not.toMatch(/backdrop-blur/);
+  });
+
   it("Retry can be pressed more than once (a transient failure may recur)", () => {
     const { store, actions } = makeStore();
     currentStore = store;

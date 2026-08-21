@@ -16,6 +16,7 @@ import {
   subscribeToasts,
 } from "./toastState";
 import { Toasts } from "./Toasts";
+import { resetLayers, showLayer } from "./layerState";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -25,6 +26,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetToasts();
+  resetLayers();
   vi.useRealTimers();
 });
 
@@ -156,5 +158,37 @@ describe("Toasts — rendering and a11y", () => {
       "first✕",
       "second✕",
     ]);
+  });
+});
+
+/** Fix round 2 / REP-22 polish: "toasts (bottom-10, z-150) can paint over the
+ *  centered Help overlay's bottom edge". The toast stack now moves to the top
+ *  of the screen whenever ANY summoned layer is open — including the Help
+ *  overlay, and (since every layer becomes a full-width bottom sheet below
+ *  640px) the right-docked ones too — rather than staying pinned to a bottom
+ *  position no single spot could stay clear of. */
+describe("Toasts — repositions above an open summoned layer", () => {
+  it("sits at the bottom by default (nothing summoned)", () => {
+    render(<Toasts />);
+    const region = screen.getByTestId("toast-region");
+    expect(region.getAttribute("data-position")).toBe("bottom");
+    expect(region.className).toContain("bottom-10");
+  });
+
+  it("moves to the top while the Help overlay (or any layer) is open", () => {
+    render(<Toasts />);
+    act(() => showLayer("help"));
+    const region = screen.getByTestId("toast-region");
+    expect(region.getAttribute("data-position")).toBe("top");
+    expect(region.className).toContain("top-3");
+    expect(region.className).not.toContain("bottom-10");
+  });
+
+  it("returns to the bottom once the layer closes", () => {
+    render(<Toasts />);
+    act(() => showLayer("legend"));
+    act(() => resetLayers());
+    const region = screen.getByTestId("toast-region");
+    expect(region.getAttribute("data-position")).toBe("bottom");
   });
 });

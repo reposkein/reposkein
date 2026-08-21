@@ -74,3 +74,15 @@ export function edgeTypeColorVar(type: string): string {
 export function languageColorVar(language: string, known: boolean): string {
   return cssVar(languageVarName(language, known));
 }
+
+/** `"danger"` → `"--color-status-danger"` (see `scene/encoding.ts`'s
+ *  `STATUS_META`). No slugging needed — the three status keys are already
+ *  CSS-safe identifiers. */
+export function statusVarName(status: "ok" | "warn" | "danger"): string {
+  return `--color-status-${status}`;
+}
+
+/** `statusColorVar("danger")` → `"var(--color-status-danger)"`. */
+export function statusColorVar(status: "ok" | "warn" | "danger"): string {
+  return cssVar(statusVarName(status));
+}

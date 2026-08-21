@@ -6,6 +6,7 @@ import {
   LANGUAGE_DEFAULT_HEX,
   LANGUAGE_HEX,
   NODE_KIND_META,
+  STATUS_META,
 } from "../scene/encoding";
 
 /** The generated `@theme` block is a build artifact (git-ignored, regenerated at
@@ -46,6 +47,9 @@ describe("renderTokensCss", () => {
       expect(css).toContain(`--color-lang-${tokenSlug(lang)}: ${hexValue};`);
     }
     expect(css).toContain(`--color-lang-default: ${LANGUAGE_DEFAULT_HEX};`);
+    for (const meta of STATUS_META) {
+      expect(css).toContain(`--color-status-${tokenSlug(meta.status)}: ${meta.color};`);
+    }
   });
 
   it("declares each token exactly once, with CSS-safe names, sorted per group", () => {
@@ -67,7 +71,8 @@ describe("renderTokensCss", () => {
         NODE_KIND_META.length +
         EDGE_TYPE_META.length +
         Object.keys(LANGUAGE_HEX).length +
-        1,
+        1 +
+        STATUS_META.length,
     );
   });
 

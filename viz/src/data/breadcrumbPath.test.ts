@@ -3,7 +3,15 @@ import { buildModel } from "./model";
 import { fromWorker, type ClientModel } from "./clientModel";
 import type { WorkerResult } from "./worker/graph.worker";
 import type { RawGraph } from "./types";
-import { cameraCrumbs, resolveBreadcrumb, selectionCrumbs, collapseCrumbsForDisplay, breadcrumbMaxVisibleForWidth, type Crumb } from "./breadcrumbPath";
+import {
+  cameraCrumbs,
+  resolveBreadcrumb,
+  selectionCrumbs,
+  collapseCrumbsForDisplay,
+  breadcrumbMaxVisibleForWidth,
+  dedupeAdjacentCrumbLabels,
+  type Crumb,
+} from "./breadcrumbPath";
 
 /** Nested repo → dir "src" → dir "src/util" → file "src/util/a.ts" → symbol
  *  "run", so ancestor chains have real depth to assert on. Mirrors the
@@ -140,13 +148,19 @@ describe("resolveBreadcrumb (the status bar's single entry point)", () => {
   it("uses the selection chain when a node is selected, ignoring the camera hint", () => {
     const model = nestedModel();
     const crumbs = resolveBreadcrumb(model, FILE_NODE_ID, UTIL_DIR_KEY);
-    expect(crumbs.map((c) => c.label)).toEqual(["r", "r", "src", "util", "a.ts"]);
+    // The adjacent "r"/"r" pair (galaxy + its same-named implicit root dir —
+    // see nestedModel's docstring) is folded into one crumb (fix round 2 /
+    // REP-22 polish: "repo + root galaxy both 'reposkein'" read as a bug).
+    expect(crumbs.map((c) => c.label)).toEqual(["r", "src", "util", "a.ts"]);
+    // The fold keeps the DEEPER of the two same-labelled crumbs' key, so
+    // clicking it still navigates to the more specific (root dir) scope.
+    expect(crumbs[0]!.key).toBe("dir:r:.");
   });
 
   it("falls back to the camera-nearest cluster chain when nothing is selected", () => {
     const model = nestedModel();
     const crumbs = resolveBreadcrumb(model, null, UTIL_DIR_KEY);
-    expect(crumbs.map((c) => c.label)).toEqual(["r", "r", "src", "util"]);
+    expect(crumbs.map((c) => c.label)).toEqual(["r", "src", "util"]);
   });
 
   it("is never empty: no selection and no camera sample yet still returns the root", () => {
@@ -154,6 +168,31 @@ describe("resolveBreadcrumb (the status bar's single entry point)", () => {
     const crumbs = resolveBreadcrumb(model, null, null);
     expect(crumbs.length).toBeGreaterThan(0);
     expect(crumbs[0]!.key).toBe(model.rootKey);
+  });
+});
+
+describe("dedupeAdjacentCrumbLabels (fix round 2 / REP-22 polish)", () => {
+  it("folds a run of adjacent same-label crumbs into one, keeping the deepest key", () => {
+    const chain = [crumb("reposkein"), { key: "dir:root", label: "reposkein", clickable: true }, crumb("src")];
+    expect(dedupeAdjacentCrumbLabels(chain)).toEqual([
+      { key: "dir:root", label: "reposkein", clickable: true },
+      crumb("src"),
+    ]);
+  });
+
+  it("is a no-op when no two adjacent crumbs share a label", () => {
+    const chain = [crumb("reposkein"), crumb("src"), crumb("util")];
+    expect(dedupeAdjacentCrumbLabels(chain)).toEqual(chain);
+  });
+
+  it("does not fold NON-adjacent duplicates (only adjacent runs collapse)", () => {
+    const chain = [crumb("a"), crumb("b"), crumb("a")];
+    expect(dedupeAdjacentCrumbLabels(chain)).toEqual(chain);
+  });
+
+  it("leaves an empty or single-crumb chain untouched", () => {
+    expect(dedupeAdjacentCrumbLabels([])).toEqual([]);
+    expect(dedupeAdjacentCrumbLabels([crumb("a")])).toEqual([crumb("a")]);
   });
 });
 
@@ -202,5 +241,36 @@ describe("breadcrumbMaxVisibleForWidth (fix round 1, #2)", () => {
   it("collapses further at the narrowest widths", () => {
     expect(breadcrumbMaxVisibleForWidth(639)).toBe(3);
     expect(breadcrumbMaxVisibleForWidth(360)).toBe(3);
+  });
+});
+
+/** `inspectorOpen=true` (fix round 2 / REP-22 polish, review finding #5 —
+ *  previously untested directly, only exercised indirectly through
+ *  StatusBar.test.tsx's integration test). Reserves the Inspector's own
+ *  360px column + 3 gutters (396px) before doing the same width-tier lookup,
+ *  so the SAME width collapses one tier sooner whenever the drawer is open. */
+describe("breadcrumbMaxVisibleForWidth — inspectorOpen reserves the drawer's column", () => {
+  it("the exact scenario this fixed: 1280px shows everything with no selection, but tiers down to 4 with one", () => {
+    expect(breadcrumbMaxVisibleForWidth(1280)).toBe(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(1280, true)).toBe(4);
+  });
+
+  it("the SAME raw width can land in a different tier purely based on inspectorOpen", () => {
+    expect(breadcrumbMaxVisibleForWidth(1024, false)).toBe(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(1024, true)).toBe(3); // 1024-396=628, below the 640 tier
+  });
+
+  it("still reaches Infinity once the raw width is wide enough to absorb the reservation", () => {
+    expect(breadcrumbMaxVisibleForWidth(1419, true)).toBeLessThan(Infinity);
+    expect(breadcrumbMaxVisibleForWidth(1420, true)).toBe(Infinity); // 1420-396=1024
+  });
+
+  it("the 640-tier boundary shifts by exactly the reservation too", () => {
+    expect(breadcrumbMaxVisibleForWidth(1035, true)).toBe(3); // 1035-396=639
+    expect(breadcrumbMaxVisibleForWidth(1036, true)).toBe(4); // 1036-396=640
+  });
+
+  it("defaults to false (inspectorOpen is optional) — same as never passing it", () => {
+    expect(breadcrumbMaxVisibleForWidth(1280)).toBe(breadcrumbMaxVisibleForWidth(1280, false));
   });
 });

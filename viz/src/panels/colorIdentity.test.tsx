@@ -28,15 +28,18 @@ import { fromWorker, type ClientModel } from "../data/clientModel";
 import type { WorkerResult } from "../data/worker/graph.worker";
 import type { RawGraph } from "../data/types";
 import {
+  BRAND,
   EDGE_TYPE_META,
   LANGUAGE_HEX,
   NODE_KIND_META,
+  STATUS_META,
   SYMBOL_KIND_META,
 } from "../scene/encoding";
 import {
   edgeTypeVarName,
   languageVarName,
   nodeKindVarName,
+  statusVarName,
   varSlug,
 } from "../data/encodingVars";
 import { renderTokensCss, tokenGroups, tokenSlug } from "../styles/tokens";
@@ -173,6 +176,27 @@ describe("encodingVars ↔ styles/tokens: the same slug, always", () => {
     // Sanity: the generator itself declares nothing beyond the tables.
     const declared = tokenGroups().flatMap((g) => g.tokens.map((t) => t.name));
     expect(new Set(declared).size).toBe(declared.length);
+  });
+});
+
+/** Status-token identity (fix round 2 / REP-22 polish) — the same chain
+ *  proven above for node kinds / edge types / languages, now for the
+ *  ok/warn/danger status hues the Inspector's impact badges and any future
+ *  status pill draw from. Before this table, those badges carried literal
+ *  hexes (`#ff8a73`, `#74ff8e`) with no generated token behind them at all. */
+describe("status tokens (STATUS_META) — the same SSoT chain, one level simpler", () => {
+  it("every status has a declared token whose value is the encoding.ts hex", () => {
+    const tokens = generatedTokens();
+    for (const meta of STATUS_META) {
+      const varName = statusVarName(meta.status);
+      expect(tokens.has(varName)).toBe(true);
+      expect(tokens.get(varName)).toBe(meta.color);
+    }
+  });
+
+  it("'warn' is BRAND.amber itself, not a second hex that happens to match", () => {
+    const warn = STATUS_META.find((m) => m.status === "warn")!;
+    expect(warn.color).toBe(BRAND.amber);
   });
 });
 

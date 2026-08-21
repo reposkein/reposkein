@@ -438,6 +438,13 @@ describe("Inspector — action row mirrors the palette commands", () => {
     expect(screen.getByText("● 2 impacted")).toBeTruthy();
     expect(screen.getByText("● 1 covering test")).toBeTruthy();
     expect(screen.getByText("3 nodes")).toBeTruthy();
+    // Status-token identity (fix round 2 / REP-22 polish, mirrors
+    // colorIdentity.test.tsx): these used to be literal hexes (#ff8a73/
+    // #74ff8e) with no relationship to anything else on screen. They must
+    // now reference the SAME generated tokens `scene/encoding.ts`'s
+    // `STATUS_META` produces — never a hardcoded color again.
+    expect(screen.getByText("● 2 impacted").style.color).toBe("var(--color-status-danger)");
+    expect(screen.getByText("● 1 covering test").style.color).toBe("var(--color-status-ok)");
   });
 });
 
@@ -446,6 +453,57 @@ describe("Inspector — opaque, not blurred (V3 §6)", () => {
     currentStore = makeStore({ model: tinyModel(), selected: SEL }).store;
     render(<Inspector />);
     expect(screen.getByTestId("inspector").className).not.toMatch(/backdrop-blur/);
+  });
+});
+
+/** Astrolabe V5 §2 (responsive <900px): below `BP_INSPECTOR_SHEET` there is no
+ *  360px column to spare, so the drawer becomes a fixed-height BOTTOM SHEET
+ *  instead — full width, docked above the status bar, close button intact.
+ *  Drag-to-resize/collapse are explicitly out of scope (a fixed-height sheet
+ *  with a close button is what the brief asks for). */
+describe("Inspector — responsive bottom-sheet mode below 900px", () => {
+  const ORIGINAL_INNER_WIDTH = window.innerWidth;
+  function setViewportWidth(width: number) {
+    Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
+    fireEvent(window, new Event("resize"));
+  }
+  afterEach(() => setViewportWidth(ORIGINAL_INNER_WIDTH));
+
+  it("is a right-docked drawer at 1024px (well above the breakpoint)", () => {
+    setViewportWidth(1024);
+    currentStore = makeStore({ model: tinyModel(), selected: SEL }).store;
+    render(<Inspector />);
+    const el = screen.getByTestId("inspector");
+    expect(el.getAttribute("data-mode")).toBe("drawer");
+    expect(el.className).toContain("right-0");
+    expect(el.className).toContain("w-[360px]");
+    expect(el.className).not.toContain("inset-x-0");
+  });
+
+  it("becomes a full-width bottom sheet at 700px (below the breakpoint)", () => {
+    setViewportWidth(700);
+    currentStore = makeStore({ model: tinyModel(), selected: SEL }).store;
+    render(<Inspector />);
+    const el = screen.getByTestId("inspector");
+    expect(el.getAttribute("data-mode")).toBe("sheet");
+    expect(el.className).toContain("inset-x-0");
+    expect(el.className).toContain("bottom-7"); // still clears the 28px status bar
+    expect(el.className).not.toContain("w-[360px]");
+    // Structure is unchanged: header, body, footer — including the close
+    // button — are exactly the same in either mode.
+    expect(screen.getByLabelText("Close inspector")).toBeTruthy();
+    expect(screen.getByTestId("inspector-impact")).toBeTruthy();
+  });
+
+  it("switches mode live on resize, without losing the selection", () => {
+    setViewportWidth(1024);
+    currentStore = makeStore({ model: tinyModel(), selected: SEL }).store;
+    render(<Inspector />);
+    expect(screen.getByTestId("inspector").getAttribute("data-mode")).toBe("drawer");
+
+    setViewportWidth(500);
+    expect(screen.getByTestId("inspector").getAttribute("data-mode")).toBe("sheet");
+    expect(screen.getByTestId("inspector-name")).toBeTruthy();
   });
 });
 

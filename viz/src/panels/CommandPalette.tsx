@@ -378,7 +378,7 @@ export function CommandPalette() {
         className="fixed left-1/2 top-[12%] z-[201] flex max-h-[70vh] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 flex-col overflow-hidden rounded-[10px] border border-[rgba(148,163,207,0.14)] bg-[color-mix(in_srgb,var(--color-brand-navy)_96%,white_4%)] text-[13px] text-[var(--color-brand-cream)] shadow-[0_16px_48px_-12px_rgba(0,0,0,0.55)] backdrop-blur-md"
       >
         <div className="flex shrink-0 items-center gap-2 border-b border-[rgba(148,163,207,0.14)] px-3 py-2.5">
-          <span aria-hidden="true" className="text-[13px] opacity-50">
+          <span aria-hidden="true" className="text-[13px] opacity-70">
             ⌘K
           </span>
           <label htmlFor={`${uid}-input`} className="sr-only">
@@ -388,7 +388,7 @@ export function CommandPalette() {
             ref={inputRef}
             id={`${uid}-input`}
             role="combobox"
-            aria-expanded="true"
+            aria-expanded={!noResults}
             aria-controls={listboxId}
             aria-activedescendant={activeRowId}
             aria-autocomplete="list"
@@ -396,7 +396,7 @@ export function CommandPalette() {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onInputKeyDown}
             placeholder="Search or type > for commands…"
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-brand-cream)] placeholder:opacity-45 focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-brand-cream)] placeholder:opacity-70 focus:outline-none"
           />
           {filesOnly && (
             <button
@@ -420,7 +420,7 @@ export function CommandPalette() {
             {!noResults &&
               grouped.map(({ group, rows }) => (
                 <div key={group} role="group" aria-label={GROUP_LABEL[group]} className="mb-1 last:mb-0">
-                  <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider opacity-45">
+                  <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider opacity-70">
                     {GROUP_LABEL[group]}
                   </p>
                   {rows.map((row) => {
@@ -463,7 +463,7 @@ export function CommandPalette() {
           {statusMessage}
         </div>
 
-        <div className="flex h-9 shrink-0 items-center gap-3 border-t border-[rgba(148,163,207,0.14)] px-3 text-[11px] opacity-55">
+        <div className="flex h-9 shrink-0 items-center gap-3 border-t border-[rgba(148,163,207,0.14)] px-3 text-[11px] opacity-70">
           <span className="hidden items-center gap-1 sm:inline-flex">
             <Kbd>↑</Kbd>
             <Kbd>↓</Kbd> navigate
@@ -500,7 +500,7 @@ function NoResults({
       <p className="text-[13px] font-medium">
         {isCommandMode ? `No commands match "${query.slice(1).trim()}"` : `No matches for "${query}"`}
       </p>
-      <p className="mt-1 max-w-xs text-[11px] opacity-60">
+      <p className="mt-1 max-w-xs text-[11px] opacity-70">
         {isCommandMode
           ? "Check the spelling, or clear the > prefix to search symbols and files too."
           : "Check the spelling, try fewer words, or narrow the search to files only."}
@@ -563,7 +563,7 @@ function Row({
       >
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium">{row.cmd.label}</span>
-          {subtitle && <span className="block truncate text-[11px] opacity-55">{subtitle}</span>}
+          {subtitle && <span className="block truncate text-[11px] opacity-70">{subtitle}</span>}
         </span>
         {row.cmd.kbd && <Kbd>{row.cmd.kbd}</Kbd>}
       </div>
@@ -593,7 +593,7 @@ function Row({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium">{row.name}</span>
         {row.filePath && (
-          <span className="block truncate font-mono text-[11px] opacity-55">{row.filePath}</span>
+          <span className="block truncate font-mono text-[11px] opacity-70">{row.filePath}</span>
         )}
       </span>
       {confidence < 1 && <ConfidenceBadge value={confidence} />}
@@ -605,7 +605,7 @@ function ConfidenceBadge({ value }: { value: number }) {
   return (
     <span
       title={`Touched by a low-confidence edge (${Math.round(value * 100)}%)`}
-      className="shrink-0 rounded-full border border-[rgba(255,180,84,0.4)] bg-[rgba(255,180,84,0.16)] px-1.5 py-0.5 text-[10px] font-medium text-[#ffd9a0] tabular-nums"
+      className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-brand-amber)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-brand-amber)_16%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-brand-amber)] tabular-nums"
     >
       {Math.round(value * 100)}%
     </span>
