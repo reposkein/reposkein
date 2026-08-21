@@ -1,0 +1,60 @@
+{
+  "id": "adr:2026-08-21-sponsorship-placement-viewer-chip-only-deferred-to-rep-28-no",
+  "alternatives": "Ads inside Inspector data panels (rejected: conflates authored graph content with paid placement in the one surface whose credibility depends on being disinterested). Ads rendered over or within the 3D canvas (rejected: obstructs the content people opened the viewer to see). A view-time-fetch exception for static exports so the slot still works when hosted on GitHub Pages (rejected: reintroduces a network dependency into an artifact whose entire value proposition is self-contained/offline durability — docs/HOSTING.md's static-export contract). Ads in embed-server's embedding responses or as a second retrieval signal blended into semantic_find ranking (rejected: contaminates a determinism-dependent retrieval path — see ruling 2). A container-based ad SDK or sidecar service, mirroring how Neo4j ships as an optional container (rejected: unlike Neo4j, which is opt-in and never required to answer a single query, ad delivery would need to run for the default viewer path to show anything, making the container non-optional in practice — a zero-infra violation in exactly the spirit REP-17 rejected OAuth/OIDC infra for). Freeform or LLM-generated sponsor copy (rejected: without a fixed schema and length cap, sponsor text is an unbounded prompt-injection surface on any agent-adjacent view of the chrome).",
+  "anchors": [
+    {
+      "hash": "d9e6ec1a8ea355c8da85fa5fe38a023db312027d516d9a2650c9538d1819fde7",
+      "kind": "File",
+      "name": "app.py",
+      "node_id": "rs1:e1e153794891:file:embed-server/app.py",
+      "path": "embed-server/app.py"
+    },
+    {
+      "hash": "9d922b9046db49b05c0720df46a9df1bead6c659eefc6a29454a550f605966ab",
+      "kind": "File",
+      "name": "AGENTS.md",
+      "node_id": "rs1:e1e153794891:file:embed-server/AGENTS.md",
+      "path": "embed-server/AGENTS.md"
+    },
+    {
+      "hash": "61cbf8670f82bba66a970eeda8c3665a6e07963474591723e26d0fb43ce62a2b",
+      "kind": "File",
+      "name": "ChromeGroup.tsx",
+      "node_id": "rs1:e1e153794891:file:viz/src/panels/ChromeGroup.tsx",
+      "path": "viz/src/panels/ChromeGroup.tsx"
+    },
+    {
+      "hash": "c1db2cdbf3fdb68d7963ea11a08e6b5a17d235ecfd51b1e147f1d8e484777778",
+      "kind": "File",
+      "name": "staticMode.ts",
+      "node_id": "rs1:e1e153794891:file:viz/src/data/staticMode.ts",
+      "path": "viz/src/data/staticMode.ts"
+    },
+    {
+      "hash": "7d67411752475e1cb4fc203e104d3390fca4a63e2fbff86c8a1c970248f2292b",
+      "kind": "File",
+      "name": "view.ts",
+      "node_id": "rs1:e1e153794891:file:mcp/src/cli/view.ts",
+      "path": "mcp/src/cli/view.ts"
+    }
+  ],
+  "body_hash": "e6e0040e3cd8232a7482bc1db1ef801e5e09c6422925a44ca245c891f4c22543",
+  "consequences": "The viewer chrome gains a new bounded UI surface once REP-28 implements it; this record fixes its constraints in advance so that implementation is a placement/wiring task, not a re-litigation of what's allowed. embed-server and the semantic_find retrieval path are now permanently out of scope for monetization — a future ad idea touching that path needs a new ADR that explicitly supersedes this one, not a quiet exception. The static export's ad-free, fully-offline character becomes a checkable invariant: any future change to viz/src/data/staticMode.ts or the export path that would fetch ad content at view time is a regression against this decision, not a feature. No infra dependency is added — the delivery mechanism must ship as in-process SDK code bundled with the viewer build, fail-open by construction, so an ad-config error degrades to \"no chip\" rather than a broken render. The immutable `sponsored` label constrains the eventual SDK's payload API: sponsor-supplied fields can affect the chip's content but never its disclosure chrome.",
+  "context": "The monetization epic needs a placement policy before REP-28 (viewer sponsorship slot implementation) can start, and before any adjacent surface (embed-server, a container-based ad SDK) is tempted to carry ads by default. Three surfaces were in play: the hosted/static viewer (has chrome that could carry a disclosed slot), embed-server (the optional local embedding service backing semantic_find's hybrid retrieval tier — see embed-server/app.py, embed-server/README.md), and the general question of whether ad delivery needs its own service (a container), which would be RepoSkein's first non-optional infra dependency if made mandatory. The user directed this epic and ruled on all three placements, plus the cross-cutting data-handling constraints below, explicitly in this session; this record is written directly as `accepted` (not record_decision's default `proposed`) for the same reason the REP-17 remote-MCP record was: the user's explicit ratification in session IS the signal set_decision_status exists to capture, so recording it as proposed would understate what happened.",
+  "decided_at": "2026-08-21",
+  "decided_by": "marcus (directed the monetization epic and ruled on all three placements explicitly in session, recorded by claude)",
+  "decision": "Three placement rulings, plus the constraints that bind all of them:\n\n1. Viewer / hosted-constellation slot: YES, deferred behind REP-28. A single disclosed `sponsored` chip lives in viewer chrome only — never rendered over the 3D canvas, and never inside Inspector data (the panel that shows authored graph content must stay visually and structurally distinct from paid placement, or the graph's disinterested/deterministic character is compromised). The chip is opt-out via `REPOSKEIN_ADS=off` and is hidden entirely for verified supporters. Static exports (`reposkein-mcp view --export`) omit the slot entirely, with no view-time-fetch exception: a baked export is a self-contained, offline artifact by existing invariant (see docs/HOSTING.md, viz/src/data/staticMode.ts), and staying ad-free is part of staying self-contained — a static site that phones home for an ad is no longer self-contained, regardless of how small or disclosed the request is.\n\n2. embed-server: NO ads, ever, on any code path. embed-server feeds semantic_find's retrieval tier (embed-server/app.py serves the embeddings API that ranks/returns candidate results). Sponsored content in a retrieval channel contaminates results and breaks the determinism/trust story RepoSkein is built on — an agent (or a person) calling semantic_find must get back what best matches the query, never what a sponsor paid to surface. This is a permanent exclusion, not a deferral: unlike the viewer slot, there is no REP-28-shaped follow-up that revisits this.\n\n3. Container-based ad infrastructure: NO. A required container (a sidecar ad service, a mandatory ad-delivery daemon) would be RepoSkein's first non-optional infra dependency and directly contradicts the zero-infra invariant that already makes Neo4j, the remote MCP serve mode, and embed-server itself optional add-ons rather than requirements. The only accepted delivery mechanism is an in-process SDK bundled with the viewer: it renders the chip from a small in-process module, fails open (any error, timeout, or missing config means no chip, never a blocked or broken render), and needs no new process, port, or database.\n\nCross-cutting constraints (scope of this decision, binding on the REP-28 implementation and any future sponsorship work):\n- Sponsored data never lands in `.reposkein/` artifacts. It is not written to nodes.jsonl/edges.jsonl, not committed to decisions/summaries, and never part of anything `doctor` treats as graph state — ads are a runtime-only viewer concern, invisible to the committed graph.\n- Sponsor payloads are fixed-schema and length-capped, not freeform text or markup. This is the prompt-injection boundary: any surface an agent might read (even incidentally, via a DOM dump or screenshot-adjacent tooling) must not be able to carry attacker-controlled instructions disguised as sponsor copy.\n- The `sponsored` label is immutable — no sponsor payload field can rename, hide, restyle, or overlay the disclosure label. Disclosure is a property of the chip component, not sponsor-supplied content.",
+  "paths": [
+    "embed-server/",
+    "viz/src/panels/",
+    "viz/src/data/staticMode.ts",
+    "mcp/src/cli/view.ts",
+    "docs/HOSTING.md"
+  ],
+  "status": "accepted",
+  "supersedes": [],
+  "title": "Sponsorship placement: viewer chip only (deferred to REP-28), no embed-server ads, no ad containers",
+  "trigger": {
+    "kind": "manual"
+  }
+}
