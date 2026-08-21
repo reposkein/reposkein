@@ -22,6 +22,8 @@ SUPPORTER_SIGNING_KEY="paste-base64-pkcs8-ed25519-private-key"
 # lost), so pick one and keep it.
 SUBJECT_SALT="paste-random-salt"
 
-# Optional. A Discord or Slack incoming webhook that receives the claim link
-# so it can be sent to the supporter via Ko-fi's supporter DM.
+# Optional. A Discord or Slack incoming webhook that receives the claim CODE
+# (never a link — preview bots fetch links, which would spend one of the
+# supporter's reads and show the token to the crawler) so it can be sent to the
+# supporter via Ko-fi's supporter DM.
 NOTIFY_WEBHOOK_URL=""

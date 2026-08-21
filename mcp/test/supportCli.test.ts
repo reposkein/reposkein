@@ -61,10 +61,68 @@ describe("parseSupportArgs", () => {
   it("refuses two modes at once", () => {
     expect(parseSupportArgs(["--status", "--remove"]).error).toMatch(/only one/);
     expect(parseSupportArgs(["rsk1.a.b", "--remove"]).error).toMatch(/only one/);
+    expect(parseSupportArgs(["-", "rsk1.a.b"]).error).toMatch(/only one/);
+  });
+
+  it("reads `-` as the stdin sentinel, not an unknown flag", () => {
+    expect(parseSupportArgs(["-"])).toEqual({ mode: "install", json: false, stdin: true });
+    expect(parseSupportArgs(["-", "--json"])).toEqual({ mode: "install", json: true, stdin: true });
   });
 
   it("refuses an unknown flag rather than guessing", () => {
     expect(parseSupportArgs(["--activate"]).error).toMatch(/unknown flag/);
+    // `-` alone is the sentinel, but `-x` is still nonsense.
+    expect(parseSupportArgs(["-x"]).error).toMatch(/unknown flag/);
+  });
+});
+
+describe("reposkein-mcp support - (token from stdin)", () => {
+  it("installs a token piped in, keeping it out of argv", () => {
+    const token = mint();
+    const code = runSupport(["-"], env, NOW, () => `${token}\n`);
+    expect(code).toBe(0);
+    expect(readFileSync(tokenFile, "utf8").trim()).toBe(token);
+    expect(stdout()).toMatch(/tier skein/);
+  });
+
+  it("tolerates trailing whitespace and newlines from the pipe", () => {
+    const token = mint();
+    expect(runSupport(["-"], env, NOW, () => `  ${token}  \n\n`)).toBe(0);
+    expect(readFileSync(tokenFile, "utf8").trim()).toBe(token);
+  });
+
+  it("applies the same verification as an argv token", () => {
+    expect(runSupport(["-"], env, NOW, () => "hello")).toBe(1);
+    expect(existsSync(tokenFile)).toBe(false);
+    expect(stderr()).toMatch(/refusing to install/);
+  });
+
+  it("refuses empty stdin with an explanation", () => {
+    expect(runSupport(["-"], env, NOW, () => "")).toBe(1);
+    expect(stderr()).toMatch(/refusing to install — the token is empty/);
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  it("reports a stdin read failure instead of throwing", () => {
+    const code = runSupport(["-"], env, NOW, () => {
+      throw new Error("EAGAIN");
+    });
+    expect(code).toBe(1);
+    expect(stderr()).toMatch(/could not read the token from stdin: EAGAIN/);
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  it("does not read stdin for --status or --remove", () => {
+    const read = vi.fn(() => "should not be called");
+    runSupport(["--status"], env, NOW, read);
+    runSupport(["--remove"], env, NOW, read);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("does not read stdin when a token was given in argv", () => {
+    const read = vi.fn(() => "should not be called");
+    expect(runSupport([mint()], env, NOW, read)).toBe(0);
+    expect(read).not.toHaveBeenCalled();
   });
 });
 

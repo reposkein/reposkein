@@ -1,11 +1,19 @@
 /** `reposkein-mcp support` — install, inspect, and remove a supporter
  *  entitlement token.
  *
- *  Three shapes, no subcommands:
+ *  Four shapes, no subcommands:
  *
  *      reposkein-mcp support <token>     verify and store it
+ *      reposkein-mcp support -           read the token from stdin instead
  *      reposkein-mcp support --status    what is installed and until when
  *      reposkein-mcp support --remove    delete it
+ *
+ *  `-` exists because a token passed as an argument is not private: it lands
+ *  in `~/.bash_history`, and while the process runs it is visible in `ps` and
+ *  `/proc/<pid>/cmdline` to every other user on the machine. Piping it in
+ *  keeps it off both. It is not a secret worth much — the worst outcome of a
+ *  leak is somebody else getting no ads — but "it barely matters" is a poor
+ *  reason to make the private option unavailable.
  *
  *  The token is verified BEFORE it is written: an install that stores
  *  unverified bytes and only complains later leaves the user with a file that
@@ -14,6 +22,7 @@
  *  token typically arrives by copy-paste into a terminal that may not be the
  *  one that fetched it. */
 
+import { readFileSync } from "node:fs";
 import { readSupporterStatus, type SupporterStatus } from "../ads/supporter.js";
 import { removeSupporterTokenFile, supporterTokenPath, writeSupporterTokenFile } from "../ads/supporterStore.js";
 import { SUPPORTER_GRACE_MS, verifySupporterTokenClaims, type SupporterRejection } from "../ads/supporterToken.js";
@@ -28,6 +37,8 @@ const KOFI_URL = "https://ko-fi.com/mongx";
 export interface SupportArgs {
   mode: "install" | "status" | "remove";
   token?: string;
+  /** `-` was given: the token comes from stdin, not from argv. */
+  stdin?: boolean;
   json: boolean;
   error?: string;
 }
@@ -36,26 +47,36 @@ export function parseSupportArgs(argv: string[]): SupportArgs {
   let json = false;
   let mode: SupportArgs["mode"] | undefined;
   let token: string | undefined;
+  let stdin = false;
 
   for (const arg of argv) {
     if (arg === "--json") {
       json = true;
     } else if (arg === "--status") {
-      if (mode) return { mode: "status", json, error: "pass only one of <token> / --status / --remove" };
+      if (mode) return { mode: "status", json, error: "pass only one of <token> / - / --status / --remove" };
       mode = "status";
     } else if (arg === "--remove" || arg === "--forget") {
-      if (mode) return { mode: "remove", json, error: "pass only one of <token> / --status / --remove" };
+      if (mode) return { mode: "remove", json, error: "pass only one of <token> / - / --status / --remove" };
       mode = "remove";
+    } else if (arg === "-") {
+      // Checked before the generic `-` prefix test below, which would
+      // otherwise reject the conventional stdin sentinel as an unknown flag.
+      if (mode) return { mode: "install", json, error: "pass only one of <token> / - / --status / --remove" };
+      mode = "install";
+      stdin = true;
     } else if (arg.startsWith("-")) {
       return { mode: "status", json, error: `unknown flag ${arg}` };
     } else {
-      if (mode) return { mode: "install", json, error: "pass only one of <token> / --status / --remove" };
+      if (mode) return { mode: "install", json, error: "pass only one of <token> / - / --status / --remove" };
       mode = "install";
       token = arg;
     }
   }
   if (!mode) return { mode: "status", json };
-  return token === undefined ? { mode, json } : { mode, json, token };
+  const base: SupportArgs = { mode, json };
+  if (stdin) base.stdin = true;
+  if (token !== undefined) base.token = token;
+  return base;
 }
 
 /** Human-readable explanation of a rejection. Deliberately specific: "invalid
@@ -165,10 +186,24 @@ export function renderStatusJson(status: SupporterStatus, now: number): string {
   return JSON.stringify(base, null, 2);
 }
 
+/** Reads the whole of stdin. `readFileSync(0)` rather than an async stream
+ *  reader so `runSupport` stays synchronous like every other subcommand's
+ *  entry point. Bounded by the token size check that follows it. */
+function readStdinSync(): string {
+  return readFileSync(0, "utf8");
+}
+
 /** Entry point. Returns the process exit code: 0 when the machine ends up
  *  entitled (or a removal succeeded), 1 otherwise — so a script can branch on
- *  `reposkein-mcp support --status` without parsing text. */
-export function runSupport(argv: string[], env: NodeJS.ProcessEnv = process.env, now: number = Date.now()): number {
+ *  `reposkein-mcp support --status` without parsing text.
+ *
+ *  `readStdin` is a test seam; production always reads fd 0. */
+export function runSupport(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  now: number = Date.now(),
+  readStdin: () => string = readStdinSync
+): number {
   const args = parseSupportArgs(argv);
   if (args.error) {
     console.error(`reposkein support: ${args.error}`);
@@ -194,7 +229,21 @@ export function runSupport(argv: string[], env: NodeJS.ProcessEnv = process.env,
   }
 
   if (args.mode === "install") {
-    const token = (args.token ?? "").trim();
+    let raw: string;
+    if (args.stdin) {
+      // A bare `-` on an interactive terminal would otherwise just hang with
+      // no explanation while it waits for EOF.
+      if (process.stdin.isTTY) console.error("reposkein support: reading token from stdin — paste it, then press Ctrl-D.");
+      try {
+        raw = readStdin();
+      } catch (err) {
+        console.error(`reposkein support: could not read the token from stdin: ${(err as Error).message}`);
+        return 1;
+      }
+    } else {
+      raw = args.token ?? "";
+    }
+    const token = raw.trim();
     const parsed = verifySupporterTokenClaims(token);
     if (!parsed.ok) {
       console.error(`reposkein support: refusing to install — ${explainRejection(parsed.reason)}.`);

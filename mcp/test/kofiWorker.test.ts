@@ -296,7 +296,7 @@ describe("Ko-fi webhook — minting", () => {
     expect(kv.ttls.get(key)).toBe(30 * 24 * 60 * 60);
   });
 
-  it("notifies the maintainer with the claim link and no email address", async () => {
+  it("notifies the maintainer with the claim CODE and never a fetchable link", async () => {
     const fetchSpy = vi.fn(async () => new Response("ok"));
     vi.stubGlobal("fetch", fetchSpy);
     const res = await handleKofiWebhook(kofiRequest(membershipPayload()), {
@@ -304,13 +304,38 @@ describe("Ko-fi webhook — minting", () => {
       NOTIFY_WEBHOOK_URL: "https://discord.example.test/hook",
     });
     const { claim_url } = await res.json();
+    const code = claim_url.split("/claim/")[1];
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://discord.example.test/hook");
     const sent = JSON.parse(String(init.body));
-    expect(sent.content).toContain(claim_url);
+
+    // The code is there so the maintainer can build the link...
+    expect(sent.content).toContain(code);
     expect(sent.content).toContain("Jo Supporter");
+    // ...but there is NO URL in the message. Discord and Slack GET every link
+    // posted to them to build a preview, which would spend one of the
+    // supporter's reads and hand the token to the platform's crawler before
+    // the supporter has seen it.
+    expect(sent.content).not.toContain(claim_url);
+    expect(sent.content).not.toMatch(/https?:\/\//);
+    // And still no email address.
     expect(sent.content).not.toContain("example.com");
+  });
+
+  it("sends both `content` and `text` so one webhook URL works for Discord or Slack", async () => {
+    const fetchSpy = vi.fn(async () => new Response("ok"));
+    vi.stubGlobal("fetch", fetchSpy);
+    await handleKofiWebhook(kofiRequest(membershipPayload()), {
+      ...env,
+      NOTIFY_WEBHOOK_URL: "https://hooks.example.test/hook",
+    });
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(String(init.body));
+    // Slack requires `text` and rejects a body without it; Discord requires
+    // `content`. Sending both means neither has to be configured for.
+    expect(typeof sent.content).toBe("string");
+    expect(sent.text).toBe(sent.content);
   });
 
   it("still succeeds when the notification webhook fails", async () => {
@@ -391,6 +416,56 @@ describe("the claim endpoint", () => {
     kv.store.set(key, JSON.stringify({ reads: 0, maxReads: 3 }));
     const res = await handleRequest(new Request(url), env, undefined);
     expect(res.status).toBe(404);
+  });
+
+  describe("CLAIM_MAX_READS parsing", () => {
+    async function readsBeforeGone(overrides: Record<string, unknown>): Promise<number> {
+      const localKv = new FakeKV();
+      const localEnv = { ...env, ...overrides, SUPPORTER_CLAIMS: localKv };
+      const res = await handleKofiWebhook(kofiRequest(membershipPayload()), localEnv);
+      const url = (await res.json()).claim_url;
+      let ok = 0;
+      for (let i = 0; i < 8; i++) {
+        const r = await handleRequest(new Request(url), localEnv, undefined);
+        if (r.status !== 200) break;
+        ok++;
+      }
+      return ok;
+    }
+
+    it("honours a whole number", async () => {
+      expect(await readsBeforeGone({ CLAIM_MAX_READS: "2" })).toBe(2);
+    });
+
+    it("floors a fractional value rather than rounding up", async () => {
+      // 2.9 reads is not a thing; it must not silently become 3.
+      expect(await readsBeforeGone({ CLAIM_MAX_READS: "2.9" })).toBe(2);
+    });
+
+    it("never produces a link that is dead on arrival", async () => {
+      // `0`, `0.4` and a negative would all floor or round to zero, which
+      // would delete the claim on the first read while still serving it —
+      // or, worse, hand out a link nobody can use.
+      for (const value of ["0", "0.4", "-5"]) {
+        expect(await readsBeforeGone({ CLAIM_MAX_READS: value }), value).toBeGreaterThanOrEqual(1);
+      }
+    });
+
+    it("falls back to the default for a non-numeric value", async () => {
+      expect(await readsBeforeGone({ CLAIM_MAX_READS: "three" })).toBe(3);
+      expect(await readsBeforeGone({ CLAIM_MAX_READS: "NaN" })).toBe(3);
+    });
+
+    it("survives a hand-mangled maxReads in the stored record", async () => {
+      const url = await mintClaimUrl();
+      const key = [...kv.store.keys()].find((k) => k.startsWith("claim:"))!;
+      const record = JSON.parse(kv.store.get(key)!);
+      kv.store.set(key, JSON.stringify({ ...record, maxReads: -1, reads: "banana" }));
+      // Still serves once and then closes, rather than treating a negative
+      // cap as "never expire".
+      expect((await handleRequest(new Request(url), env, undefined)).status).toBe(200);
+      expect((await handleRequest(new Request(url), env, undefined)).status).toBe(404);
+    });
   });
 });
 

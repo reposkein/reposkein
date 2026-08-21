@@ -231,18 +231,48 @@ describe("verification is provably offline", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const srcRoot = resolve(here, "..", "src");
 
-  /** Walks the static import graph from `ads/supporter.ts`. */
-  function importGraph(entry: string): Map<string, string> {
+  /** Every module specifier a source file pulls in, by ANY syntax that can
+   *  bring code into the process:
+   *
+   *   - `import x from "s"` / `import {x} from "s"` / `import * as x from "s"`
+   *   - `import "s"`            — side-effect only, no bindings, easy to miss
+   *   - `export {x} from "s"`   — a re-export executes the module too
+   *   - `export * from "s"`
+   *   - `import("s")`           — dynamic
+   *   - `require("s")`          — CJS interop
+   *
+   *  The first version of this walker matched only the `… from "s"` shape,
+   *  which meant a single `import "./phone-home.js"` would have slipped
+   *  through the very test whose job is to prove nothing here can reach the
+   *  network. The walker self-test below pins all of them. */
+  function specifiersOf(source: string): string[] {
+    const patterns = [
+      /(?:^|[\s;}])import\s[^;'"]*?from\s*["']([^"']+)["']/g,
+      /(?:^|[\s;}])import\s*["']([^"']+)["']/g,
+      /(?:^|[\s;}])export\s[^;'"]*?from\s*["']([^"']+)["']/g,
+      /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+      /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    ];
+    const out: string[] = [];
+    for (const p of patterns) for (const m of source.matchAll(p)) out.push(m[1]!);
+    return out;
+  }
+
+  /** Walks the static import graph from `ads/supporter.ts`. `read` is a seam
+   *  so the walker can be run over synthetic sources — without it, "the graph
+   *  is clean" and "the walker sees nothing" are indistinguishable. */
+  function importGraph(
+    entry: string,
+    read: (f: string) => string = (f) => readFileSync(f, "utf8")
+  ): Map<string, string> {
     const seen = new Map<string, string>();
     const queue = [entry];
     while (queue.length > 0) {
       const file = queue.pop()!;
       if (seen.has(file)) continue;
-      const source = readFileSync(file, "utf8");
+      const source = read(file);
       seen.set(file, source);
-      const specs = [...source.matchAll(/(?:^|\n)\s*import\s[^;]*?from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
-      const dynamic = [...source.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]!);
-      for (const spec of [...specs, ...dynamic]) {
+      for (const spec of specifiersOf(source)) {
         if (!spec.startsWith(".")) continue;
         queue.push(resolve(dirname(file), spec.replace(/\.js$/, ".ts")));
       }
@@ -251,10 +281,59 @@ describe("verification is provably offline", () => {
   }
 
   const graph = importGraph(join(srcRoot, "ads", "supporter.ts"));
+  const rel = (f: string) => f.slice(srcRoot.length + 1).replace(/\\/g, "/");
+
+  describe("walker self-test — the detector is not vacuous", () => {
+    /** Runs the walker over an in-memory module tree. */
+    function walkFake(files: Record<string, string>): string[] {
+      const root = "/fake";
+      const read = (f: string) => {
+        const key = f.slice(root.length + 1);
+        if (!(key in files)) throw new Error(`unexpected read of ${key}`);
+        return files[key]!;
+      };
+      return [...importGraph(`${root}/entry.ts`, read).keys()].map((f) => f.slice(root.length + 1)).sort();
+    }
+
+    it("follows a plain `from` import", () => {
+      expect(walkFake({ "entry.ts": `import { a } from "./a.js";`, "a.ts": "" })).toEqual(["a.ts", "entry.ts"]);
+    });
+
+    it("follows a SIDE-EFFECT import with no bindings", () => {
+      expect(walkFake({ "entry.ts": `import "./a.js";`, "a.ts": "" })).toEqual(["a.ts", "entry.ts"]);
+    });
+
+    it("follows a re-export", () => {
+      expect(walkFake({ "entry.ts": `export { a } from "./a.js";`, "a.ts": "" })).toEqual(["a.ts", "entry.ts"]);
+    });
+
+    it("follows `export * from`", () => {
+      expect(walkFake({ "entry.ts": `export * from "./a.js";`, "a.ts": "" })).toEqual(["a.ts", "entry.ts"]);
+    });
+
+    it("follows a dynamic import and a require", () => {
+      expect(walkFake({ "entry.ts": `const a = await import("./a.js");`, "a.ts": "" })).toEqual(["a.ts", "entry.ts"]);
+      expect(walkFake({ "entry.ts": `const a = require("./a.js");`, "a.ts": "" })).toEqual(["a.ts", "entry.ts"]);
+    });
+
+    it("follows transitively, so a leaf cannot hide behind a clean parent", () => {
+      expect(walkFake({ "entry.ts": `import "./a.js";`, "a.ts": `import "./b.js";`, "b.ts": "" })).toEqual([
+        "a.ts",
+        "b.ts",
+        "entry.ts",
+      ]);
+    });
+
+    it("sees bare specifiers pulled in by every syntax", () => {
+      expect(specifiersOf(`import "undici";`)).toContain("undici");
+      expect(specifiersOf(`export * from "node:http";`)).toContain("node:http");
+      expect(specifiersOf(`const { get } = require("node:https");`)).toContain("node:https");
+      expect(specifiersOf(`await import("node:net");`)).toContain("node:net");
+    });
+  });
 
   it("reaches only the four entitlement modules", () => {
-    const names = [...graph.keys()].map((f) => f.slice(srcRoot.length + 1).replace(/\\/g, "/")).sort();
-    expect(names).toEqual([
+    expect([...graph.keys()].map(rel).sort()).toEqual([
       "ads/supporter.ts",
       "ads/supporterKey.ts",
       "ads/supporterStore.ts",
@@ -265,10 +344,9 @@ describe("verification is provably offline", () => {
   it("imports no networking module, builtin or otherwise", () => {
     const allowedBuiltins = new Set(["node:crypto", "node:fs", "node:os", "node:path"]);
     for (const [file, source] of graph) {
-      const specs = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
-      for (const spec of specs) {
+      for (const spec of specifiersOf(source)) {
         if (spec.startsWith(".")) continue;
-        expect(allowedBuiltins.has(spec), `${file} imports ${spec}`).toBe(true);
+        expect(allowedBuiltins.has(spec), `${rel(file)} imports ${spec}`).toBe(true);
       }
     }
   });
@@ -284,11 +362,16 @@ describe("verification is provably offline", () => {
       /\bundici\b/,
       /\bnavigator\.sendBeacon\b/,
       /\bhttps?:\/\//,
+      // `require(` at all, not merely of a networking module: a runtime
+      // require is a way to reach code the static walk above never sees.
+      /\brequire\s*\(/,
+      /\bcreateRequire\b/,
+      /\bprocess\.binding\b/,
     ];
     for (const [file, source] of graph) {
       const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
       for (const pattern of forbidden) {
-        expect(pattern.test(code), `${file} matches ${pattern}`).toBe(false);
+        expect(pattern.test(code), `${rel(file)} matches ${pattern}`).toBe(false);
       }
     }
   });

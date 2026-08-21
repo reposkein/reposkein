@@ -43,7 +43,15 @@
 
 import { constantTimeEquals, mintSupporterToken, newClaimCode, opaqueSubject } from "./token.js";
 
-const DEFAULTS = {
+/** Every tunable and its default, in one object.
+ *
+ *  Exported because `mcp/test/kofiWorker.test.ts` cross-checks it against the
+ *  verifier: `SUPPORTER_KID` must name a key the shipped package actually
+ *  trusts, and `TOKEN_TTL_DAYS` must fit inside the verifier's lifetime cap.
+ *  A mismatch in either is the worst bug this system can have — the money is
+ *  taken and the token is then rejected by every client — so it is asserted
+ *  rather than left to a careful reader. */
+export const DEFAULTS = {
   SUPPORTER_KID: "skein-2026-08",
   KOFI_TIER_NAME: "Skein",
   TOKEN_TTL_DAYS: "35",
@@ -67,6 +75,17 @@ function numberSetting(env, name) {
   const parsed = Number(setting(env, name));
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   return Number(DEFAULTS[name]);
+}
+
+/** A whole-number setting with a floor. Counts have to be integers — a
+ *  `CLAIM_MAX_READS` of `2.5` compared against an integer read counter is a
+ *  slow way to write `2`, and `0.4` would round to zero and hand out a claim
+ *  link that is dead the instant it is created. NaN and non-positive values
+ *  are already rejected by `numberSetting`; this adds truncation and the
+ *  minimum.
+ *  @param {Record<string, unknown>} env @param {keyof DEFAULTS} name @param {number} min */
+function intSetting(env, name, min = 1) {
+  return Math.max(min, Math.floor(numberSetting(env, name)));
 }
 
 function json(body, status = 200) {
@@ -190,7 +209,7 @@ export async function handleKofiWebhook(request, env, ctx) {
   );
 
   const code = newClaimCode();
-  const maxReads = Math.round(numberSetting(env, "CLAIM_MAX_READS"));
+  const maxReads = intSetting(env, "CLAIM_MAX_READS", 1);
   // `expiresAt` is stored so a read can re-put the record with the REMAINING
   // lifetime instead of a fresh full TTL. Without it, opening the link once a
   // day would keep it alive indefinitely.
@@ -201,7 +220,7 @@ export async function handleKofiWebhook(request, env, ctx) {
   }
 
   const link = claimUrl(env, request, code);
-  const notify = notifyMaintainer(env, payload, link);
+  const notify = notifyMaintainer(env, payload, code);
   if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(notify);
   else await notify;
 
@@ -217,21 +236,53 @@ function claimUrl(env, request, code) {
   return `${base}/claim/${code}`;
 }
 
-/** Best-effort push of the claim link to wherever the maintainer watches.
+/** Best-effort nudge to wherever the maintainer watches.
+ *
+ *  ## Why this sends a CODE and never a URL
+ *
+ *  Discord and Slack fetch every link posted to them in order to build a
+ *  preview. That fetch is a GET against the claim endpoint, which would
+ *  (a) burn one of the supporter's limited reads before they have seen the
+ *  link at all, and (b) hand the token itself to the platform's link-preview
+ *  crawler, which stores and caches page content. Posting the URL would mean
+ *  the token is read by a third party every single time — not an edge case,
+ *  the default behaviour.
+ *
+ *  So the message carries the bare claim CODE and no link. There is nothing
+ *  in it for an unfurler to follow, because there is no URL in it. The
+ *  maintainer knows their own worker's address and assembles the link when
+ *  they send it on.
+ *
  *  Never throws: a notification failure must not turn an authentic, already
- *  paid-for webhook into a retry storm. */
-async function notifyMaintainer(env, payload, link) {
+ *  paid-for webhook into a retry storm.
+ *
+ *  @param {Record<string, any>} env
+ *  @param {Record<string, any>} payload
+ *  @param {string} code */
+async function notifyMaintainer(env, payload, code) {
   if (typeof env.NOTIFY_WEBHOOK_URL !== "string" || env.NOTIFY_WEBHOOK_URL === "") return;
   const who = typeof payload.from_name === "string" ? payload.from_name : "a supporter";
   const first = payload.is_first_subscription_payment === true ? "NEW" : "renewal";
+  // Deliberately no email address: the maintainer replies through Ko-fi's own
+  // supporter DM, so there is no reason to copy a customer email into a chat
+  // log that will outlive the subscription. And deliberately no URL — see
+  // above.
+  const message =
+    `RepoSkein Skein membership (${first}) from ${who}.\n` +
+    `Claim code (append to /claim/ on the fulfilment worker): ${code}\n` +
+    `Send it as the full link in a Ko-fi supporter DM. Do not paste the link ` +
+    `anywhere a preview bot will fetch it — that spends a read and shows the ` +
+    `token to the crawler.`;
   try {
     await fetch(env.NOTIFY_WEBHOOK_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      // Deliberately no email address: the maintainer replies through Ko-fi's
-      // own supporter DM, so there is no reason to copy a customer email into
-      // a chat log that will outlive the subscription.
-      body: JSON.stringify({ content: `RepoSkein Skein membership (${first}) from ${who} — claim link: ${link}` }),
+      // `content` is Discord's field, `text` is Slack's. Sending both means
+      // one endpoint URL works for either without configuration; the extra
+      // key is ignored by whichever platform did not ask for it. Slack
+      // rejects a body with no `text` outright (and does so with a 200-shaped
+      // error that is easy to miss), which is the failure this avoids.
+      body: JSON.stringify({ content: message, text: message }),
     });
   } catch {
     // Swallowed on purpose.
@@ -265,8 +316,11 @@ export async function handleClaim(code, env) {
   }
   if (typeof record?.token !== "string") return text("Unknown or expired claim link.", 404);
 
-  const reads = (Number(record.reads) || 0) + 1;
-  const maxReads = Number(record.maxReads) || 3;
+  // Both counters are re-derived defensively: the record came out of KV, and
+  // a hand-edited or half-written one must not produce a fractional or
+  // negative cap that the `>=` below then reads as "never expire".
+  const reads = Math.max(0, Math.floor(Number(record.reads)) || 0) + 1;
+  const maxReads = Math.max(1, Math.floor(Number(record.maxReads)) || 3);
   if (reads >= maxReads) {
     await env.SUPPORTER_CLAIMS.delete(`claim:${code}`);
   } else {

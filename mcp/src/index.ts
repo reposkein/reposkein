@@ -40,7 +40,7 @@ Usage:
   reposkein-mcp doctor [path]   health check (indexer binary, index, repo id, hooks, graph freshness); --json for machine output, --ci additionally fails on stale graph / missing hooks / unsplit legacy summaries
   reposkein-mcp adr <sub> ...   decision-log utilities
   reposkein-mcp stats [path]    session usage report (calls, tokens saved vs grep)
-  reposkein-mcp support <token> install a supporter token (verified locally, stored at ~/.config/reposkein/supporter.jwt, mode 600); --status to show tier/expiry, --remove to delete it. Offline: no network call, ever
+  reposkein-mcp support <token> install a supporter token (verified locally, stored at ~/.config/reposkein/supporter.jwt, mode 600); pass \`-\` to read it from stdin instead of argv (keeps it out of shell history and \`ps\`); --status to show tier/expiry, --remove to delete it. Offline: no network call, ever
   reposkein-mcp view [path]     open the constellation viewer (--export <dir> for a static site)
   reposkein-mcp serve --http    ADVANCED, OPTIONAL: shared remote server — MCP over Streamable HTTP + the viewer/API in one process, bearer-token auth, read-only by default (see docs/REMOTE.md)
   reposkein-mcp --help          show this help

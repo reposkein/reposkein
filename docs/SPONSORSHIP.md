@@ -141,6 +141,19 @@ reposkein-mcp support rsk1.eyJ2IjoxLCJra…
 #   expires 2026-09-20 (30 days from now)
 ```
 
+Or pipe it in, so it never appears in argv:
+
+```bash
+pbpaste | reposkein-mcp support -          # macOS
+reposkein-mcp support - < token.txt        # anywhere
+```
+
+A token passed as an argument lands in `~/.bash_history`, and while the
+process runs it is visible in `ps` and `/proc/<pid>/cmdline` to every other
+user on the machine. `-` reads it from stdin instead and avoids both. The
+token is not worth much — the worst outcome of a leak is somebody else seeing
+no ads — but that is a poor reason not to offer the private option.
+
 It is stored **per user, never per repo**: `~/.config/reposkein/supporter.jwt`
 (or `$XDG_CONFIG_HOME/reposkein/`), mode `600`, directory `700`. Nothing about
 entitlement is ever written inside a repository, so it cannot ride into git,
@@ -230,11 +243,34 @@ worker is running, because verification never contacts it.
 
 Being honest about the delivery path: Ko-fi's webhook is fire-and-forget and
 Ko-fi has no API for messaging a supporter, so a webhook *cannot* hand you
-anything directly. The claim link is announced to the maintainer, who sends it
-via Ko-fi's own supporter DM. A human is in that loop, on purpose — the
-self-service alternative (look up a token by email address) is an oracle that
-leaks who supports the project. See the worker's
+anything directly. The worker announces a one-time claim **code** — never a
+link, because Discord and Slack fetch posted links to build previews, which
+would spend one of the claim's reads and hand the token to the platform's
+crawler. The maintainer assembles the link and sends it via Ko-fi's own
+supporter DM. A human is in that loop, on purpose — the self-service
+alternative (look up a token by email address) is an oracle that leaks who
+supports the project. See the worker's
 [README](../workers/kofi-fulfillment/README.md).
+
+### Known limits, stated rather than hidden
+
+- **Up to 5 seconds** can pass before an installed, renewed, or deleted token
+  takes effect in a running server, because the entitlement file is re-probed
+  at most that often. Deliberate: the alternative is a `statSync` on every
+  tool call, and this gate's only job is suppressing an ad.
+- **A filesystem with coarse timestamps** (some network mounts, or an
+  `mtime` granularity of a second) can delay that further if a replacement
+  token is byte-identical in length to the one it replaces. `support` is not
+  affected — it never uses the cache — so `--status` always tells the truth.
+- **A badly wrong system clock** produces confusing answers: a clock far in
+  the past makes a valid token look `not_yet_valid`, and one far in the future
+  makes it look expired. `--status` names the reason ("check this machine's
+  clock") but cannot distinguish a wrong clock from a genuinely stale token,
+  because offline verification has nothing else to ask.
+- **`--remove` deletes whatever the configured path points at.** With the
+  default path that is the entitlement file and nothing else; if you have
+  pointed `REPOSKEIN_SUPPORTER_FILE` somewhere unusual, it will remove that
+  instead.
 
 ## Exactly what leaves the machine
 
@@ -377,6 +413,11 @@ On the **response envelope only**, copy-on-write:
 | A forged, tampered, foreign-signed or re-labelled supporter token never entitles | `mcp/test/supporterToken.test.ts` |
 | Expiry is honoured through the 3-day grace window and not one millisecond past it | `mcp/test/supporterToken.test.ts` |
 | Entitlement verification imports nothing that can open a connection (import graph walked, `fetch(` grepped) | `mcp/test/supporterEntitlement.test.ts` |
+| The import-graph walker itself catches side-effect imports, re-exports, dynamic imports and `require` — proven against synthetic modules, so a clean result is not a vacuous one | `mcp/test/supporterEntitlement.test.ts` |
+| Non-canonical encodings (padding, `+`/`/`, trailing-bit slack, embedded whitespace) are refused, not repaired | `mcp/test/supporterToken.test.ts` |
+| `__proto__` / inherited-property `kid`s cannot nominate a trust root, and a payload key cannot pollute `Object.prototype` | `mcp/test/supporterToken.test.ts` |
+| The worker's `SUPPORTER_KID` names a key the package trusts, and its token lifetime fits the verifier's cap — "money taken, token rejected" is un-shippable | `mcp/test/supporterKeyProvenance.test.ts` |
+| The maintainer notification carries a claim code and no fetchable URL, so a link-preview bot cannot spend a read or read the token | `mcp/test/kofiWorker.test.ts` |
 | A valid token means **zero** slot requests and zero audit lines on a fully enabled install | `mcp/test/supporterEntitlement.test.ts` |
 | The token is stored mode `600` in a `700` directory, and nothing is written inside a repo | `mcp/test/supportCli.test.ts`, `mcp/test/supporterEntitlement.test.ts` |
 | No shipped code trusts the committed *test* keypair | `mcp/test/supporterKeyProvenance.test.ts` |

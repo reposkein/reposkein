@@ -31,19 +31,32 @@ Ko-fi membership payment
   /kofi  ── verify KOFI_WEBHOOK_TOKEN (constant-time)
         ── is_subscription_payment && tier_name == "Skein"?  no → 200, ignored
         ── mint Ed25519 token, park it in KV behind a 32-byte claim code
-        ── POST the claim link to NOTIFY_WEBHOOK_URL (Discord/Slack), optional
+        ── POST the claim CODE (never a link) to NOTIFY_WEBHOOK_URL, optional
         │
         ▼
-  maintainer pastes the claim link into Ko-fi's supporter DM
+  maintainer assembles the link and pastes it into Ko-fi's supporter DM
         │
         ▼
   supporter opens /claim/<code> → copies `reposkein-mcp support <token>`
 ```
 
-**Why not a self-service `/claim?email=…`?** Because it is an oracle: anyone
-who guesses a supporter's email gets their token *and* confirmation that the
-address supports RepoSkein. An unguessable code delivered out of band is the
-only version of this that is not a data leak.
+**Why the notification carries a code and not a link.** Discord and Slack
+fetch every URL posted to them in order to render a preview. Against a claim
+endpoint that GET would spend one of the supporter's limited reads *and* hand
+the token to the platform's link-preview crawler, which caches page content —
+not an edge case, the default behaviour. So the message contains the bare
+code and no URL at all: there is nothing for an unfurler to follow. The
+maintainer knows their own worker's address and assembles the link when
+sending it on.
+
+The same caution applies downstream: paste the claim link into a Ko-fi
+supporter DM as plain text, not into a channel where a preview bot is
+watching.
+
+**Why not a self-service `GET /claim?email=…`?** Because it is an oracle:
+anyone who guesses a supporter's email gets their token *and* confirmation
+that the address supports RepoSkein. An unguessable code delivered out of band
+is the only version of this that is not a data leak.
 
 If a fully automated path is wanted later, the honest options are (a) a Ko-fi
 Shop digital-download product whose file is a link to a claim page, or (b)
@@ -136,14 +149,19 @@ Ko-fi's settings page has a "send test" button; a test event with no
 | `KOFI_WEBHOOK_TOKEN` | secret | — | Ko-fi's verification token. Missing → every webhook 500s (never "accept everything"). |
 | `SUPPORTER_SIGNING_KEY` | secret | — | Base64 PKCS#8 Ed25519 private key. |
 | `SUBJECT_SALT` | secret | — | Salts the HMAC producing the token's opaque `sub`. |
-| `NOTIFY_WEBHOOK_URL` | secret | — | Optional. Where claim links are announced. |
+| `NOTIFY_WEBHOOK_URL` | secret | — | Optional. Where claim codes are announced. Sends `{content, text}` so one URL works for Discord or Slack (Slack rejects a body with no `text`). |
 | `SUPPORTER_CLAIMS` | KV binding | — | Claim + idempotency storage. |
 | `KOFI_TIER_NAME` | var | `Skein` | Membership tier that mints a token (case-insensitive). |
-| `SUPPORTER_KID` | var | `skein-2026-08` | Key id written into minted tokens. |
-| `TOKEN_TTL_DAYS` | var | `35` | Token lifetime. |
-| `CLAIM_TTL_DAYS` | var | `30` | Claim-link lifetime. |
-| `CLAIM_MAX_READS` | var | `3` | How many times a claim link may be opened. |
+| `SUPPORTER_KID` | var | `skein-2026-08` | Key id written into minted tokens. Asserted against the package's trusted keys by `mcp/test/supporterKeyProvenance.test.ts`. |
+| `TOKEN_TTL_DAYS` | var | `35` | Token lifetime. Asserted to fit inside the verifier's 400-day cap. |
+| `CLAIM_TTL_DAYS` | var | `30` | Claim-link lifetime. Reading a link re-stores it with the *remaining* window, so opening it cannot extend it. |
+| `CLAIM_MAX_READS` | var | `3` | How many times a claim link may be opened. Floored to a whole number with a minimum of 1; a non-numeric or non-positive value falls back to the default. |
 | `PUBLIC_BASE_URL` | var | request origin | Base for generated claim URLs. |
+
+Every numeric setting falls back to its default rather than propagating `NaN`.
+A typo in `TOKEN_TTL_DAYS` would otherwise mint tokens with `exp: null` that
+every client rejects — a failure that surfaces only as "supporters say it does
+not work".
 
 ## Tests
 
