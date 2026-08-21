@@ -122,6 +122,53 @@ describe("the stack: browser semantics, two stacks and no cursor", () => {
     resetViewHistory();
     expect(historyDepth()).toEqual({ back: 0, forward: 0 });
   });
+
+  /** FIX ROUND 1, `I2`. A run of identical entries is never useful — `[` would
+   *  step through views that all look the same — and under the cap it evicts the
+   *  trail the reader actually wants. */
+  it("drops a push identical to the top of the stack", () => {
+    const p = pose(1);
+    const expanded = new Set(["dir:x"]);
+    const snap = (): ViewSnapshot => ({ selected: "a", expanded, pose: p });
+
+    pushView(snap());
+    pushView(snap());
+    pushView(snap());
+    expect(historyDepth().back).toBe(1);
+  });
+
+  it("…comparing CONTENTS, not references — a fresh equal Set is the same view", () => {
+    const p = pose(1);
+    // `expandToReveal` allocates a new Set unconditionally, so a repeated reveal
+    // of an already-revealed node yields equal-but-distinct Sets. Those describe
+    // the same view and must not both be recorded.
+    pushView({ selected: "a", expanded: new Set(["x"]), pose: p });
+    pushView({ selected: "a", expanded: new Set(["x"]), pose: p });
+    expect(historyDepth().back).toBe(1);
+
+    // An equal-VALUED pose object likewise.
+    pushView({ selected: "a", expanded: new Set(["x"]), pose: { ...p } });
+    expect(historyDepth().back).toBe(1);
+  });
+
+  it("…but any real difference still pushes", () => {
+    const expanded = new Set(["x"]);
+    const p = pose(1);
+    pushView({ selected: "a", expanded, pose: p });
+    pushView({ selected: "b", expanded, pose: p }); //           selection differs
+    pushView({ selected: "b", expanded, pose: pose(2) }); //     pose differs
+    pushView({ selected: "b", expanded: new Set(["x", "y"]), pose: pose(2) }); // expansion differs
+    expect(historyDepth().back).toBe(4);
+  });
+
+  it("the dedupe does not swallow a genuine return to an earlier view", () => {
+    const a: ViewSnapshot = { selected: "a", expanded: new Set(), pose: pose(1) };
+    const b: ViewSnapshot = { selected: "b", expanded: new Set(), pose: pose(2) };
+    pushView(a);
+    pushView(b);
+    pushView(a); // back to A the long way round — not a duplicate of the top
+    expect(historyDepth().back).toBe(3);
+  });
 });
 
 /** The reducer half: what a restore does to state. */

@@ -27,7 +27,7 @@
  *  Pure functions over module state, no React, no DOM: `viewHistory.test.ts`
  *  drives the whole thing with plain objects. */
 
-import type { CameraPose } from "./cameraPose";
+import { samePose, type CameraPose } from "./cameraPose";
 
 /** One remembered view. `expanded` and `pose` are held BY REFERENCE and never
  *  mutated — the reducer already treats `expanded` as an owned immutable value
@@ -48,10 +48,37 @@ export const HISTORY_CAP = 50;
 let back: ViewSnapshot[] = [];
 let forward: ViewSnapshot[] = [];
 
+/** Structural sameness for two snapshots: same selection, same expansion
+ *  CONTENTS, same camera pose.
+ *
+ *  Contents, not reference. Reference would have been exact if every reducer
+ *  transition allocated a new `expanded` only when the expansion really moved,
+ *  but `expandToReveal` returns a fresh Set unconditionally — so a repeated
+ *  reveal of an already-revealed node produces a new Set with identical members
+ *  and would slip past a reference check. Comparing contents is also the honest
+ *  rule for this question: if all three fields match, there is nothing for `[`
+ *  to go back TO. The sets hold tens of keys, so the cost is nil. */
+function sameSnapshot(a: ViewSnapshot, b: ViewSnapshot): boolean {
+  if (a.selected !== b.selected) return false;
+  if (!samePose(a.pose, b.pose)) return false;
+  if (a.expanded === b.expanded) return true;
+  if (a.expanded.size !== b.expanded.size) return false;
+  for (const key of a.expanded) if (!b.expanded.has(key)) return false;
+  return true;
+}
+
 /** Record `snapshot` as a view the reader can return to, and abandon any
  *  forward branch. Called with the PRE-navigation view: pushing happens on the
- *  way out of a view, not on the way into one. */
+ *  way out of a view, not on the way into one.
+ *
+ *  A push identical to the top of the stack is DROPPED (fix round 1, `I2`).
+ *  Callers guard the conditional cases themselves — see `record` in
+ *  `state/store.tsx` — but this is the general net: a run of identical entries
+ *  is never useful (`[` would step through views that all look the same) and
+ *  under `HISTORY_CAP` it evicts the trail the reader actually wants. */
 export function pushView(snapshot: ViewSnapshot): void {
+  const top = back[back.length - 1];
+  if (top && sameSnapshot(top, snapshot)) return;
   back.push(snapshot);
   if (back.length > HISTORY_CAP) back = back.slice(back.length - HISTORY_CAP);
   forward = [];

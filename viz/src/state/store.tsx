@@ -261,6 +261,44 @@ function defaultLensFilters(): Partial<State> {
   };
 }
 
+/** The cluster `x` would close: the deepest EXPANDED strict ancestor of the
+ *  selection, or null when there is none (no selection, or nothing but the root
+ *  galaxy left open — which never closes).
+ *
+ *  Exported and shared with the action wrapper on purpose. The wrapper has to
+ *  know whether a collapse will actually do anything, so that a no-op `x` does
+ *  not push a view-history entry (fix round 1, `I2`: holding `x` at the top of
+ *  the tree grew the back-stack with identical views and, under the 50 cap,
+ *  evicted the real trail). Having the wrapper re-derive that condition would be
+ *  two copies of one rule; this is one copy with two callers. */
+export function collapseBranchTarget(
+  model: ClientModel,
+  selected: string | null,
+  expanded: Set<string>,
+): string | null {
+  if (!selected) return null;
+  const own = model.clusterOfNode.get(selected) ?? selected;
+  const chain = model.ancestors.get(own);
+  if (!chain) return null;
+  for (let i = chain.length - 2; i >= 0; i--) {
+    const key = chain[i]!;
+    if (key === model.rootKey) break; // the root galaxy never closes
+    if (expanded.has(key)) return key;
+  }
+  return null;
+}
+
+/** Whether `⇧x` has anything to close. Same wrapper-guard reason as above. */
+export function hasExpansionAboveFileLevel(
+  model: ClientModel,
+  expanded: Set<string>,
+): boolean {
+  for (const key of expanded) {
+    if (model.byKey.get(key)?.kind === "file") return true;
+  }
+  return false;
+}
+
 export function reducer(state: State, a: Action): State {
   switch (a.t) {
     case "progress":
@@ -293,19 +331,8 @@ export function reducer(state: State, a: Action): State {
      *  reading. No selection → nothing to scope to, so it is a no-op. */
     case "collapseBranch": {
       const model = state.model;
-      if (!model || !state.selected) return state;
-      const own = model.clusterOfNode.get(state.selected) ?? state.selected;
-      const chain = model.ancestors.get(own);
-      if (!chain) return state;
-      let victim: string | null = null;
-      for (let i = chain.length - 2; i >= 0; i--) {
-        const key = chain[i]!;
-        if (key === model.rootKey) break; // the root galaxy never closes
-        if (state.expanded.has(key)) {
-          victim = key;
-          break;
-        }
-      }
+      if (!model) return state;
+      const victim = collapseBranchTarget(model, state.selected, state.expanded);
       if (victim === null) return state;
       const expanded = new Set(state.expanded);
       expanded.delete(victim);
@@ -772,9 +799,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
    *  Deliberately NOT recorded: `select` (an inspect, not a move — and it is
    *  what Esc/misclick deselection uses, which must not fill history with
    *  identical entries), `requestFit`, and `revealWithoutRefit` (the tour drives
-   *  its own sequence; see `resetViewHistory` on tour entry). */
-  const record = useCallback(() => {
-    if (!stateRef.current.model) return; // nothing meaningful to return to yet
+   *  its own sequence; see `resetViewHistory` on tour entry).
+   *
+   *  A NO-OP NAVIGATION RECORDS NOTHING (fix round 1, `I2`). `x` at the top of
+   *  the tree and `⇧x` with nothing above file level both return the same state
+   *  object, so recording unconditionally meant holding `x` grew the back-stack
+   *  with identical views — and under the 50 cap that EVICTED the real trail,
+   *  turning `[` into a no-op right when the reader needed it. Callers whose
+   *  transition is conditional pass a predicate; `pushView` additionally drops a
+   *  push identical to the top of the stack, which covers the general case (two
+   *  ⌘↵ reveals of the same already-visible node, say) without every wrapper
+   *  having to reason about it. */
+  const record = useCallback((willChange?: (s: State) => boolean) => {
+    const s = stateRef.current;
+    if (!s.model) return; // nothing meaningful to return to yet
+    if (willChange && !willChange(s)) return;
     pushView(snapshot());
   }, [snapshot]);
 
@@ -839,11 +878,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ t: "toggleExpand", key });
       },
       collapseBranch: () => {
-        record();
+        record((s) => collapseBranchTarget(s.model!, s.selected, s.expanded) !== null);
         dispatch({ t: "collapseBranch" });
       },
       collapseToFileLevel: () => {
-        record();
+        record((s) => hasExpansionAboveFileLevel(s.model!, s.expanded));
         dispatch({ t: "collapseToFileLevel" });
       },
       select: (id) => dispatch({ t: "select", id }),

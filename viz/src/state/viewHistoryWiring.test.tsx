@@ -144,12 +144,21 @@ describe("which actions record a view", () => {
     expect(historyDepth().back).toBe(1);
   });
 
-  it("both scoped collapses record", () => {
+  it("both scoped collapses record — when they actually collapse something", () => {
     const h = mount();
     act(() => h.actions.revealAndSelect(SYM_B, { fly: true })); // 1
-    act(() => h.actions.collapseBranch()); //                       2
-    act(() => h.actions.collapseToFileLevel()); //                  3
-    expect(historyDepth().back).toBe(3);
+    act(() => h.actions.collapseBranch()); //                       2 — closes b.ts
+    expect(historyDepth().back).toBe(2);
+
+    // `⇧x` now has nothing above file level to close (the only open file was
+    // just shut), so it records nothing — see the no-op suite below. Open a
+    // file again and it records.
+    act(() => h.actions.collapseToFileLevel());
+    expect(historyDepth().back).toBe(2);
+
+    act(() => h.actions.revealAndSelect(SYM_A, { fly: true })); // 3
+    act(() => h.actions.collapseToFileLevel()); //                  4
+    expect(historyDepth().back).toBe(4);
   });
 
   it("select does NOT record — inspecting is not moving, and deselect must not spam the stack", () => {
@@ -181,6 +190,67 @@ describe("which actions record a view", () => {
     act(() => actions!.revealAndSelect(SYM_A, { fly: true }));
     act(() => actions!.toggleExpand("dir:r:mcp"));
     expect(historyDepth()).toEqual({ back: 0, forward: 0 });
+  });
+});
+
+/** FIX ROUND 1, `I2`. `record()` used to fire before every wrapped dispatch,
+ *  including the ones the reducer answers with the SAME state object. Holding
+ *  `x` at the top of the tree therefore grew the back-stack with identical
+ *  views — and under `HISTORY_CAP` that evicted the real trail, turning `[` into
+ *  a no-op at exactly the moment the reader wanted it. */
+describe("a no-op navigation records nothing", () => {
+  it("`x` with no selection does not touch the stack", () => {
+    const h = mount();
+    expect(h.state().selected).toBeNull();
+    act(() => h.actions.collapseBranch());
+    expect(historyDepth()).toEqual({ back: 0, forward: 0 });
+  });
+
+  it("`x` held at the top of the tree stops growing the stack", () => {
+    const h = mount();
+    publishCameraPose(POSE_1);
+    act(() => h.actions.revealAndSelect(SYM_B, { fly: true }));
+
+    // Climb until `x` stops doing anything, then keep pressing.
+    for (let i = 0; i < 10; i++) act(() => h.actions.collapseBranch());
+    const settled = historyDepth().back;
+    for (let i = 0; i < 10; i++) act(() => h.actions.collapseBranch());
+    expect(historyDepth().back).toBe(settled);
+    // …and the stack is nowhere near the cap, i.e. the real trail survives.
+    expect(settled).toBeLessThan(10);
+  });
+
+  it("`⇧x` with nothing above file level does not touch the stack", () => {
+    const h = mount();
+    act(() => h.actions.collapseToFileLevel());
+    expect(historyDepth()).toEqual({ back: 0, forward: 0 });
+
+    // With a file open it DOES record, exactly once…
+    act(() => h.actions.revealAndSelect(SYM_A, { fly: true }));
+    const before = historyDepth().back;
+    act(() => h.actions.collapseToFileLevel());
+    expect(historyDepth().back).toBe(before + 1);
+    // …and then goes quiet again.
+    act(() => h.actions.collapseToFileLevel());
+    act(() => h.actions.collapseToFileLevel());
+    expect(historyDepth().back).toBe(before + 1);
+  });
+
+  it("a repeated identical reveal is deduped by the stack itself", () => {
+    const h = mount();
+    publishCameraPose(POSE_1);
+    act(() => h.actions.revealAndSelect(SYM_A, { fly: false })); // records the overview
+    act(() => h.actions.revealAndSelect(SYM_A, { fly: false })); // records the SYM_A view
+    const after = historyDepth().back;
+    expect(after).toBe(2);
+
+    // From here the view genuinely stops moving — same node, already revealed,
+    // already selected, same pose — so there is nothing new to come back to.
+    // (`expandToReveal` still hands the reducer a fresh Set each time, which is
+    // exactly why the dedupe compares contents rather than references.)
+    act(() => h.actions.revealAndSelect(SYM_A, { fly: false }));
+    act(() => h.actions.revealAndSelect(SYM_A, { fly: false }));
+    expect(historyDepth().back).toBe(after);
   });
 });
 
