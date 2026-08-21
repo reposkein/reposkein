@@ -83,3 +83,5 @@ Keep the viewer's invariants intact: **read-only** (never mutate the committed J
 Fork, branch, make focused commits, ensure the gates above pass, and open a PR with a clear description. For new languages or anything touching the resolver/serializer, include the determinism test results in the PR.
 
 By contributing you agree your work is licensed under [Apache-2.0](./LICENSE).
+
+**Support:** [Ko-fi](https://ko-fi.com/mongx) — funds hosted-constellation infra + indexer maintenance.

@@ -7,6 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/reposkein/reposkein/ci.yml?style=for-the-badge&logo=githubactions&logoColor=EAE7DC&label=CI&labelColor=070A12&color=2DD4BF)](https://github.com/reposkein/reposkein/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/reposkein/reposkein?style=for-the-badge&logo=github&logoColor=EAE7DC&label=release&labelColor=070A12&color=2DD4BF)](https://github.com/reposkein/reposkein/releases)
 [![License](https://img.shields.io/badge/license-Apache_2.0-F2B84B?style=for-the-badge&labelColor=070A12)](./LICENSE)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-F2B84B?style=for-the-badge&logo=kofi&logoColor=EAE7DC&labelColor=070A12)](https://ko-fi.com/mongx)
 
 <sub>Listed on: [skills.sh](https://skills.sh/reposkein/reposkein) · [Glama](https://glama.ai/mcp/servers/reposkein/reposkein) · [mcpservers.org](https://mcpservers.org/servers/reposkein/reposkein) · [ghcr.io](https://github.com/reposkein/reposkein/pkgs/container/reposkein-embed)</sub>
 
@@ -61,6 +62,8 @@ git clone <repo-url> && cd <repo> && npx @reposkein/mcp init
 ```
 
 `init` detects the committed `.reposkein/meta.json`, reuses its config, and wires up your agent's MCP config automatically. Publish a durable, shareable view of the graph with a [**hosted constellation**](docs/HOSTING.md) (GitHub Pages via `reposkein-mcp init --ci`) — and because summaries are committed to git, they're **shared team memory**: every teammate's agent starts from what previous agents already learned, not from scratch.
+
+**Support:** if RepoSkein is useful, [**Ko-fi**](https://ko-fi.com/mongx) support funds hosted-constellation infrastructure and indexer maintenance — supporters get an ad-free experience once sponsorship tiers ship.
 
 ## Prerequisites
 

@@ -105,4 +105,6 @@ EMBED_MODEL=voyageai/voyage-4-nano EMBED_DIMS=1024 EMBED_DEVICE=mps \
 (Native install lets torch use Apple **MPS** or an NVIDIA **CUDA** GPU directly;
 omit `EMBED_DEVICE` to auto-detect, or set `cpu` to force CPU.)
 
+**Support:** [Ko-fi](https://ko-fi.com/mongx) — funds hosted-constellation infra + indexer maintenance.
+
 Apache-2.0 (same as RepoSkein). The model's own license is on its HuggingFace card.

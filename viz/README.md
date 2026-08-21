@@ -47,6 +47,8 @@ The viewer honors RepoSkein's [core invariants](https://github.com/reposkein/rep
 - **Zero-infra.** It works directly over the committed JSONL — no Neo4j, no external service. The static export needs no server at all.
 - **Deterministic.** Same graph → same map. The seeded layout is render-time only and is never committed.
 
+**Support:** [Ko-fi](https://ko-fi.com/mongx) — funds hosted-constellation infra + indexer maintenance.
+
 ## License
 
 [Apache-2.0](https://github.com/reposkein/reposkein/blob/main/LICENSE).

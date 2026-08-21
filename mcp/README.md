@@ -217,6 +217,8 @@ Full documentation, architecture, supported-language details, benchmarks, and th
 
 👉 **https://github.com/reposkein/reposkein**
 
+**Support:** [Ko-fi](https://ko-fi.com/mongx) — funds hosted-constellation infra + indexer maintenance.
+
 ## License
 
 [Apache-2.0](https://github.com/reposkein/reposkein/blob/main/LICENSE).
