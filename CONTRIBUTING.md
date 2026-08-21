@@ -8,11 +8,13 @@ RepoSkein has **three hard invariants** — please don't break them:
 
 1. **Determinism.** `.reposkein/*.jsonl` must be a **byte-identical** function of the working-tree source — same code → same graph, on any machine. CI enforces this (`determinism_two_runs_byte_identical`, `cache_warm_run_is_byte_identical_to_cold`, the Neo4j `load → export` round-trip). No LLMs, clocks, randomness, or HashMap-iteration-order may influence the output. Anything derived/non-deterministic (embeddings, git history, cross-repo edges) lives under `.reposkein/local/` (gitignored).
 2. **Zero-infra by default.** It must work with **no database and no Docker** (the in-memory JSONL store). Don't make Neo4j or any service *required*.
-3. **Derived output stays out of git.** `nodes.jsonl` and `edges.jsonl` are rebuilt from the tree, so they are git-ignored and the MCP server builds them on demand. Only what an agent *authored* is committed: `.reposkein/summaries.jsonl`, alongside `meta.json` and `config.toml`. Determinism still matters for both — a re-index that reorders lines would churn the committed summaries file.
+3. **Derived output stays out of git.** `nodes.jsonl` and `edges.jsonl` are rebuilt from the tree, so they are git-ignored and the MCP server builds them on demand. Only what an agent *authored* is committed: `.reposkein/summaries/<xx>.jsonl` (sharded by a hash of the node id — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)), `.reposkein/decisions/` (ADRs), alongside `meta.json` and `config.toml`. Determinism still matters for all of it — a re-index that reordered lines would churn committed files it shouldn't.
 
 Also: **Conventional Commits** (`feat:`, `fix:`, `docs:`, …), and **keep CI green** (`cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings`; `npm test`).
 
 ## Dev setup
+
+Requirements: Rust (stable), Node 24. Docker only for the optional Neo4j backend.
 
 ```sh
 # Rust indexer
@@ -24,7 +26,18 @@ cd mcp && npm install && npm test && npm run build
 
 (Neo4j-gated tests skip without `NEO4J_PASSWORD`; that's expected.)
 
+To run a from-source build against a real agent instead of the npm package, wire it in with `command: node`, `args: [".../mcp/dist/index.js"]`, env `REPOSKEIN_REPO_PATH` + `REPOSKEIN_INDEXER_BIN`. Full test commands: `cd indexer && cargo test && cargo clippy --all-targets -- -D warnings`; `cd mcp && npm test`.
+
 ## Project layout
+
+```
+indexer/      Rust workspace: core, lang-{python,ts,rust,go,java,csharp}, lang-common, neo4j-io, cli
+mcp/          @reposkein/mcp — the TypeScript MCP server (tools + graph-store backends)
+mcp/bench/    benchmarks: retrieval efficiency (Track 1) + end-task SWE-bench harness (Track 2)
+skills/       reposkein-graph-rag + reposkein-setup — cross-agent skills (skills.sh)
+embed-server/ one-command local embedding server (voyage-4-nano) for hybrid semantic_find
+viz/          @reposkein/viz — the 3D constellation viewer SPA (served by `reposkein-mcp view`)
+```
 
 - `indexer/` — Rust workspace. `core` (graph model, deterministic serializer, resolver), `lang-*` (per-language Tree-sitter extractors), `lang-common` (shared helpers), `neo4j-io`, `cli`.
 - `mcp/` — the `@reposkein/mcp` TypeScript MCP server (tools + graph-store backends).
