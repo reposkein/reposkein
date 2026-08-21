@@ -6,6 +6,43 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-21
+
+### Added
+
+- **Astrolabe viewer redesign complete.** Four PRs finish the redesign begun on
+  the React 19 + R3F v9 + Tailwind-tokens foundation (#50) and the ⌘K command
+  palette (#51) shipped in 0.4.0:
+  - **Status bar + mode chips.** One persistent chrome strip replaces
+    scattered viewer chrome, with a never-null breadcrumb and mode chips
+    surfacing the active view at all times. (#53)
+  - **Inspector + summoned layers.** A single Inspector drawer and
+    on-demand summoned layers replace five legacy panels, cutting the
+    viewer's chrome surface without losing any capability. (#54)
+  - **Navigation semantics.** Layered `Esc` (undoes the most local thing
+    first), scoped collapse, view history, anchor-aware hops, and
+    URL-as-view (the URL is always a faithful, shareable snapshot of what's
+    on screen). (#55)
+  - **Polish pass.** A first-run coach mark, responsive chrome down to
+    narrow viewports, and an accessibility floor (focus order, contrast,
+    keyboard reachability) across the redesigned surface. (#56)
+
+  **Note for hosted-constellation users:** the GitHub Pages viewer deploys
+  from the released `@reposkein/mcp` package, not from `main` — this release
+  is what upgrades the deployed viewer app itself.
+
+- **Optional shared remote MCP.** `reposkein-mcp serve --http` serves the MCP
+  Streamable HTTP transport and the viewer/`/api/*` surface from one process
+  against one git checkout, so a team can share a single running instance
+  instead of each agent spawning its own local one. Strictly optional: stdio
+  stays the default, and `serve --http` refuses to start without auth —
+  `name:secret[:write]` bearer tokens via `REPOSKEIN_SERVE_TOKENS` or
+  `config.toml`, timing-safe comparison. Read-only toolset by default;
+  write capability (e.g. `record_decision`) is granted per token, and writes
+  carry the token's identity for attribution. ADR-first: the decision to
+  lift the hosted/multi-user non-goal was recorded and accepted before the
+  feature shipped. (#57)
+
 ## [0.4.0] - 2026-08-21
 
 ### Added
