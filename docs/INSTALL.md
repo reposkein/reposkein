@@ -511,3 +511,23 @@ Actions workflow that publishes it to GitHub Pages on every push.
 **Read [`docs/HOSTING.md`](./HOSTING.md) before enabling this** — it covers
 GitHub Pages' public-by-default visibility and internal-host alternatives.
 
+
+---
+
+## 12. Share one live server instead (advanced, optional)
+
+Everything above installs the **stdio** server: your agent launches
+`reposkein-mcp` as a subprocess on the machine holding the checkout. That is
+the default and the supported path — if you have the repo locally, stop here.
+
+If you need agents that have **no clone** (a CI job, a hosted coding agent, a
+reviewer without the repo) to reach one always-current graph, there is an
+opt-in remote mode: `reposkein-mcp serve --http` speaks MCP over Streamable
+HTTP and serves the viewer + `/api/*` from the same process, behind
+bearer-token auth, read-only by default, re-indexing when the served checkout's
+HEAD moves.
+
+**Read [`docs/REMOTE.md`](./REMOTE.md) before enabling this** — it covers token
+capabilities, per-connection isolation, and the security division of labour
+(TLS termination and network exposure are the operator's job). It is not
+required for normal use and nothing opens a socket unless you run it.

@@ -100,13 +100,17 @@ export class JsonlGraphStore implements GraphStore {
 
   constructor(
     repoPath: string,
-    private readonly repoId: string
+    private readonly repoId: string,
+    /** Writer identity picking the per-agent sidecar file (REP-17: a remote
+     *  connection's bearer-token name). Undefined keeps the REPOSKEIN_AGENT
+     *  default — the stdio behaviour. */
+    agent?: string
   ) {
     this.repoPath = repoPath;
     const dir = join(repoPath, ".reposkein");
     this.nodesPath = join(dir, "nodes.jsonl");
     this.edgesPath = join(dir, "edges.jsonl");
-    this.sidecarFile = sidecarPath(repoPath);
+    this.sidecarFile = sidecarPath(repoPath, agent);
     this.ensureFresh();
   }
 

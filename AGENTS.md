@@ -31,7 +31,7 @@ cliff.toml    # git-cliff config (Conventional Commits → CHANGELOG.md)
 | Task | Location |
 |---|---|
 | Add language extractor | `indexer/crates/lang-<x>/` (template: `lang-go`); register in `indexer/crates/cli/src/main.rs` |
-| New MCP tool | `mcp/src/tools/` + register in `mcp/src/index.ts` |
+| New MCP tool | `mcp/src/tools/` + register in `mcp/src/server/createMcpServer.ts` (one server per connection; a MUTATING tool must also be listed in `WRITE_TOOLS` and registered with `withWrite`, or `serve --http`'s read-only tokens could write) |
 | Graph storage backend | `mcp/src/store/` (GraphStore + JSONL + Neo4j + Federation) |
 | Cross-file resolution semantics | `indexer/crates/core/src/resolve.rs` (2291 LOC) |
 | Frozen `@arity` qualified-name rule | `indexer/crates/core/src/id.rs` (changing it orphans all summaries) |
