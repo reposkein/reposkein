@@ -8,6 +8,7 @@ import {
   injectGraphDataScript,
   parseViewArgs,
   runExport,
+  resolveServerRepoMeta,
   vizDistDir,
 } from "../src/cli/view.js";
 
@@ -148,7 +149,7 @@ describe("buildGraphDataJs (bake metadata + temporal + federation)", () => {
     const js = buildGraphDataJs("demo", "n\n", "e\n");
     const json = js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, "");
     const payload = JSON.parse(json) as { meta: { commitSha: null; builtAt: null; repoUrl: null } };
-    expect(payload.meta).toEqual({ commitSha: null, builtAt: null, repoUrl: null });
+    expect(payload.meta).toEqual({ commitSha: null, builtAt: null, repoUrl: null, pagesUrl: null });
   });
 
   it("bakes the temporal co-change map (same shape /api/temporal returns)", () => {
@@ -238,7 +239,7 @@ gated("runExport (integration: bakes sha + temporal + federation)", () => {
       const payload = JSON.parse(
         js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, ""),
       ) as {
-        meta: { commitSha: string; repoUrl: string; builtAt: string };
+        meta: { commitSha: string; repoUrl: string; builtAt: string; pagesUrl: string | null };
         cochange: Record<string, unknown>;
         manifest: { federated: unknown[] };
       };
@@ -246,6 +247,7 @@ gated("runExport (integration: bakes sha + temporal + federation)", () => {
         commitSha: "deadbeef",
         repoUrl: "https://github.com/o/r",
         builtAt: "2026-08-20T00:00:00.000Z",
+        pagesUrl: null,
       });
       // A one-commit repo has no co-change pairs, but the temporal code path
       // must have run without throwing (proves getTemporal was actually called).
@@ -316,6 +318,80 @@ gated("runExport (integration: bakes sha + temporal + federation)", () => {
       ]);
       expect(payload.federatedText[0]!.repoId).toBe("widgets");
       expect(payload.federatedText[0]!.nodesText).toContain("rs1:widgets:file:x.ts");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bakes pagesUrl from the repo's [team] config.toml when not explicitly overridden", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rs-export-"));
+    try {
+      mkdirSync(join(dir, ".reposkein"), { recursive: true });
+      writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), "");
+      writeFileSync(join(dir, ".reposkein", "edges.jsonl"), "");
+      writeFileSync(
+        join(dir, ".reposkein", "config.toml"),
+        '[team]\npages_url = "https://reposkein.github.io/example"\n',
+      );
+      const outDir = join(dir, "_site");
+      await runExport(dir, "demo", outDir, {});
+      const js = readFileSync(join(outDir, "graph-data.js"), "utf8");
+      const payload = JSON.parse(
+        js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, ""),
+      ) as { meta: { pagesUrl: string | null } };
+      expect(payload.meta.pagesUrl).toBe("https://reposkein.github.io/example");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an explicit pagesUrl bake option overrides config.toml", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rs-export-"));
+    try {
+      mkdirSync(join(dir, ".reposkein"), { recursive: true });
+      writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), "");
+      writeFileSync(join(dir, ".reposkein", "edges.jsonl"), "");
+      writeFileSync(
+        join(dir, ".reposkein", "config.toml"),
+        '[team]\npages_url = "https://from-config.example"\n',
+      );
+      const outDir = join(dir, "_site");
+      await runExport(dir, "demo", outDir, { pagesUrl: "https://override.example" });
+      const js = readFileSync(join(outDir, "graph-data.js"), "utf8");
+      const payload = JSON.parse(
+        js.replace(/^window\.__REPOSKEIN_GRAPH__ = /, "").replace(/;\n$/, ""),
+      ) as { meta: { pagesUrl: string | null } };
+      expect(payload.meta.pagesUrl).toBe("https://override.example");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveServerRepoMeta", () => {
+  it("reads pagesUrl from [team] config.toml alongside the git-derived fields", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rs-servermeta-"));
+    try {
+      mkdirSync(join(dir, ".reposkein"), { recursive: true });
+      writeFileSync(
+        join(dir, ".reposkein", "config.toml"),
+        '[team]\npages_url = "https://reposkein.github.io/example"\n',
+      );
+      const meta = resolveServerRepoMeta(dir);
+      expect(meta.pagesUrl).toBe("https://reposkein.github.io/example");
+      // Not a git repo — the git-derived fields degrade to null (pre-existing
+      // behavior); pagesUrl is independent of git.
+      expect(meta.commitSha).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pagesUrl is null when config.toml has no [team] section", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rs-servermeta-"));
+    try {
+      const meta = resolveServerRepoMeta(dir);
+      expect(meta.pagesUrl).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

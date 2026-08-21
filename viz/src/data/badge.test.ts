@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shortSha, relativeAge, badgeInfo } from "./badge";
+import { shortSha, relativeAge, badgeInfo, teamConstellationHref } from "./badge";
 
 describe("shortSha", () => {
   it("truncates to 7 chars", () => {
@@ -73,5 +73,34 @@ describe("badgeInfo", () => {
     const info = badgeInfo({ commitSha: "abc1234", builtAt: "2026-08-20T06:00:00.000Z", repoUrl: null }, now);
     expect(info?.href).toBeNull();
     expect(info?.label).toBe("graph @ abc1234 · 6h ago");
+  });
+});
+
+describe("teamConstellationHref", () => {
+  it("returns null when meta is null", () => {
+    expect(teamConstellationHref(null)).toBeNull();
+  });
+
+  it("returns null when pagesUrl is absent (older manifests without the field)", () => {
+    expect(teamConstellationHref({ commitSha: null, builtAt: null, repoUrl: null })).toBeNull();
+  });
+
+  it("returns null when pagesUrl is explicitly null (no [team] section)", () => {
+    expect(teamConstellationHref({ commitSha: null, builtAt: null, repoUrl: null, pagesUrl: null })).toBeNull();
+  });
+
+  it("returns null for a blank/whitespace-only pagesUrl", () => {
+    expect(teamConstellationHref({ commitSha: null, builtAt: null, repoUrl: null, pagesUrl: "   " })).toBeNull();
+  });
+
+  it("returns the trimmed pagesUrl when set", () => {
+    expect(
+      teamConstellationHref({
+        commitSha: null,
+        builtAt: null,
+        repoUrl: null,
+        pagesUrl: "  https://reposkein.github.io/example  ",
+      }),
+    ).toBe("https://reposkein.github.io/example");
   });
 });
