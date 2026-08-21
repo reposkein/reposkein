@@ -98,9 +98,8 @@ export interface State {
   /** Gentle idle azimuth drift after a few seconds of no interaction.
    *  DEFAULT OFF: with `frameloop="demand"` an always-on drift means the GPU
    *  never sleeps, and an unrequested camera move fights the reader. Controls
-   *  respects this flag today; nothing can flip it yet — the toggle + keyboard
-   *  binding land with the navigation-semantics task (REP-14). Intentionally a
-   *  dead flag until then, not an oversight. */
+   *  respects this flag; `d` and the palette's "Toggle idle drift" row flip it
+   *  (V4 §6 — the binding this field waited for since V0). */
   idleDrift: boolean;
   /** In-scene name labels. The minimap / legend / filters / help surfaces used
    *  to live here too as `showMinimap` / `showLegend` booleans; V3 moved them to

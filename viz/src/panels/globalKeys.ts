@@ -140,10 +140,20 @@ export function handleGlobalKey(
       e.preventDefault();
       env.toggleLayer("minimap");
       return true;
+    // `f` FRAMES, and only frames (V4 §6). It used to call `resetView()` —
+    // which is Clean slate: it wiped the lens, the filters, every overlay and
+    // the whole expansion tree. A key labelled "Frame all" in the keymap and
+    // in the status bar's Frame pill must not be the most destructive command
+    // in the app. `requestFit` is what the pill and the palette row already do.
     case "f":
     case "F":
       e.preventDefault();
-      actions.resetView();
+      actions.requestFit();
+      return true;
+    case "d":
+    case "D":
+      e.preventDefault();
+      actions.setIdleDrift(!state.idleDrift);
       return true;
     // SCOPED COLLAPSE (V4 §2). LOD collapse happens ONLY here, on a breadcrumb
     // click, or on a cluster click — never on Esc and never on a misclick.

@@ -40,7 +40,8 @@ export const KEYMAP: KeymapGroup[] = [
     bindings: [
       { keys: ["←", "→", "↑", "↓"], description: "Hop to the next / previous neighbor", binding: null },
       { keys: ["Tab", "⇧Tab"], description: "Hop neighbors (same as the arrows)", binding: "Tab" },
-      { keys: ["f"], description: "Frame all — refit the camera to what's on screen", binding: "f" },
+      { keys: ["f"], description: "Frame the current selection — camera only, nothing is reset", binding: "f" },
+      { keys: ["d"], description: "Idle drift — gentle auto-rotation after a few seconds still", binding: "d" },
       { keys: ["Esc"], description: "Back out one step: palette → layer → mode → selection", binding: "Escape" },
     ],
   },

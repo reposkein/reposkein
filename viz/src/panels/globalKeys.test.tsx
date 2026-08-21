@@ -203,10 +203,26 @@ describe("handleGlobalKey — layer shortcuts", () => {
 });
 
 describe("handleGlobalKey — the bindings V2 already had, preserved", () => {
-  it("'f' frames all", () => {
+  it("'f' frames the current view — and nothing else (V4 §6)", () => {
     const actions = mockActions();
     expect(handleGlobalKey(key("f"), stateWith(), actions, mockEnv())).toBe(true);
-    expect(actions.resetView).toHaveBeenCalledOnce();
+    expect(actions.requestFit).toHaveBeenCalledOnce();
+    // It used to call resetView(), i.e. Clean slate: lens, filters, every
+    // overlay and the whole expansion tree, from a key the keymap calls
+    // "Frame all".
+    expect(actions.resetView).not.toHaveBeenCalled();
+    expect(actions.clearFilters).not.toHaveBeenCalled();
+    expect(actions.setLens).not.toHaveBeenCalled();
+  });
+
+  it("'d' toggles idle drift, reading the current flag", () => {
+    const off = mockActions();
+    handleGlobalKey(key("d"), stateWith({ idleDrift: false }), off, mockEnv());
+    expect(off.setIdleDrift).toHaveBeenCalledExactlyOnceWith(true);
+
+    const on = mockActions();
+    expect(handleGlobalKey(key("D"), stateWith({ idleDrift: true }), on, mockEnv())).toBe(true);
+    expect(on.setIdleDrift).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   it("Esc DESELECTS — the last resort in the Esc stack (V4 §1: it never collapses)", () => {
@@ -329,9 +345,9 @@ describe("keymap ↔ handler agreement", () => {
     }
   });
 
-  it("documents '/' , '?', 'm' and 'f' — the four bindings V3 introduced or rewired", () => {
+  it("documents every binding V3 and V4 introduced or rewired", () => {
     const documented = documentedBindings();
-    for (const b of ["/", "?", "m", "f"]) expect(documented.has(b)).toBe(true);
+    for (const b of ["/", "?", "m", "f", "d", "x", "X"]) expect(documented.has(b)).toBe(true);
   });
 
   it("the keymap has no empty group and no binding without a description", () => {

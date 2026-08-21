@@ -242,6 +242,7 @@ export function buildCommandRegistry(): CommandItem[] {
       id: "toggle-drift",
       label: "Toggle idle drift",
       subtitle: "Gentle camera drift after a few seconds of no interaction",
+      kbd: "D",
       group: "commands",
       disabled: () => false,
       run: (actions, s) => actions.setIdleDrift(!s.idleDrift),
