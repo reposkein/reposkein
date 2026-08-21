@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   EDGE_TYPE_META,
   NODE_KIND_META,
@@ -11,8 +11,10 @@ import { useStore } from "../state/store";
 /** Collapsible legend panel (bottom-left). Single source of truth for colors
  *  comes from encoding.ts constants so legend + scene always agree. */
 export function LegendPanel() {
-  const [open, setOpen] = useState(true);
   const store = useStore();
+  // Visibility is command-palette-controlled ("Toggle legend") — a store flag,
+  // not local state.
+  const open = store.showLegend;
   // Only the languages actually present in this graph (sorted asc). Computed
   // once per model. The hue map (single source of truth) lives in encoding.ts.
   const languages = useMemo(
@@ -46,7 +48,7 @@ export function LegendPanel() {
           cursor: "pointer",
           userSelect: "none",
         }}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => store.toggleLegend()}
       >
         <span style={{ fontWeight: 600, fontSize: 11, letterSpacing: 1, opacity: 0.8 }}>
           LEGEND

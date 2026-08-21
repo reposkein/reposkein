@@ -16,6 +16,7 @@ import { fetchTemporal } from "../data/temporal";
 import { DetailPanel } from "../panels/DetailPanel";
 import { FilterHUD } from "../panels/FilterHUD";
 import { SearchPanel } from "../panels/SearchPanel";
+import { CommandPalette } from "../panels/CommandPalette";
 import { LegendPanel } from "../panels/LegendPanel";
 import { LensSwitcher } from "../panels/LensSwitcher";
 import { MinimapPanel } from "../panels/MinimapPanel";
@@ -186,7 +187,7 @@ function View() {
             <EdgeLines />
             <FlowParticles />
             <TemporalLinks />
-            <Labels />
+            {store.showLabels && <Labels />}
           </>
         )}
         <Controls />
@@ -202,6 +203,7 @@ function View() {
       </Canvas>
 
       <HeaderBar />
+      <CommandPalette />
       {nodeNotice && (
         <NodeMovedNotice nodeId={nodeNotice} onDismiss={() => setNodeNotice(null)} />
       )}
@@ -306,7 +308,7 @@ function HeaderBar() {
         scroll = zoom · drag = orbit · click cluster = expand · click star = inspect · Esc / click space = back
       </div>
       <div style={{ fontSize: 11, opacity: 0.45, marginTop: 1 }}>
-        keys: / search · f frame all · ←→ / Tab hop neighbor
+        keys: / search · ⌘K commands · f frame all · ←→ / Tab hop neighbor
       </div>
       {store.model && <SearchPanel />}
     </div>

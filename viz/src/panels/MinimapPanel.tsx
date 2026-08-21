@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useStore } from "../state/store";
 import { getCameraTarget, recenterCamera } from "../scene/Controls";
 import {
@@ -23,7 +23,9 @@ export function MinimapPanel() {
   const store = useStore();
   const model = store.model;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [open, setOpen] = useState(true);
+  // Visibility is command-palette-controlled ("Toggle minimap") — a store flag,
+  // not local state, so it's the same source of truth on either path.
+  const open = store.showMinimap;
 
   // Projection + projected point pixels — pure function of the model layout.
   const projected = useMemo(() => {
@@ -128,7 +130,7 @@ export function MinimapPanel() {
       >
         <span>OVERVIEW</span>
         <button
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => store.toggleMinimap()}
           title={open ? "Hide minimap" : "Show minimap"}
           style={{
             border: "none",
