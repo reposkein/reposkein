@@ -26,6 +26,8 @@ cd mcp && npm install && npm test && npm run build
 
 (Neo4j-gated tests skip without `NEO4J_PASSWORD`; that's expected.)
 
+`mcp/test/doctor.test.ts` stubs `REPOSKEIN_INDEXER_BIN` at a fixture binary internally, so `npm test` never fetches a release asset — CI (and `npm test` on a fresh clone) stays green on release-bump commits even before the tag's assets publish.
+
 To run a from-source build against a real agent instead of the npm package, wire it in with `command: node`, `args: [".../mcp/dist/index.js"]`, env `REPOSKEIN_REPO_PATH` + `REPOSKEIN_INDEXER_BIN`. Full test commands: `cd indexer && cargo test && cargo clippy --all-targets -- -D warnings`; `cd mcp && npm test`.
 
 ## Project layout
