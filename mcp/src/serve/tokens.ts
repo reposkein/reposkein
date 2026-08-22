@@ -104,14 +104,20 @@ export function loadServeTokens(
 }
 
 /** Extracts the credential from an `Authorization: Bearer <token>` header.
- *  Returns null for a missing, non-Bearer, or empty-value header. */
+ *  Returns null for a missing, non-Bearer, or empty-value header.
+ *
+ *  Parsed with string ops, not a regex: the header is attacker-controlled,
+ *  and the obvious `/^Bearer[ \t]+(.+)$/` backtracks quadratically on a long
+ *  space run followed by a newline (CodeQL js/polynomial-redos). */
 export function bearerFromAuthHeader(header: string | string[] | undefined): string | null {
   const value = Array.isArray(header) ? header[0] : header;
   if (!value) return null;
-  const m = /^Bearer[ \t]+(.+)$/i.exec(value.trim());
-  if (!m) return null;
-  const token = m[1]!.trim();
-  return token === "" ? null : token;
+  const v = value.trim();
+  if (v.length < 7 || v.slice(0, 6).toLowerCase() !== "bearer") return null;
+  const sep = v.charCodeAt(6);
+  if (sep !== 0x20 && sep !== 0x09) return null; // "Bearer" must be followed by SP/HTAB
+  const token = v.slice(7).trim();
+  return token === "" || token.includes("\n") || token.includes("\r") ? null : token;
 }
 
 /** Length-independent constant-time comparison: both sides are hashed to a

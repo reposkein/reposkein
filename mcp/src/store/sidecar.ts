@@ -28,7 +28,11 @@ export function sidecarDir(repoPath: string): string {
  *  (or is absent) falls back to "agent", which is also the pre-multi-agent
  *  name — so a single-agent setup keeps one stable file. */
 export function agentSlug(agent = process.env.REPOSKEIN_AGENT): string {
+  // Cap the raw value before any regex runs: the anchored trim below is
+  // quadratic on adversarially long inputs (CodeQL js/polynomial-redos), and
+  // nothing past a few hundred chars can survive the final 40-char cap anyway.
   const slug = (agent ?? "")
+    .slice(0, 256)
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "")
