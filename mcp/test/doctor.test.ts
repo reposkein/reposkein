@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,42 @@ import { runChecks, resolveDoctorRepoPath, runDoctor, ciFailingChecks } from "..
 import { decisionChecks } from "../src/cli/doctorDecisions.js";
 import { computeBodyHash, writeDecision, decisionsDir, type DecisionRecord } from "../src/store/decisions.js";
 import { writeIndexedAtMarker } from "../src/store/indexedAt.js";
+
+// This suite must run hermetically: no network, no dependency on a
+// version-matched indexer release asset having been published yet. Without
+// this, `runChecks`'s "binary" check falls through
+// ensureIndexerBinary -> downloadBinary (GitHub Releases fetch by
+// mcp/package.json's version) -> PATH fallback -> `spawn ENOENT`, which is
+// exactly what happens on a release-bump commit before the tag's assets are
+// live (REP-32), and on any fresh clone with no network/cached binary. Stub
+// REPOSKEIN_INDEXER_BIN at a tiny fixture executable that answers
+// `--version`/`--schema-version` (and anything else) with exit 0, so the
+// "binary" check passes the same way on every machine.
+let fixtureDir: string;
+let fakeIndexerBin: string;
+let savedIndexerBin: string | undefined;
+
+beforeAll(() => {
+  fixtureDir = mkdtempSync(join(tmpdir(), "rs-doctor-fixture-"));
+  fakeIndexerBin = join(fixtureDir, "reposkein-indexer");
+  writeFileSync(
+    fakeIndexerBin,
+    "#!/usr/bin/env node\n" +
+      "const arg = process.argv[2];\n" +
+      'if (arg === "--schema-version") { console.log("1"); }\n' +
+      'else { console.log("reposkein-indexer 0.0.0-test"); }\n' +
+      "process.exit(0);\n"
+  );
+  chmodSync(fakeIndexerBin, 0o755);
+  savedIndexerBin = process.env.REPOSKEIN_INDEXER_BIN;
+  process.env.REPOSKEIN_INDEXER_BIN = fakeIndexerBin;
+});
+
+afterAll(() => {
+  if (savedIndexerBin === undefined) delete process.env.REPOSKEIN_INDEXER_BIN;
+  else process.env.REPOSKEIN_INDEXER_BIN = savedIndexerBin;
+  rmSync(fixtureDir, { recursive: true, force: true });
+});
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rs-doctor-")); });
