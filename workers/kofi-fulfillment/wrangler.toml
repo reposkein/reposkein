@@ -36,7 +36,7 @@ CLAIM_MAX_READS = "3"
 # then paste the printed id below.
 [[kv_namespaces]]
 binding = "SUPPORTER_CLAIMS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "8212b2da7a5949f08b535926ae924e0e"
 
 # Secrets are NEVER put in this file. Set them with `wrangler secret put`:
 #   KOFI_WEBHOOK_TOKEN     — from Ko-fi → Settings → API → Webhooks
