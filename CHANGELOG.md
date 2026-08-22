@@ -6,6 +6,44 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-22
+
+### Added
+
+- **`reposkein-mcp support` — offline supporter entitlement.** A new CLI
+  subcommand (`support <token>`, `support -` to read a token from stdin,
+  `support --status`, `support --remove`) installs, inspects, and removes a
+  Ko-fi "Skein" member's supporter token. The token is a minimal Ed25519
+  envelope (`rsk1.<payload>.<signature>`) verified entirely offline against
+  a public key compiled into the package — no licence server, no
+  activation call, no heartbeat, no revocation check, and no network call
+  now or ever. Being a supporter turns ads off; that's the only effect.
+  (#62)
+- **Ko-fi support links + `FUNDING.yml`.** A visible, honest way to support
+  the project's maintenance. (#59)
+- **Ko-fi fulfillment worker.** A small, optional Cloudflare Worker under
+  `workers/` that verifies Ko-fi's webhook and mints a supporter token on a
+  Skein membership payment, delivered via a one-time claim link a human
+  relays through Ko-fi's own supporter DM (Ko-fi's webhook can't message
+  the payer directly). This is RepoSkein's own infrastructure — no
+  user-facing feature depends on it, and a token already issued keeps
+  verifying offline whether or not this worker is deployed. (#62, #64)
+- **Disclosed sponsored-slot infrastructure — off by default, dormant.**
+  Wiring for an opt-in, fail-open sponsored slot on the MCP tool-result
+  envelope (`_meta["reposkein/sponsored"]` only, never mixed into
+  `content`), gated behind a kill switch, explicit opt-in, credentials, and
+  a non-supporter check, with `semantic_find` and every mutating tool
+  permanently excluded. Shipped disclosed and currently **dormant by
+  decision**: the governing ADR authorizes a future viewer-chip placement,
+  not this MCP-result surface, so this infrastructure stays off until a
+  separate decision ratifies it. Nothing about this release turns ads on
+  for anyone. (#60, #61)
+- **Canonical tagline + tool-description polish.** One agent-facing
+  description sentence reused verbatim across `README.md`, `mcp/README.md`,
+  and `mcp/package.json`; a paste-able install line surfaced in the README
+  hero; and tightened `reindex_file` / `write_semantic_summary` tool
+  descriptions (wording only — schemas and behavior unchanged). (#63)
+
 ## [0.5.0] - 2026-08-21
 
 ### Added
