@@ -6,6 +6,19 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-22
+
+### Security
+
+- **Linear-time `Authorization` header parsing in `serve --http`.** The
+  bearer-token parse used a regex vulnerable to polynomial ReDoS on
+  attacker-controlled input; replaced with plain string operations
+  (prefix check, single separator, slice+trim), same accepted inputs.
+  (CodeQL #5)
+- **Capped `REPOSKEIN_AGENT` before slug regexes.** The env var is now
+  truncated to 256 chars before any trim regex runs, closing a polynomial
+  ReDoS on an uncapped value. (CodeQL #4)
+
 ## [0.6.0] - 2026-08-22
 
 ### Added
