@@ -10,7 +10,7 @@
   "paths": [
     "mcp/src/store/"
   ],
-  "status": "proposed",
+  "status": "accepted",
   "supersedes": [],
   "title": "Version the decision body hash; exclude anchors (v2)",
   "trigger": {
