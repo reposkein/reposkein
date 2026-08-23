@@ -45,6 +45,9 @@ export async function runAdrReanchor(
   const store = buildStore(repoPath, repoId);
   try {
     const repoIds = await anchorRepoIds(store, repoId);
+    // Hoisted so every decision in this run gets the same stamp — a sweep
+    // straddling midnight must not split across two dates.
+    const reanchoredAt = today();
     let rebound = 0;
     let unresolved = 0;
     for (const rec of targets) {
@@ -64,7 +67,7 @@ export async function runAdrReanchor(
         }
       }
       unresolved += plan.unresolved;
-      if (!dryRun) applyReanchor(repoPath, rec, plan, today());
+      if (!dryRun) applyReanchor(repoPath, rec, plan, reanchoredAt);
     }
     console.error(
       `${dryRun ? "[dry-run] " : ""}reanchored ${rebound} anchor${rebound === 1 ? "" : "s"} across ${

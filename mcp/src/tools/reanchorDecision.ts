@@ -42,10 +42,13 @@ export function makeReanchorDecision(
         : decisions.filter((d) => d.anchors.length > 0);
       if (args.decision_id && targets.length === 0) return err(`unknown decision: ${args.decision_id}`);
       const repoIds = await anchorRepoIds(store, repoId);
+      // Hoisted so every decision in this call gets the same stamp — a sweep
+      // straddling midnight must not split across two dates.
+      const reanchoredAt = today();
       const results: Record<string, unknown>[] = [];
       for (const rec of targets) {
         const plan = await planReanchor(store, repoIds, rec);
-        if (!args.dry_run) applyReanchor(repoPath, rec, plan, today());
+        if (!args.dry_run) applyReanchor(repoPath, rec, plan, reanchoredAt);
         results.push(planReport(plan));
       }
       return {
