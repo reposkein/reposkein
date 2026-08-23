@@ -208,4 +208,33 @@ describe("adr reanchor CLI", () => {
 
     expect(code).toBe(2);
   });
+
+  // D4 (REP-24 final review, finding 1): a throwing store must not surface as
+  // exit 1 ("partial") — that collides with the unresolved-anchors contract.
+  // The CLI itself has no try/catch around buildStore/planReanchor, so a
+  // throwing store rejects the returned promise; it's src/index.ts's
+  // `adr reanchor` dispatch .catch that must map that rejection to exit 2.
+  // This test proves the rejection actually happens (the half of the
+  // contract this module owns) — REPOSKEIN_STORE=neo4j with no NEO4J env
+  // resolves to UnconfiguredStore, whose getNode() throws inside
+  // planReanchor.
+  it("rejects when the store throws (e.g. misconfigured neo4j backend), so the CLI dispatcher can exit 2", async () => {
+    seedGraph(dir, [funcNodeLine("src/new.py", "h1")]);
+    seedDecision(dir, "adr:2026-08-01-rename", {
+      node_id: `rs1:${REPO_ID}:func:src/old.py#f@0`,
+      path: "src/old.py",
+      name: "f",
+      kind: "Function",
+      hash: "h1",
+    });
+
+    const prevStore = process.env.REPOSKEIN_STORE;
+    process.env.REPOSKEIN_STORE = "neo4j";
+    try {
+      await expect(runAdrReanchor([dir], undefined, { today })).rejects.toThrow();
+    } finally {
+      if (prevStore === undefined) delete process.env.REPOSKEIN_STORE;
+      else process.env.REPOSKEIN_STORE = prevStore;
+    }
+  });
 });

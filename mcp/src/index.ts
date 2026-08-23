@@ -133,7 +133,7 @@ if (invokedAsBin()) {
     if (adrSub === "reanchor") {
       runAdrReanchor(rest.slice(1), process.env.REPOSKEIN_REPO_PATH)
         .then((code) => process.exit(code))
-        .catch((err) => { console.error(err); process.exit(1); });
+        .catch((err) => { console.error(err); process.exit(2); });
     } else {
       const positional = rest.slice(1).filter((a) => !a.startsWith("-"));
       const path = positional[0] ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
