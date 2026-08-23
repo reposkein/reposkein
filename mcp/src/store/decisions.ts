@@ -42,6 +42,11 @@ export interface DecisionAnchor {
   hash: string | null;
 }
 
+export interface AnchorHistoryEntry {
+  reanchored_at: string;
+  anchors: DecisionAnchor[];
+}
+
 export type DecisionTriggerKind = "manual" | "graph_delta" | "drift";
 
 export interface DecisionRecord {
@@ -63,6 +68,12 @@ export interface DecisionRecord {
   /** Hash of the immutable body fields (see computeBodyHash). Lets doctor
    *  detect hand-edited bodies. */
   body_hash: string;
+  /** Date of the most recent anchor repair (`adr reanchor`). Audit metadata,
+   *  outside body_hash. */
+  reanchored_at?: string;
+  /** Pre-repair anchor arrays, one entry per reanchor that changed anything.
+   *  Audit metadata, outside body_hash. */
+  anchor_history?: AnchorHistoryEntry[];
 }
 
 /** Anchor lifecycle at read time. Never deletes: the worst state is a flag. */
@@ -174,10 +185,32 @@ export function takenDecisionIds(repoPath: string): Set<string> {
   return taken;
 }
 
-/** SHA-256 over the immutable body. Excludes status/superseded_by (lifecycle)
- *  and anchor hash values (re-stamped by reaffirm) — but covers WHICH nodes
- *  and paths the decision governs, and every prose field. */
+/** SHA-256 over the immutable body, `"v2:"`-prefixed. Excludes lifecycle
+ *  (status/superseded_by), audit metadata (reanchored_at/anchor_history) and —
+ *  since v2 — the anchors entirely: anchors are machine-managed pointers,
+ *  re-stamped by reaffirm and repaired by reanchor, so binding them into the
+ *  body made every mechanical repair look like an edit. Covers prose, paths,
+ *  supersedes and attribution. */
 export function computeBodyHash(rec: Omit<DecisionRecord, "body_hash">): string {
+  const body = {
+    alternatives: rec.alternatives ?? "",
+    consequences: rec.consequences ?? "",
+    context: rec.context,
+    decided_at: rec.decided_at,
+    decided_by: rec.decided_by,
+    decision: rec.decision,
+    paths: rec.paths,
+    supersedes: rec.supersedes,
+    title: rec.title,
+    trigger: rec.trigger.kind,
+  };
+  return "v2:" + createHash("sha256").update(JSON.stringify(body)).digest("hex");
+}
+
+/** The pre-v2 hash (included anchor_node_ids, bare hex). Verification only:
+ *  records signed before the v2 scheme verify against this until their next
+ *  write re-signs them. */
+export function computeBodyHashV1(rec: Omit<DecisionRecord, "body_hash">): string {
   const body = {
     alternatives: rec.alternatives ?? "",
     anchor_node_ids: rec.anchors.map((a) => a.node_id),
@@ -192,6 +225,13 @@ export function computeBodyHash(rec: Omit<DecisionRecord, "body_hash">): string 
     trigger: rec.trigger.kind,
   };
   return createHash("sha256").update(JSON.stringify(body)).digest("hex");
+}
+
+/** True when body_hash matches the record under whichever scheme signed it. */
+export function verifyBodyHash(rec: DecisionRecord): boolean {
+  return rec.body_hash.startsWith("v2:")
+    ? rec.body_hash === computeBodyHash(rec)
+    : rec.body_hash === computeBodyHashV1(rec);
 }
 
 /** File name for a decision id (`adr:` prefix stripped). */
@@ -235,15 +275,13 @@ export function writeDecision(repoPath: string, rec: DecisionRecord): void {
   renameSync(tmp, file);
 }
 
-function parseDecision(obj: Record<string, unknown>): DecisionRecord | null {
-  if (typeof obj.id !== "string" || !obj.id.startsWith("adr:")) return null;
-  if (typeof obj.title !== "string" || typeof obj.context !== "string") return null;
-  if (typeof obj.decision !== "string" || typeof obj.decided_at !== "string") return null;
-  const status = obj.status;
-  if (typeof status !== "string" || !STATUSES.includes(status as DecisionStatus)) return null;
-  const anchorsRaw = Array.isArray(obj.anchors) ? obj.anchors : [];
+/** Parses an anchors array tolerantly: a malformed entry (not an object, or
+ *  missing node_id) is dropped, never fatal — shared by `anchors` and each
+ *  `anchor_history` entry. */
+function parseAnchorArray(v: unknown): DecisionAnchor[] {
   const anchors: DecisionAnchor[] = [];
-  for (const a of anchorsRaw) {
+  if (!Array.isArray(v)) return anchors;
+  for (const a of v) {
     if (a === null || typeof a !== "object") continue;
     const o = a as Record<string, unknown>;
     if (typeof o.node_id !== "string") continue;
@@ -255,6 +293,16 @@ function parseDecision(obj: Record<string, unknown>): DecisionRecord | null {
       hash: typeof o.hash === "string" ? o.hash : null,
     });
   }
+  return anchors;
+}
+
+function parseDecision(obj: Record<string, unknown>): DecisionRecord | null {
+  if (typeof obj.id !== "string" || !obj.id.startsWith("adr:")) return null;
+  if (typeof obj.title !== "string" || typeof obj.context !== "string") return null;
+  if (typeof obj.decision !== "string" || typeof obj.decided_at !== "string") return null;
+  const status = obj.status;
+  if (typeof status !== "string" || !STATUSES.includes(status as DecisionStatus)) return null;
+  const anchors = parseAnchorArray(obj.anchors);
   const strArray = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   const triggerKind =
@@ -286,6 +334,17 @@ function parseDecision(obj: Record<string, unknown>): DecisionRecord | null {
   if (typeof obj.consequences === "string") rec.consequences = obj.consequences;
   if (typeof obj.alternatives === "string") rec.alternatives = obj.alternatives;
   if (typeof obj.superseded_by === "string") rec.superseded_by = obj.superseded_by;
+  if (typeof obj.reanchored_at === "string") rec.reanchored_at = obj.reanchored_at;
+  if (Array.isArray(obj.anchor_history)) {
+    const history: AnchorHistoryEntry[] = [];
+    for (const h of obj.anchor_history) {
+      if (h === null || typeof h !== "object") continue;
+      const ho = h as Record<string, unknown>;
+      if (typeof ho.reanchored_at !== "string" || !Array.isArray(ho.anchors)) continue;
+      history.push({ reanchored_at: ho.reanchored_at, anchors: parseAnchorArray(ho.anchors) });
+    }
+    if (history.length > 0) rec.anchor_history = history;
+  }
   return rec;
 }
 

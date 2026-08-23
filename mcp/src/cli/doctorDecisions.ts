@@ -1,6 +1,6 @@
 import {
-  computeBodyHash,
   loadDecisionFiles,
+  verifyBodyHash,
   type DecisionRecord,
 } from "../store/decisions.js";
 import type { Check } from "./doctor.js";
@@ -83,7 +83,7 @@ export function decisionChecks(repoPath: string): Check[] {
   // 3) Bodies unmodified since signing (immutability as invariant, not
   //    convention — reaffirm/supersede re-sign, hand edits don't).
   const tampered = parsed
-    .filter(({ record }) => record.body_hash !== computeBodyHash(record))
+    .filter(({ record }) => !verifyBodyHash(record))
     .map(({ record }) => record.id);
   checks.push(
     warn(
