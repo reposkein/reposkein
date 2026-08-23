@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runChecks, resolveDoctorRepoPath, runDoctor, ciFailingChecks } from "../src/cli/doctor.js";
-import { decisionChecks } from "../src/cli/doctorDecisions.js";
+import { decisionChecks, anchorStateChecks } from "../src/cli/doctorDecisions.js";
 import { computeBodyHash, writeDecision, decisionsDir, type DecisionRecord } from "../src/store/decisions.js";
 import { writeIndexedAtMarker } from "../src/store/indexedAt.js";
 
@@ -183,6 +183,119 @@ describe("doctor decision checks", () => {
     const budget = decisionChecks(dir).find((c) => c.id === "decisions_budget")!;
     expect(budget.ok).toBe(false);
     expect(budget.detail).toMatch(/101/);
+  });
+});
+
+describe("anchorStateChecks", () => {
+  it("returns [] with no graph or no anchored decisions", async () => {
+    // No graph at all, but an anchored decision exists.
+    seedDecision("adr:2026-08-01-a", {
+      anchors: [{ node_id: "rs1:repoa:func:svc.py#f@0", path: "svc.py", name: "f", kind: "Function", hash: "h1" }],
+    });
+    expect(await anchorStateChecks(dir, "repoa")).toEqual([]);
+
+    // Graph present, but every decision's anchors array is empty.
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(
+      join(dir, ".reposkein", "nodes.jsonl"),
+      `{"id":"rs1:repoa:func:svc.py#f@0","labels":["Function"],"content_hash":"h1","file_path":"svc.py","name":"f","qualified_name":"f"}\n`
+    );
+    rmSync(join(decisionsDir(dir), "2026-08-01-a.json"));
+    seedDecision("adr:2026-08-02-b"); // no overrides -> anchors: []
+    expect(await anchorStateChecks(dir, "repoa")).toEqual([]);
+  });
+
+  it("returns [] when repoId is null even though anchors + graph exist", async () => {
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(
+      join(dir, ".reposkein", "nodes.jsonl"),
+      `{"id":"rs1:repoa:func:svc.py#f@0","labels":["Function"],"content_hash":"h1","file_path":"svc.py","name":"f","qualified_name":"f"}\n`
+    );
+    seedDecision("adr:2026-08-01-a", {
+      anchors: [{ node_id: "rs1:repoa:func:svc.py#f@0", path: "svc.py", name: "f", kind: "Function", hash: "h1" }],
+    });
+    expect(await anchorStateChecks(dir, null)).toEqual([]);
+  });
+
+  it("ok when every anchor is current", async () => {
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    writeFileSync(
+      join(dir, ".reposkein", "nodes.jsonl"),
+      `{"id":"rs1:repoa:func:svc.py#current@0","labels":["Function"],"content_hash":"hash-current","file_path":"svc.py","name":"current","qualified_name":"current"}\n`
+    );
+    seedDecision("adr:2026-08-01-a", {
+      anchors: [
+        {
+          node_id: "rs1:repoa:func:svc.py#current@0",
+          path: "svc.py",
+          name: "current",
+          kind: "Function",
+          hash: "hash-current",
+        },
+      ],
+    });
+    const checks = await anchorStateChecks(dir, "repoa");
+    const c = checks.find((x) => x.id === "decisions_anchors")!;
+    expect(c.ok).toBe(true);
+    expect(c.critical).toBe(false);
+    expect(c.detail).toBe("all anchors current");
+    expect(c.fix).toBeUndefined();
+  });
+
+  it("flags moved/stale/orphaned with counts and a reanchor fix", async () => {
+    mkdirSync(join(dir, ".reposkein"), { recursive: true });
+    // Three live nodes: one backs a "current" anchor unchanged, one backs a
+    // "stale" anchor (same id, content changed), and one backs a "moved"
+    // anchor under a DIFFERENT id but the SAME content_hash (the only signal
+    // that survives a rename). No node backs the "orphaned" anchor at all.
+    writeFileSync(
+      join(dir, ".reposkein", "nodes.jsonl"),
+      [
+        `{"id":"rs1:repoa:func:svc.py#current@0","labels":["Function"],"content_hash":"hash-current","file_path":"svc.py","name":"current","qualified_name":"current"}`,
+        `{"id":"rs1:repoa:func:svc.py#stale@0","labels":["Function"],"content_hash":"hash-stale-new","file_path":"svc.py","name":"stale","qualified_name":"stale"}`,
+        `{"id":"rs1:repoa:func:svc.py#movedTarget@0","labels":["Function"],"content_hash":"hash-moved","file_path":"svc.py","name":"movedTarget","qualified_name":"movedTarget"}`,
+      ].join("\n") + "\n"
+    );
+    seedDecision("adr:2026-08-01-a", {
+      anchors: [
+        {
+          node_id: "rs1:repoa:func:svc.py#current@0",
+          path: "svc.py",
+          name: "current",
+          kind: "Function",
+          hash: "hash-current",
+        },
+        {
+          node_id: "rs1:repoa:func:svc.py#stale@0",
+          path: "svc.py",
+          name: "stale",
+          kind: "Function",
+          hash: "hash-stale-old",
+        },
+        {
+          node_id: "rs1:repoa:func:svc.py#movedOld@0",
+          path: "svc.py",
+          name: "movedOld",
+          kind: "Function",
+          hash: "hash-moved",
+        },
+        {
+          node_id: "rs1:repoa:func:svc.py#gone@0",
+          path: "svc.py",
+          name: "gone",
+          kind: "Function",
+          hash: "hash-orphan-nomatch",
+        },
+      ],
+    });
+    const checks = await anchorStateChecks(dir, "repoa");
+    expect(checks).toHaveLength(1);
+    const c = checks.find((x) => x.id === "decisions_anchors")!;
+    expect(c.ok).toBe(false);
+    expect(c.critical).toBe(false);
+    expect(c.detail).toMatch(/moved/);
+    expect(c.detail).toBe("1 moved, 1 stale, 1 orphaned");
+    expect(c.fix).toMatch(/adr reanchor/);
   });
 });
 

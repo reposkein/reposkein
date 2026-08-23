@@ -4,7 +4,7 @@ import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
 import { resolveRepoId } from "../store/repoId.js";
 import { resolveRepoPath } from "../store/resolveRepoPath.js";
-import { decisionChecks } from "./doctorDecisions.js";
+import { anchorStateChecks, decisionChecks } from "./doctorDecisions.js";
 import { summaryChecks } from "./doctorSummaries.js";
 import { hooksCheck, graphStaleCheck } from "./doctorFreshness.js";
 
@@ -119,6 +119,10 @@ export async function runChecks(repoPath: string): Promise<DoctorReport> {
 
   // 5) Decision log validation (all non-critical: degrade, don't block).
   checks.push(...decisionChecks(repoPath));
+
+  // 5b) Decision anchor drift against the live graph (non-critical, advisory
+  //     — never added to CI_FAIL_IDS: reanchoring is a repair step, not a gate).
+  checks.push(...(await anchorStateChecks(repoPath, repoId ?? null)));
 
   // 6) Git hooks installed + graph freshness (non-critical here; `doctor
   //    --ci` promotes both to a failing exit code — see CI_FAIL_IDS below).
