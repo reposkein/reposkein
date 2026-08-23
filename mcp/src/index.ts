@@ -4,6 +4,7 @@ import { runInit, runIndex } from "./cli/init.js";
 import { parseAgentsFlag } from "./cli/agentAdapters.js";
 import { runDoctor, resolveDoctorRepoPath } from "./cli/doctor.js";
 import { runAdr } from "./cli/adr.js";
+import { runAdrReanchor } from "./cli/adrReanchor.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
 import { runStats } from "./cli/stats.js";
 import { runSupport } from "./cli/support.js";
@@ -39,7 +40,7 @@ Usage:
   reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph); --no-index skips the initial index, --ci also writes a GitHub Pages publish workflow (see docs/HOSTING.md). On a repo joined from a committed .reposkein/meta.json, also auto-writes local agent MCP config (--agents claude,opencode,cursor to override detection, --dry-run to preview)
   reposkein-mcp index [path]    (re)build the committed graph
   reposkein-mcp doctor [path]   health check (indexer binary, index, repo id, hooks, graph freshness); --json for machine output, --ci additionally fails on stale graph / missing hooks / unsplit legacy summaries
-  reposkein-mcp adr <sub> ...   decision-log utilities
+  reposkein-mcp adr <sub> ...   decision-log utilities (export|import|reanchor)
   reposkein-mcp stats [path]    session usage report (calls, tokens saved vs grep)
   reposkein-mcp support <token> install a supporter token (verified locally, stored at ~/.config/reposkein/supporter.jwt, mode 600); pass \`-\` to read it from stdin instead of argv (keeps it out of shell history and \`ps\`); --status to show tier/expiry, --remove to delete it. Offline: no network call, ever
   reposkein-mcp view [path]     open the constellation viewer (--export <dir> for a static site)
@@ -129,10 +130,16 @@ if (invokedAsBin()) {
   } else if (sub === "adr") {
     const rest = process.argv.slice(3);
     const adrSub = rest[0];
-    const positional = rest.slice(1).filter((a) => !a.startsWith("-"));
-    const path = positional[0] ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
-    const dir = positional[1];
-    process.exit(runAdr(adrSub, path, dir));
+    if (adrSub === "reanchor") {
+      runAdrReanchor(rest.slice(1), process.env.REPOSKEIN_REPO_PATH)
+        .then((code) => process.exit(code))
+        .catch((err) => { console.error(err); process.exit(1); });
+    } else {
+      const positional = rest.slice(1).filter((a) => !a.startsWith("-"));
+      const path = positional[0] ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+      const dir = positional[1];
+      process.exit(runAdr(adrSub, path, dir));
+    }
   } else if (sub === "view") {
     const { repoPath, opts, exportDir, exportOpts } = parseViewArgs(process.argv.slice(3));
     const resolvedViewRepoId = resolveRepoId(repoPath, process.env.REPOSKEIN_REPO_ID);
