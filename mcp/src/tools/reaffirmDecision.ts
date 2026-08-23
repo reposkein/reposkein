@@ -19,8 +19,10 @@ const err = (text: string): ToolResult => ({ content: [{ type: "text", text }], 
 /** "This decision is still correct": re-stamps every anchor from the live
  *  graph — stale anchors get the current hash, moved anchors are rebound to
  *  their recovered node — clearing review flags without supersede spam. The
- *  prose body never changes; body_hash is re-signed because rebinding an
- *  anchor updates the governed node list it covers. */
+ *  prose body never changes, and since v2 the body_hash doesn't either:
+ *  anchors are excluded from it, so re-stamping is a no-op on the hash. The
+ *  re-sign stays because it's a lazy v1→v2 upgrade path — a pre-v2 record
+ *  re-signed here moves onto the anchor-independent scheme. */
 export function makeReaffirmDecision(store: GraphStore, repoId: string, repoPath: string) {
   return async (args: ReaffirmDecisionArgs): Promise<ToolResult> => {
     try {

@@ -250,6 +250,6 @@ export function runAdr(sub: string | undefined, repoPath: string, dir?: string):
     );
     return 0;
   }
-  console.error("usage: reposkein-mcp adr <export|import> [repoPath] [dir]");
+  console.error("usage: reposkein-mcp adr <export|import|reanchor> [repoPath] [dir]");
   return 1;
 }

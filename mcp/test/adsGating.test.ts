@@ -239,6 +239,7 @@ describe("ads placement policy", () => {
       "record_decision",
       "set_decision_status",
       "reaffirm_decision",
+      "reanchor_decision",
       "reindex_file",
       "init_cpg_skeleton",
     ]) {

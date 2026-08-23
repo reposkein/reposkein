@@ -1,8 +1,14 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
-  computeBodyHash,
+  anchorRepoIds,
   loadDecisionFiles,
+  loadDecisions,
+  resolveAnchorStates,
+  verifyBodyHash,
   type DecisionRecord,
 } from "../store/decisions.js";
+import { JsonlGraphStore } from "../store/JsonlGraphStore.js";
 import type { Check } from "./doctor.js";
 
 /** ~Zimmermann ceiling: past this many active records, recall quality and the
@@ -83,7 +89,7 @@ export function decisionChecks(repoPath: string): Check[] {
   // 3) Bodies unmodified since signing (immutability as invariant, not
   //    convention — reaffirm/supersede re-sign, hand edits don't).
   const tampered = parsed
-    .filter(({ record }) => record.body_hash !== computeBodyHash(record))
+    .filter(({ record }) => !verifyBodyHash(record))
     .map(({ record }) => record.id);
   checks.push(
     warn(
@@ -142,4 +148,39 @@ export function decisionChecks(repoPath: string): Check[] {
   );
 
   return checks;
+}
+
+/** Anchor drift against the live graph (async — opens the JSONL store).
+ *  Skips silently when there is no graph or no anchored decision: doctor
+ *  must work in a repo that has never indexed. Non-critical like every
+ *  decision check. */
+export async function anchorStateChecks(repoPath: string, repoId: string | null): Promise<Check[]> {
+  const { decisions } = loadDecisions(repoPath);
+  const anchored = decisions.filter((d) => d.anchors.length > 0);
+  if (anchored.length === 0) return [];
+  if (!repoId || !existsSync(join(repoPath, ".reposkein", "nodes.jsonl"))) return [];
+  const store = new JsonlGraphStore(repoPath, repoId);
+  try {
+    const repoIds = await anchorRepoIds(store, repoId);
+    let stale = 0, moved = 0, orphaned = 0;
+    for (const rec of anchored) {
+      for (const r of await resolveAnchorStates(store, repoIds, rec.anchors)) {
+        if (r.state === "stale") stale++;
+        else if (r.state === "moved") moved++;
+        else if (r.state === "orphaned") orphaned++;
+      }
+    }
+    const drifted = stale + moved + orphaned;
+    return [
+      warn(
+        "decisions_anchors",
+        "decision anchors current",
+        drifted === 0,
+        drifted === 0 ? "all anchors current" : `${moved} moved, ${stale} stale, ${orphaned} orphaned`,
+        "run `reposkein-mcp adr reanchor` to repair moved anchors; reaffirm or supersede decisions whose stale anchors still conform"
+      ),
+    ];
+  } finally {
+    await store.close();
+  }
 }

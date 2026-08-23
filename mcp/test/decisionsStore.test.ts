@@ -6,10 +6,12 @@ import { fakeStore } from "./fakeStore.js";
 import type { TargetRow } from "../src/profile/types.js";
 import {
   computeBodyHash,
+  computeBodyHashV1,
   decisionsDir,
   loadDecisions,
   mintDecisionId,
   resolveAnchorStates,
+  verifyBodyHash,
   writeDecision,
   type DecisionRecord,
 } from "../src/store/decisions.js";
@@ -138,6 +140,26 @@ describe("decisions store", () => {
     expect(warnings).toHaveLength(2);
   });
 
+  it("treats a path-escaping id as malformed (never parsed, never rewritten)", () => {
+    // The id is path-derived (decisionFileName/writeDecision join it under
+    // decisions dir); an id like `adr:../../evil` must not survive parsing —
+    // any writer (reaffirm, set_decision_status, reanchor) could otherwise be
+    // made to write outside .reposkein/decisions/.
+    mkdirSync(decisionsDir(root), { recursive: true });
+    const write = (name: string, id: string) =>
+      writeFileSync(join(decisionsDir(root), name), JSON.stringify({ ...record(), id }) + "\n");
+    write("evil1.json", "adr:../../evil");
+    write("evil2.json", "adr:a/b");
+    write("evil3.json", "adr:a\\b");
+    write("ok.json", record().id);
+
+    const { decisions, warnings } = loadDecisions(root);
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]!.id).toBe(record().id);
+    expect(warnings).toHaveLength(3);
+  });
+
   it("keeps the higher-precedence status when two files carry the same id", () => {
     // Merge damage: same id in two files. superseded > deprecated > rejected > accepted > proposed.
     const a = record({ status: "accepted" });
@@ -210,6 +232,58 @@ describe("decisions store", () => {
       const states = await resolveAnchorStates(store, ["otherrepo"], anchors);
       expect(states[0]!.state).toBe("current");
       expect(states[0]!.resolved_node_id).toBe(live.id);
+    });
+  });
+
+  describe("body_hash v2", () => {
+    it("computeBodyHash stamps a v2: prefix and ignores anchor node ids", () => {
+      const a = record({ body_hash: "" });
+      const b = record({ body_hash: "", anchors: [] });
+      expect(computeBodyHash(a).startsWith("v2:")).toBe(true);
+      expect(computeBodyHash(a)).toBe(computeBodyHash(b)); // anchors out of the hash
+    });
+
+    it("v2 hash still covers prose and paths", () => {
+      const a = record({ body_hash: "" });
+      expect(computeBodyHash(a)).not.toBe(computeBodyHash(record({ body_hash: "", decision: "changed" })));
+      expect(computeBodyHash(a)).not.toBe(computeBodyHash(record({ body_hash: "", paths: ["other/"] })));
+    });
+
+    it("verifyBodyHash accepts legacy v1-signed records and rejects tampered ones", () => {
+      const legacy = record({ body_hash: "" });
+      legacy.body_hash = computeBodyHashV1(legacy);
+      expect(legacy.body_hash.startsWith("v2:")).toBe(false);
+      expect(verifyBodyHash(legacy)).toBe(true);
+      expect(verifyBodyHash({ ...legacy, decision: "edited" })).toBe(false);
+      const modern = record({ body_hash: "" });
+      modern.body_hash = computeBodyHash(modern);
+      expect(verifyBodyHash(modern)).toBe(true);
+      expect(verifyBodyHash({ ...modern, context: "edited" })).toBe(false);
+    });
+
+    it("v2 hash is independent of reanchored_at and anchor_history", () => {
+      const a = record({ body_hash: "" });
+      const b: DecisionRecord = {
+        ...record({ body_hash: "" }),
+        reanchored_at: "2026-08-23",
+        anchor_history: [{ reanchored_at: "2026-08-23", anchors: a.anchors }],
+      };
+      expect(computeBodyHash(a)).toBe(computeBodyHash(b));
+    });
+
+    it("reanchored_at and anchor_history round-trip through write/load", () => {
+      const rec: DecisionRecord = {
+        ...record({ body_hash: "" }),
+        reanchored_at: "2026-08-23",
+        anchor_history: [{ reanchored_at: "2026-08-23", anchors: record({}).anchors }],
+      };
+      rec.body_hash = computeBodyHash(rec);
+      writeDecision(root, rec);
+      const loaded = loadDecisions(root).decisions.find((d) => d.id === rec.id)!;
+      expect(loaded.reanchored_at).toBe("2026-08-23");
+      expect(loaded.anchor_history).toHaveLength(1);
+      expect(loaded.anchor_history![0]!.anchors[0]!.node_id).toBe(record({}).anchors[0]!.node_id);
+      expect(verifyBodyHash(loaded)).toBe(true);
     });
   });
 });
