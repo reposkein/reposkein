@@ -8,6 +8,7 @@
 [![release](https://img.shields.io/github/v/release/reposkein/reposkein?style=for-the-badge&logo=github&logoColor=EAE7DC&label=release&labelColor=070A12&color=2DD4BF)](https://github.com/reposkein/reposkein/releases)
 [![License](https://img.shields.io/badge/license-Apache_2.0-F2B84B?style=for-the-badge&labelColor=070A12)](./LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-F2B84B?style=for-the-badge&logo=kofi&logoColor=EAE7DC&labelColor=070A12)](https://ko-fi.com/mongx)
+[![Lulu MCPs](https://getlulu.dev/api/mcps/badge/mcp-reposkein)](https://getlulu.dev/mcps/mcp-reposkein)
 
 <sub>Listed on: [skills.sh](https://skills.sh/reposkein/reposkein) · [Glama](https://glama.ai/mcp/servers/reposkein/reposkein) · [mcpservers.org](https://mcpservers.org/servers/reposkein/reposkein) · [ghcr.io](https://github.com/reposkein/reposkein/pkgs/container/reposkein-embed)</sub>
 
