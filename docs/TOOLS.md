@@ -62,6 +62,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
 | `record_decision` | record an Architecture Decision Record (ADR) anchored to the graph nodes/paths it governs; lands as `proposed` by default; pass `supersedes` to replace an earlier decision. |
 | `set_decision_status` | change an ADR's lifecycle status: `proposed→accepted`, `proposed→rejected`, `accepted→deprecated` (`superseded` only happens via `record_decision`'s `supersedes`). |
 | `reaffirm_decision` | re-stamp an ADR's anchors after verifying the changed code still conforms, clearing staleness without superseding. |
+| `reanchor_decision` | repair an ADR's anchors after renames/moves — rebinds on confident matches only, reports ambiguous/orphaned anchors untouched. |
 | `list_decisions` | list ADRs (id, title, status, anchor drift counts), filterable by status, anchor, or free-text. |
 | `get_decision` | full ADR record: context, decision, consequences, alternatives, live anchor states, and the supersession chain. |
 
@@ -75,6 +76,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skill
 | `reposkein-mcp view [path]` | open the [constellation viewer](VIEWER.md) (`--export <dir>` for a static site). |
 | `reposkein-mcp stats [path]` | session usage report — calls by tool, top queried nodes/files, ADRs/summaries written, session duration, and an estimated context-tokens-saved-vs-grep number. |
 | `reposkein-mcp adr export/import [path] [dir]` | see [Architecture decisions](#architecture-decisions-adrs) below. |
+| `reposkein-mcp adr reanchor [path] [--dry-run] [--id <adr-id>]` | see [Architecture decisions](#architecture-decisions-adrs) below. |
 | `reposkein-mcp serve --http [path]` | **advanced, optional** — one shared server: MCP over Streamable HTTP + the viewer and `/api/*` in one process, bearer-token auth, read-only by default, re-indexing when the served checkout's HEAD moves. Not needed for normal use; stdio is the default transport. See [`REMOTE.md`](REMOTE.md). |
 
 ## Architecture decisions (ADRs)
@@ -84,6 +86,29 @@ Decisions recorded via `record_decision` (and friends, above) live as one commit
 `reposkein-mcp doctor` validates the decision log (parse failures, duplicate ids, tampered `body_hash`, dangling/cyclic supersession) as a non-critical, degrade-don't-block check.
 
 For human review or interop with `adr-tools` / `log4brains` / `Backstage`, `reposkein-mcp adr export [path] [dir]` renders the committed records to Nygard-format markdown under `docs/adr/` (derived — the JSON records stay the system of record). `reposkein-mcp adr import [path] [dir]` reads an existing Nygard/MADR-style markdown ADR log the other direction, creating unanchored records a human can later reaffirm.
+
+### Anchor lifecycle: reanchor vs reaffirm vs supersede
+
+Anchors are stamped at record time and drift as code evolves: `stale` (node
+lives, content changed), `moved` (id dead, content found elsewhere),
+`orphaned` (nothing matches). Three distinct responses:
+
+- **`adr reanchor` / `reanchor_decision`** — mechanical pointer repair, no
+  judgment. Rebinds an anchor when its id resolves under the current repo id
+  or its recorded content hash matches exactly one live node (renames,
+  qualified-name churn). Never guesses: ambiguous and orphaned anchors are
+  reported and left untouched. Staleness survives the repair. Prose and the
+  body hash are never affected; the repair stamps `reanchored_at` and keeps
+  the previous anchors in `anchor_history`.
+- **`reaffirm_decision`** — the semantic judgment "this decision is still
+  correct after the code changed": re-stamps anchor hashes from the live
+  graph, clearing stale flags. Use after actually reviewing the changed code.
+- **`record_decision` with `supersedes`** — the decision itself changed;
+  record the new one and let it supersede the old.
+
+`reposkein-mcp doctor` counts drifted anchors (`decisions_anchors`);
+`adr reanchor --dry-run` prints the full repair plan without writing. Exit
+codes: 0 clean, 1 partial (unresolved anchors remain), 2 error.
 
 ## See also
 

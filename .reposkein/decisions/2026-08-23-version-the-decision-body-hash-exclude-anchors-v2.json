@@ -1,0 +1,19 @@
+{
+  "id": "adr:2026-08-23-version-the-decision-body-hash-exclude-anchors-v2",
+  "anchors": [],
+  "body_hash": "v2:78f64ca016ae31b3a977b87e223b6f1a9d1ad609cd404ab85bdcbd528d0d05f3",
+  "consequences": "Anchor rewrites are hash-neutral: reanchor and reaffirm repair pointers without appearing to edit the body. Hand-edits to the anchors array are no longer detected by doctor — accepted, because anchors are machine-managed and repaired by the same flows. Two hash schemes coexist indefinitely; verifyBodyHash dispatches on the prefix.",
+  "context": "computeBodyHash covered anchor_node_ids, so every mechanical anchor re-stamp (reaffirm, and now REP-24 reanchor) re-signed the body hash — contradicting the ruling that anchors are metadata, and making pointer repair look like a body edit. Alternatives: (b) a reanchored overlay array preserving original anchors would force every reader (profile governance, list drift counts, viewer) to apply overlay logic forever; (c) keeping the v1 scheme and re-signing on every repair leaves the contradiction in place.",
+  "decided_at": "2026-08-23",
+  "decided_by": "agent",
+  "decision": "body_hash v2: same allowlist minus anchor_node_ids, value prefixed 'v2:'. Legacy records verify against the retained v1 computation until their next write re-signs them (lazy migration, no sweep). Writers always stamp v2. paths stay in the hash (author-specified governance). reanchored_at and anchor_history are audit metadata outside the hash.",
+  "paths": [
+    "mcp/src/store/"
+  ],
+  "status": "proposed",
+  "supersedes": [],
+  "title": "Version the decision body hash; exclude anchors (v2)",
+  "trigger": {
+    "kind": "manual"
+  }
+}
