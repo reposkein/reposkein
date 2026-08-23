@@ -298,6 +298,11 @@ function parseAnchorArray(v: unknown): DecisionAnchor[] {
 
 function parseDecision(obj: Record<string, unknown>): DecisionRecord | null {
   if (typeof obj.id !== "string" || !obj.id.startsWith("adr:")) return null;
+  // The id is path-derived (decisionFileName/writeDecision join it under
+  // decisions dir) — reject a remainder with a separator or a `..` segment
+  // so no writer can ever be made to escape that directory.
+  const idRest = obj.id.slice("adr:".length);
+  if (/[/\\]/.test(idRest) || idRest.split(/[/\\]/).includes("..")) return null;
   if (typeof obj.title !== "string" || typeof obj.context !== "string") return null;
   if (typeof obj.decision !== "string" || typeof obj.decided_at !== "string") return null;
   const status = obj.status;

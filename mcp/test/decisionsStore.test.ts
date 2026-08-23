@@ -140,6 +140,26 @@ describe("decisions store", () => {
     expect(warnings).toHaveLength(2);
   });
 
+  it("treats a path-escaping id as malformed (never parsed, never rewritten)", () => {
+    // The id is path-derived (decisionFileName/writeDecision join it under
+    // decisions dir); an id like `adr:../../evil` must not survive parsing —
+    // any writer (reaffirm, set_decision_status, reanchor) could otherwise be
+    // made to write outside .reposkein/decisions/.
+    mkdirSync(decisionsDir(root), { recursive: true });
+    const write = (name: string, id: string) =>
+      writeFileSync(join(decisionsDir(root), name), JSON.stringify({ ...record(), id }) + "\n");
+    write("evil1.json", "adr:../../evil");
+    write("evil2.json", "adr:a/b");
+    write("evil3.json", "adr:a\\b");
+    write("ok.json", record().id);
+
+    const { decisions, warnings } = loadDecisions(root);
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]!.id).toBe(record().id);
+    expect(warnings).toHaveLength(3);
+  });
+
   it("keeps the higher-precedence status when two files carry the same id", () => {
     // Merge damage: same id in two files. superseded > deprecated > rejected > accepted > proposed.
     const a = record({ status: "accepted" });
