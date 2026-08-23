@@ -6,6 +6,40 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-23
+
+### Added
+
+- **`reposkein-mcp adr reanchor [--dry-run] [--id <adr-id>]` + `reanchor_decision`
+  MCP tool — repair stale decision anchors.** Mechanical pointer repair after
+  renames/moves: an anchor is rebound only on a confident match (its id
+  resolves under the current repo id, or its recorded content hash matches
+  exactly one live node). Ambiguous and orphaned anchors are reported and left
+  untouched — never guessed — and staleness flags survive the repair
+  (clearing them stays `reaffirm_decision`'s job). Repairs stamp
+  `reanchored_at` and keep the previous anchors in `anchor_history`. Exit
+  codes distinguish clean (0) / partial (1) / error (2); `--dry-run` prints
+  the full plan and writes nothing. `doctor` gains a `decisions_anchors`
+  drift count, and `docs/TOOLS.md` documents the anchor lifecycle
+  (reanchor vs reaffirm vs supersede). (#69)
+
+### Changed
+
+- **Decision `body_hash` is now versioned (v2, `"v2:"`-prefixed) and no longer
+  covers anchor node ids** — anchors are machine-managed metadata, so pointer
+  repair and reaffirmation no longer look like body edits. Records signed
+  under the old scheme verify forever and re-sign to v2 on their next write;
+  no migration needed. Mixed-version note: a `doctor` from ≤0.6.x flags
+  v2-signed records as hand-edited (advisory only) — upgrade teams together.
+  Decision ids containing `/`, `\`, or `..` are now rejected at parse,
+  closing a path-traversal surface for all record writers. (#69)
+
+### Fixed
+
+- **Hermetic `doctor` tests.** `doctor.test.ts` now stubs
+  `REPOSKEIN_INDEXER_BIN`, closing the release-bump CI race where a version
+  bump made doctor's binary-version probe fail in CI. (#68)
+
 ## [0.6.1] - 2026-08-22
 
 ### Security
