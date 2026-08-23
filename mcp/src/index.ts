@@ -24,6 +24,7 @@ export {
   recordDecisionInputSchema,
   setDecisionStatusInputSchema,
   reaffirmDecisionInputSchema,
+  reanchorDecisionInputSchema,
   listDecisionsInputSchema,
   getDecisionInputSchema,
   createMcpServer,

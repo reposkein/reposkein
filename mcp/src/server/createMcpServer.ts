@@ -17,6 +17,7 @@ import { makeImpact } from "../tools/impact.js";
 import { makeRecordDecision } from "../tools/recordDecision.js";
 import { makeSetDecisionStatus } from "../tools/setDecisionStatus.js";
 import { makeReaffirmDecision } from "../tools/reaffirmDecision.js";
+import { makeReanchorDecision } from "../tools/reanchorDecision.js";
 import { makeListDecisions } from "../tools/listDecisions.js";
 import { makeGetDecision } from "../tools/getDecision.js";
 import { resolveRepoId } from "../store/repoId.js";
@@ -165,6 +166,11 @@ export const reaffirmDecisionInputSchema = {
   decision_id: z.string(),
 };
 
+export const reanchorDecisionInputSchema = {
+  decision_id: z.string().optional(),
+  dry_run: z.boolean().optional(),
+};
+
 export const listDecisionsInputSchema = {
   status: z.enum(["proposed", "accepted", "rejected", "deprecated", "superseded"]).optional(),
   anchor: z.string().optional(),
@@ -190,6 +196,7 @@ export const WRITE_TOOLS = [
   "record_decision",
   "set_decision_status",
   "reaffirm_decision",
+  "reanchor_decision",
   "reindex_file",
   "init_cpg_skeleton",
 ] as const;
@@ -605,6 +612,23 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer {
       const active = await resolveActiveRepo();
       if (!active.ok) return errResult(active.message);
       return makeReaffirmDecision(active.store, active.repoId, active.repoPath)(args);
+    })
+  );
+
+  server.registerTool(
+    "reanchor_decision",
+    {
+      title: "Reanchor a decision",
+      description: describe(
+        "Repair an ADR's anchors after renames/moves: re-resolves each anchor against the current graph and rebinds on confident matches only (live id under another repo_id, or a UNIQUE content-hash match). Ambiguous/orphaned anchors are reported untouched — never guessed. Staleness is preserved; use reaffirm_decision to clear it after review. dry_run previews the full plan without writing. Omit decision_id to sweep every anchored decision.",
+        "reanchor_decision"
+      ),
+      inputSchema: reanchorDecisionInputSchema,
+    },
+    withWrite("reanchor_decision", async (args) => {
+      const active = await resolveActiveRepo();
+      if (!active.ok) return errResult(active.message);
+      return makeReanchorDecision(active.store, active.repoId, active.repoPath)(args);
     })
   );
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decisionsDir } from "../src/store/decisions.js";
+import { decisionsDir, decisionFileName } from "../src/store/decisions.js";
 import { pendingDeltaPath } from "../src/indexer/decisionsAffected.js";
 import { fakeStore } from "./fakeStore.js";
 import type { TargetRow } from "../src/profile/types.js";
@@ -10,6 +10,7 @@ import { loadDecisions, writeDecision, computeBodyHash, type DecisionRecord } fr
 import { makeRecordDecision } from "../src/tools/recordDecision.js";
 import { makeSetDecisionStatus } from "../src/tools/setDecisionStatus.js";
 import { makeReaffirmDecision } from "../src/tools/reaffirmDecision.js";
+import { makeReanchorDecision } from "../src/tools/reanchorDecision.js";
 
 const REPO_ID = "abc123";
 const NODE_ID = `rs1:${REPO_ID}:func:svc.py#Svc.run@1`;
@@ -365,6 +366,96 @@ describe("reaffirm_decision", () => {
     const store = fakeStore({});
     const reaffirm = makeReaffirmDecision(store, REPO_ID, root);
     const res = await reaffirm({ decision_id: "adr:2026-01-01-nope" });
+    expect(res.isError).toBe(true);
+  });
+});
+
+describe("reanchor_decision", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "reposkein-reanchor-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("dry_run reports the plan and writes nothing", async () => {
+    const deadId = `rs1:${REPO_ID}:func:old.py#Svc.run@1`;
+    const rec: DecisionRecord = {
+      id: "adr:2026-08-20-use-x",
+      title: "Use X",
+      status: "accepted",
+      context: "ctx",
+      decision: "We will use X.",
+      anchors: [{ node_id: deadId, path: "old.py", name: "Svc.run", kind: "Function", hash: "h1" }],
+      paths: [],
+      supersedes: [],
+      decided_at: "2026-08-20",
+      decided_by: "agent",
+      trigger: { kind: "manual" },
+      body_hash: "",
+    };
+    rec.body_hash = computeBodyHash(rec);
+    writeDecision(root, rec);
+    const store = fakeStore({
+      getNode: async () => null,
+      findByContentHash: async (_r, hash) => (hash === "h1" ? [liveNode("h1", NODE_ID)] : []),
+    });
+    const before = readFileSync(join(decisionsDir(root), decisionFileName(rec.id)), "utf8");
+    const reanchor = makeReanchorDecision(store, REPO_ID, root, { today: () => "2026-08-23" });
+    const res = await reanchor({ decision_id: rec.id, dry_run: true });
+    expect(res.isError).toBeUndefined();
+    const payload = parse(res) as { dry_run: boolean; results: { anchors: { action: string; to_node_id?: string }[] }[] };
+    expect(payload.dry_run).toBe(true);
+    expect(payload.results[0]!.anchors[0]!.action).toBe("rebind");
+    expect(payload.results[0]!.anchors[0]!.to_node_id).toBe(NODE_ID);
+    expect(readFileSync(join(decisionsDir(root), decisionFileName(rec.id)), "utf8")).toBe(before);
+  });
+
+  it("applies rebinds and reports unresolved anchors without touching them", async () => {
+    const deadId = `rs1:${REPO_ID}:func:old.py#Svc.run@1`;
+    const orphanId = `rs1:${REPO_ID}:func:gone.py#Svc.gone@1`;
+    const rec: DecisionRecord = {
+      id: "adr:2026-08-20-use-x",
+      title: "Use X",
+      status: "accepted",
+      context: "ctx",
+      decision: "We will use X.",
+      anchors: [
+        { node_id: deadId, path: "old.py", name: "Svc.run", kind: "Function", hash: "h1" },
+        { node_id: orphanId, path: "gone.py", name: "Svc.gone", kind: "Function", hash: "h2" },
+      ],
+      paths: [],
+      supersedes: [],
+      decided_at: "2026-08-20",
+      decided_by: "agent",
+      trigger: { kind: "manual" },
+      body_hash: "",
+    };
+    rec.body_hash = computeBodyHash(rec);
+    writeDecision(root, rec);
+    const store = fakeStore({
+      getNode: async () => null,
+      findByContentHash: async (_r, hash) => (hash === "h1" ? [liveNode("h1", NODE_ID)] : []),
+    });
+    const reanchor = makeReanchorDecision(store, REPO_ID, root, { today: () => "2026-08-23" });
+    const res = await reanchor({ decision_id: rec.id });
+    expect(res.isError).toBeUndefined();
+    const payload = parse(res) as {
+      dry_run: boolean;
+      results: { changed: boolean; unresolved: number; anchors: { node_id: string; action: string }[] }[];
+    };
+    expect(payload.dry_run).toBe(false);
+    expect(payload.results[0]!.changed).toBe(true);
+    expect(payload.results[0]!.unresolved).toBe(1);
+    const after = loadDecisions(root).decisions[0]!;
+    expect(after.anchors[0]!.node_id).toBe(NODE_ID);
+    expect(after.anchors[1]).toEqual(rec.anchors[1]);
+    expect(after.reanchored_at).toBe("2026-08-23");
+  });
+
+  it("errors on an unknown decision_id", async () => {
+    const store = fakeStore({});
+    const reanchor = makeReanchorDecision(store, REPO_ID, root);
+    const res = await reanchor({ decision_id: "adr:nope" });
     expect(res.isError).toBe(true);
   });
 });

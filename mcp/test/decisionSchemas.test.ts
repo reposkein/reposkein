@@ -4,6 +4,7 @@ import {
   getDecisionInputSchema,
   listDecisionsInputSchema,
   reaffirmDecisionInputSchema,
+  reanchorDecisionInputSchema,
   recordDecisionInputSchema,
   setDecisionStatusInputSchema,
 } from "../src/index.js";
@@ -28,6 +29,7 @@ const SCHEMAS = {
   record_decision: recordDecisionInputSchema,
   set_decision_status: setDecisionStatusInputSchema,
   reaffirm_decision: reaffirmDecisionInputSchema,
+  reanchor_decision: reanchorDecisionInputSchema,
   list_decisions: listDecisionsInputSchema,
   get_decision: getDecisionInputSchema,
 };
