@@ -40,7 +40,7 @@ Agent:  "validate_jwt is called by the login, refresh, and middleware paths;
 
 ### Agent skills
 
-RepoSkein ships two cross-agent [Agent Skills](https://skills.sh) — `npx skills add reposkein/reposkein --all` installs both into Claude Code, Cursor, Codex, and 70+ agents:
+RepoSkein ships two cross-agent [Agent Skills](https://skills.sh). Claude Code users get both automatically with the [plugin](../README.md#installation) (`/plugin install reposkein`, namespaced `/reposkein:…`); everywhere else, `npx skills add reposkein/reposkein --all` installs them into Cursor, Codex, and 70+ agents:
 
 - **`reposkein-setup`** — installs RepoSkein in a repo and verifies it's running (binary → index → MCP reachability). Ask your agent to run it.
 - **`reposkein-graph-rag`** — teaches your agent *when* to use each tool (the loop above), including when to record a decision. `reposkein-mcp init` installs it automatically for Claude Code.
