@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "reposkein",
-      "source": { "source": "github", "repo": "reposkein/reposkein" },
+      "source": "./",
       "displayName": "RepoSkein",
       "description": "Deterministic code-graph MCP server + navigation skills. Two commands: add this marketplace, install the plugin — the server and skills configure themselves against the current repo.",
       "keywords": ["mcp", "code-graph", "code-analysis", "adr", "graph-rag"],

@@ -4,13 +4,15 @@
   "description": "Deterministic code-graph MCP server: structural navigation, semantic find, impact analysis, and architecture decision records for the current repo. Zero infrastructure — the graph lives in .reposkein/ and the indexer binary is fetched on first run.",
   "author": { "name": "Marcus Nagy Ong" },
   "license": "Apache-2.0",
+  "homepage": "https://reposkein.github.io/reposkein/",
+  "repository": "https://github.com/reposkein/reposkein",
   "keywords": ["mcp", "code-graph", "code-analysis", "adr", "graph-rag"],
   "skills": "./skills/",
   "mcpServers": {
     "reposkein": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@reposkein/mcp"],
+      "args": ["-y", "@reposkein/mcp@0.7.0"],
       "env": {
         "REPOSKEIN_REPO_PATH": "${CLAUDE_PROJECT_DIR}"
       }

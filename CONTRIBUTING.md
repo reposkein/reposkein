@@ -84,6 +84,10 @@ Keep the viewer's invariants intact: **read-only** (never mutate the committed J
 
 Fork, branch, make focused commits, ensure the gates above pass, and open a PR with a clear description. For new languages or anything touching the resolver/serializer, include the determinism test results in the PR.
 
+## Cutting a release
+
+One release PR bumps `mcp/package.json` (+lock), `indexer/Cargo.toml` (+lock), **and the pinned `@reposkein/mcp@<version>` in `.claude-plugin/plugin.json`** (supply-chain: the plugin never floats `latest`), plus a `CHANGELOG.md` entry. After merge, push the `v<version>` tag — `release.yml` builds binaries and publishes npm, asserting the committed version matches the tag.
+
 By contributing you agree your work is licensed under [Apache-2.0](./LICENSE).
 
 **Support:** [Ko-fi](https://ko-fi.com/mongx) — funds hosted-constellation infra + indexer maintenance.
