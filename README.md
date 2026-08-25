@@ -14,7 +14,7 @@
 
 **[🔭 Live demo →](https://reposkein.github.io/reposkein/)** — RepoSkein's own graph, rendered as an interactive 3D constellation in your browser.
 
-**Get running in one line:** `npx @reposkein/mcp init` — full walkthrough in [Installation](#installation).
+**Get running in one line:** Claude Code: `/plugin marketplace add reposkein/reposkein` · elsewhere: `npx @reposkein/mcp init` — full walkthrough in [Installation](#installation).
 
 </div>
 
