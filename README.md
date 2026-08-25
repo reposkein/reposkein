@@ -77,7 +77,23 @@ git clone <repo-url> && cd <repo> && npx @reposkein/mcp init
 
 ## Installation
 
-In the repo you want your agent to understand:
+**Claude Code? Two commands, zero config:**
+
+```
+/plugin marketplace add reposkein/reposkein
+/plugin install reposkein
+```
+
+The plugin registers the MCP server against whatever repo you have open
+(`REPOSKEIN_REPO_PATH` is wired to the project directory) and ships the
+navigation skills as `/reposkein:reposkein-setup` and
+`/reposkein:reposkein-graph-rag` — run the setup skill once per repo to
+build the graph. Optional [embeddings](docs/EMBEDDINGS.md) (Voyage AI or
+any OpenAI-compatible endpoint) work by exporting the `REPOSKEIN_EMBED_*`
+env vars in your shell — the plugin's server inherits them; the default is
+fully local, zero-egress lexical search.
+
+**Any other agent** — in the repo you want it to understand:
 
 ```sh
 npx @reposkein/mcp init
