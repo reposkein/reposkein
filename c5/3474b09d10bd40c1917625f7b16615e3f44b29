@@ -1,0 +1,28 @@
+mcp/src/cli/doctor.ts
+  s_b49492f21003c4::t_b0de2400249197 132-136
+  s_b49492f21003c4::t_7c8f6615602538 144,146-147
+  s_b49492f21003c4::t_bbb446e7b0d8f4 9
+mcp/test/doctor.test.ts
+  s_b49492f21003c4::t_9fa6f1eb061133 52-57
+  s_b49492f21003c4::t_522b413b65eb1b 363-396
+  s_b49492f21003c4::t_57d5f9868a7535 6,8
+mcp/src/cli/doctorFreshness.ts
+  s_b49492f21003c4::t_f9eab9f2405c0a 6
+  s_b49492f21003c4::t_e8eb4c684a4d1f 149-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c53474b09d10bd40c1917625f7b16615e3f44b29",
+  "prompts": {},
+  "sessions": {
+    "s_b49492f21003c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63051c14-cc94-4886-a0f3-989a76e9f316",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
