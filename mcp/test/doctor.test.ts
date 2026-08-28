@@ -3,8 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:f
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks, resolveDoctorRepoPath, runDoctor, ciFailingChecks } from "../src/cli/doctor.js";
+import { runChecks, resolveDoctorRepoPath, runDoctor, ciFailingChecks, CI_FAIL_IDS } from "../src/cli/doctor.js";
 import { decisionChecks, anchorStateChecks } from "../src/cli/doctorDecisions.js";
+import { hooksCheck, graphStaleCheck, graphTrackedCheck } from "../src/cli/doctorFreshness.js";
 import { computeBodyHash, writeDecision, decisionsDir, type DecisionRecord } from "../src/store/decisions.js";
 import { writeIndexedAtMarker } from "../src/store/indexedAt.js";
 
@@ -47,6 +48,12 @@ afterAll(() => {
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rs-doctor-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+function gitIn(d: string, args: string[]): void {
+  execFileSync("git", ["-C", d, "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
 
 describe("resolveDoctorRepoPath", () => {
   it("walks up to the repo root when run from a subdirectory cwd (no path arg)", () => {
@@ -351,5 +358,39 @@ describe("doctor --ci exit codes", () => {
     const failing = ciFailingChecks(report).map((c) => c.id);
     expect(failing).toContain("hooks_installed");
     expect(failing).not.toContain("indexed"); // critical, not a CI_FAIL_IDS member
+  });
+});
+
+describe("graphTrackedCheck", () => {
+  it("fails when the derived graph is committed, and points at migrate", () => {
+    gitIn(dir, ["init", "-q"]);
+    mkdirSync(join(dir, ".reposkein"));
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), '{"id":"n1"}\n');
+    writeFileSync(join(dir, ".reposkein", "edges.jsonl"), '{"src":"n1"}\n');
+    gitIn(dir, ["add", ".reposkein"]);
+    gitIn(dir, ["commit", "-q", "-m", "track"]);
+    const c = graphTrackedCheck(dir);
+    expect(c.id).toBe("graph_tracked");
+    expect(c.ok).toBe(false);
+    expect(c.critical).toBe(false);
+    expect(c.fix).toContain("reposkein-mcp migrate");
+  });
+
+  it("passes when the graph files are untracked", () => {
+    gitIn(dir, ["init", "-q"]);
+    mkdirSync(join(dir, ".reposkein"));
+    writeFileSync(join(dir, ".reposkein", "nodes.jsonl"), '{"id":"n1"}\n');
+    expect(graphTrackedCheck(dir).ok).toBe(true);
+  });
+
+  it("skips (ok) outside a git repository", () => {
+    mkdirSync(join(dir, ".reposkein"));
+    const c = graphTrackedCheck(dir);
+    expect(c.ok).toBe(true);
+    expect(c.detail).toContain("skipped");
+  });
+
+  it("is promoted by --ci", () => {
+    expect(CI_FAIL_IDS.has("graph_tracked")).toBe(true);
   });
 });
