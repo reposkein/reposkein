@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { runInit, runIndex } from "./cli/init.js";
 import { parseAgentsFlag } from "./cli/agentAdapters.js";
 import { runDoctor, resolveDoctorRepoPath } from "./cli/doctor.js";
+import { runMigrate } from "./cli/migrate.js";
 import { runAdr } from "./cli/adr.js";
 import { runAdrReanchor } from "./cli/adrReanchor.js";
 import { runView, runExport, parseViewArgs } from "./cli/view.js";
@@ -40,6 +41,7 @@ Usage:
   reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph); --no-index skips the initial index, --ci also writes a GitHub Pages publish workflow (see docs/HOSTING.md). On a repo joined from a committed .reposkein/meta.json, also auto-writes local agent MCP config (--agents claude,opencode,cursor to override detection, --dry-run to preview)
   reposkein-mcp index [path]    (re)build the committed graph
   reposkein-mcp doctor [path]   health check (indexer binary, index, repo id, hooks, graph freshness); --json for machine output, --ci additionally fails on stale graph / missing hooks / unsplit legacy summaries
+  reposkein-mcp migrate [path] [--dry-run]  untrack a still-committed derived graph (pre-0.2.7 repos), refresh hooks + .gitignore/.gitattributes
   reposkein-mcp adr <sub> ...   decision-log utilities (export|import|reanchor)
   reposkein-mcp stats [path]    session usage report (calls, tokens saved vs grep)
   reposkein-mcp support <token> install a supporter token (verified locally, stored at ~/.config/reposkein/supporter.jwt, mode 600); pass \`-\` to read it from stdin instead of argv (keeps it out of shell history and \`ps\`); --status to show tier/expiry, --remove to delete it. Offline: no network call, ever
@@ -119,6 +121,13 @@ if (invokedAsBin()) {
       process.exit(1);
     }
     runDoctor(path, { json, ci })
+      .then((code) => process.exit(code))
+      .catch((err) => { console.error(err); process.exit(1); });
+  } else if (sub === "migrate") {
+    const rest = process.argv.slice(3);
+    const dryRun = rest.includes("--dry-run");
+    const path = rest.find((a) => !a.startsWith("-")) ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+    runMigrate(path, { dryRun })
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
   } else if (sub === "stats") {
