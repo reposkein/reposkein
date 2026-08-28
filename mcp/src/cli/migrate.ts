@@ -49,8 +49,9 @@ function stagedGraphDeletions(repoPath: string): string[] {
  *  refuses to overwrite a hook without the managed marker, so such a hook
  *  survives every upgrade silently — this scan makes it loud instead. */
 function warnForeignStagingHooks(root: string): void {
+  const hooksDir = resolveHooksDir(root);
   for (const name of HOOK_NAMES) {
-    const p = join(root, ".git", "hooks", name);
+    const p = join(hooksDir, name);
     if (!existsSync(p)) continue;
     let content = "";
     try {
@@ -61,12 +62,28 @@ function warnForeignStagingHooks(root: string): void {
     if (content.includes(HOOK_MARKER)) continue;
     if (/git add[^\n]*\.reposkein/.test(content)) {
       console.error(
-        `\n⚠ .git/hooks/${name} is not managed by RepoSkein but contains a \`git add .reposkein\` ` +
+        `\n⚠ ${p} is not managed by RepoSkein but contains a \`git add .reposkein\` ` +
           "line — it will re-stage the derived graph on every commit and undo this migration. " +
           "Remove that line (or delete the hook and re-run `reposkein-mcp init` to install the " +
           "current one, which stages nothing)."
       );
     }
+  }
+}
+
+/** Absolute path to the hooks directory actually consulted by git for
+ *  `root` — the shared git-common-dir's `hooks/`, not `<root>/.git/hooks`,
+ *  which for a linked worktree is a dangling path (`.git` there is a file,
+ *  not a directory) even though the hooks it delegates to are real and
+ *  live (N2 — a foreign staging hook in the main checkout's gitdir must
+ *  still be caught while migrating a linked worktree). Falls back to
+ *  `<root>/.git/hooks` if `git-common-dir` can't be resolved. */
+function resolveHooksDir(root: string): string {
+  try {
+    const commonDir = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+    return join(commonDir, "hooks");
+  } catch {
+    return join(root, ".git", "hooks");
   }
 }
 
@@ -116,8 +133,14 @@ export async function runMigrate(repoPath = ".", opts: RunMigrateOptions = {}): 
   // (or a programmatic caller passing anything but the root) would otherwise
   // have every `git` pathspec below miss, reading as "not tracked", while
   // the indexer step below would happily write .git/hooks + a stray
-  // .reposkein INTO the subdirectory.
-  root = git(root, ["rev-parse", "--show-toplevel"]).trim();
+  // .reposkein INTO the subdirectory. Guarded (N1): a nested RepoSkein root
+  // (a monorepo package with its own `.reposkein/`) is a real, intentional
+  // migrate target — walking it up to the outer work-tree root would migrate
+  // the wrong `.reposkein` entirely, so only normalize when the passed dir
+  // isn't itself one.
+  if (!existsSync(join(root, ".reposkein"))) {
+    root = git(root, ["rev-parse", "--show-toplevel"]).trim();
+  }
 
   const commitCmd = `  git -C ${root} commit -m "chore(reposkein): stop tracking the derived graph"`;
   const commitReminder = "Commit the staged untracking (migrate never commits for you):\n" + commitCmd;

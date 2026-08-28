@@ -40,6 +40,20 @@ function trackedFixture(dir: string): void {
   git(dir, ["commit", "-q", "-m", "track graph"]);
 }
 
+/** Same shape as `trackedFixture`, but the tracked `.reposkein/` lives at a
+ *  nested path (e.g. a monorepo package) instead of the repo root. Returns
+ *  the absolute path to the nested directory. */
+function nestedTrackedFixture(dir: string, subpath: string[]): string {
+  git(dir, ["init", "-q"]);
+  const nestedDir = join(dir, ...subpath);
+  mkdirSync(join(nestedDir, ".reposkein"), { recursive: true });
+  writeFileSync(join(nestedDir, ".reposkein", "nodes.jsonl"), '{"id":"n1"}\n');
+  writeFileSync(join(nestedDir, ".reposkein", "edges.jsonl"), '{"src":"n1"}\n');
+  git(dir, ["add", join(...subpath, ".reposkein")]);
+  git(dir, ["commit", "-q", "-m", "track nested graph"]);
+  return nestedDir;
+}
+
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rs-migrate-")); });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -181,6 +195,47 @@ describe("runMigrate", () => {
       expect(status).toContain("D  .reposkein/edges.jsonl");
       const output = errs.join("\n");
       expect(/worktree|reposkein-mcp init/.test(output)).toBe(true);
+    } finally {
+      rmSync(wtParent, { recursive: true, force: true });
+    }
+  });
+
+  it("N1: does not walk a nested RepoSkein root up to the outer work-tree root", async () => {
+    const nested = nestedTrackedFixture(dir, ["packages", "api"]);
+    expect(await runMigrate(nested)).toBe(0);
+    // Untracked at the NESTED root, not left alone because we walked past it.
+    expect(git(dir, ["ls-files", "packages/api/.reposkein"]).trim()).toBe("");
+    // Must not have created (or touched) a .reposkein at the outer root.
+    expect(existsSync(join(dir, ".reposkein"))).toBe(false);
+  });
+
+  it("N2: a foreign staging hook in the main checkout is caught while migrating a linked worktree", async () => {
+    trackedFixture(dir);
+    const hooksDir = join(dir, ".git", "hooks");
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(
+      join(hooksDir, "pre-commit"),
+      "#!/bin/sh\nreposkein-indexer index .\ngit add .reposkein/nodes.jsonl .reposkein/edges.jsonl || true\n"
+    );
+    chmodSync(join(hooksDir, "pre-commit"), 0o755);
+
+    const wtParent = mkdtempSync(join(tmpdir(), "rs-migrate-wt2-"));
+    const wtPath = join(wtParent, "wt");
+    try {
+      git(dir, ["worktree", "add", wtPath, "-b", "tmp-branch-n2"]);
+
+      const errs: string[] = [];
+      const orig = console.error;
+      console.error = (...a: unknown[]) => { errs.push(a.join(" ")); };
+      try {
+        await runMigrate(wtPath);
+      } finally {
+        console.error = orig;
+      }
+
+      const output = errs.join("\n");
+      expect(output).toContain("not managed by RepoSkein");
+      expect(output).toContain("git add");
     } finally {
       rmSync(wtParent, { recursive: true, force: true });
     }
