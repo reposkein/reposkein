@@ -1,0 +1,26 @@
+indexer/crates/cli/tests/init_hooks_cli.rs
+  s_4bfd08f35ac329::t_18b40dd746d97a 185-187,198,202-203
+indexer/crates/cli/tests/summaries_cli.rs
+  s_4bfd08f35ac329::t_3373409cd583bd 131
+indexer/crates/cli/src/main.rs
+  s_4bfd08f35ac329::t_001c4021055a27 972-974,976-983,990
+  s_4bfd08f35ac329::t_a4d82c6bc02889 1643
+  s_4bfd08f35ac329::t_ef8dde89c46a5c 1642,1644-1648
+  s_4bfd08f35ac329::t_3767b068635a4f 1641
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "7868de10a51f7f281a377c737d1035b0b4c56d6a",
+  "prompts": {},
+  "sessions": {
+    "s_4bfd08f35ac329": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0a8fce5-46c9-4bd2-b659-7feadc6e5106",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
