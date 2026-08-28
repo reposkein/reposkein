@@ -6,6 +6,36 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-28
+
+### Added
+
+- `reposkein-mcp migrate` — one-command repair for repos that still track the
+  derived graph (pre-0.2.7 adopters): stages `git rm --cached` of
+  `nodes.jsonl`/`edges.jsonl` (never commits), refreshes the managed git
+  hooks, and rewrites `.reposkein/.gitignore`/`.gitattributes` to the current
+  templates. Idempotent; graceful no-op outside a git work tree. (REP-35)
+- `doctor` check `graph_tracked`: fails when git tracks the derived graph —
+  the state that let a 7.2 MB graph (~1.9× a 1M-token context window) kill
+  agents via bare `git diff`/`gh pr diff`. Promoted by `doctor --ci`. (REP-35)
+- MCP runtime warning, once per repo per session: the first successful tool
+  call touching a tracked-graph repo carries a warning naming
+  `reposkein-mcp migrate` and the `:(exclude).reposkein` pathspec escape
+  hatch. `list_repos` entries gain `graph_tracked: true`. (REP-35)
+- `.reposkein/.gitattributes` template now marks `nodes.jsonl`/`edges.jsonl`
+  `-diff linguist-generated` (one-line local diffs, collapsed in GitHub PR
+  views while a repo is still tracked) and adds `linguist-generated` to the
+  summary shards. Auto-propagates on the next `index`. (REP-35)
+- `migrate` warns loudly when a foreign (non-managed) git hook contains
+  `git add .reposkein` — the pre-0.2.7 hook that silently survives upgrades
+  and re-stages the graph. (REP-35)
+
+### Changed
+
+- The 0.2.7 migration doc is superseded by `reposkein-mcp migrate`; the
+  `reposkein-graph-rag` skill gains context-safety rules for graphed repos
+  and a dead-agent salvage checklist.
+
 ## [0.7.0] - 2026-08-23
 
 ### Added
