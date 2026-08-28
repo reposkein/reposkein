@@ -43,7 +43,15 @@ export interface ToolLogger {
  *     (default `setImmediate`), which runs only after the response has
  *     already been handed back to the MCP transport. The deferred callback
  *     swallows every error itself — it must never surface as an unhandled
- *     exception/rejection. */
+ *     exception/rejection.
+ *
+ *  A third constraint added by the REP-35 tracked-graph warning below:
+ *  `session.takeTrackedGraphWarning()` can itself shell out to git on the
+ *  FIRST call for a repo, so it must (a) reuse `cachedResolve()` rather than
+ *  calling `session.resolve()` a second time (preserves fix 1), and (b) run
+ *  strictly AFTER `ts` is captured, so its cost is never attributed to the
+ *  call's logged timestamp (preserves fix 2's "ts is call-completion time,
+ *  not deferred-write time" contract). */
 export function createToolLogger(
   session: RepoSession,
   sessionLogger: SessionLogger,
@@ -91,8 +99,30 @@ export function createToolLogger(
       als.run({}, async () => {
         let result: R | undefined;
         let threw = false;
+        // Captured right when `cb` finishes — see (3) below; the `finally`
+        // block reuses it rather than re-stamping after the warning-append
+        // work runs.
+        let ts: string | undefined;
         try {
           result = await cb(args);
+          ts = new Date().toISOString();
+          try {
+            // REP-35: surface the tracked-graph hazard on the FIRST successful
+            // tool call that resolves to an affected repo — once per repo per
+            // session, appended as an extra content item so no handler needs
+            // to know about it. Reuses `cachedResolve()` (not
+            // `session.resolve()` directly) so this never costs a second,
+            // unmemoized resolution for the same call — see (1) above.
+            if ((result as ToolResultLike | undefined)?.isError !== true) {
+              const warning = session.takeTrackedGraphWarning(cachedResolve().repoPath);
+              const content = (result as { content?: unknown } | undefined)?.content;
+              if (warning && Array.isArray(content)) {
+                content.push({ type: "text", text: JSON.stringify({ warning }) });
+              }
+            }
+          } catch {
+            // the warning must never break a tool call
+          }
           return result;
         } catch (err) {
           threw = true;
@@ -105,7 +135,7 @@ export function createToolLogger(
             const resolution = cachedResolve();
             if (resolution.repoPath) {
               deferredLog(
-                new Date().toISOString(),
+                ts ?? new Date().toISOString(),
                 resolution.repoPath,
                 name,
                 argsShapeOf(args),
