@@ -1,0 +1,37 @@
+mcp/test/trackedGraphWarning.test.ts
+  s_bcdeb090011092::t_bf84e387316cec 1-77
+mcp/src/store/instrumentTool.ts
+  s_bcdeb090011092::t_8e8e9ddba3c6ad 46-54
+  s_bcdeb090011092::t_3f5198dedac676 102-105,108,113-115,117,138
+  s_bcdeb090011092::t_6cb2a65524c404 109-112,116,118-125
+mcp/src/store/repoSession.ts
+  s_bcdeb090011092::t_07e2de5dd1248c 4,17-19
+  s_bcdeb090011092::t_7ef5450fbc2f93 117-126
+  s_bcdeb090011092::t_e77857bd51bf41 58,64
+  s_bcdeb090011092::t_bf03428ca40a5c 98-100,113-116,127-129
+  s_b307391c251243::t_d1de0f2b3e893a 130-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "7e56c0b3f05f4ce80309f8cba256f68a6244bccc",
+  "prompts": {},
+  "sessions": {
+    "s_b307391c251243": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c2f8e8a-6a3a-4ebf-a791-70c464da37fe",
+        "model": "claude-fable-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    },
+    "s_bcdeb090011092": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e11826ef-4252-44c3-95d8-5b2ad3a73d00",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
