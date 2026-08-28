@@ -1,0 +1,47 @@
+docs/INSTALL.md
+  s_79601e6ad239e0::t_bbcb80e8f585a8 45
+  s_79601e6ad239e0::t_339e5855078cc4 460
+skills/reposkein-graph-rag/SKILL.md
+  s_79601e6ad239e0::t_643d7723359a2d 153
+mcp/README.md
+  s_79601e6ad239e0::t_2cd2f0a679d94b 76
+mcp/src/index.ts
+  s_79601e6ad239e0::t_24b44243fb41af 43
+  s_79601e6ad239e0::t_c84613f7f7055c 129-134
+mcp/test/doctor.test.ts
+  s_79601e6ad239e0::t_25c176a012af83 8
+docs/TOOLS.md
+  s_79601e6ad239e0::t_e28cde50b62174 52
+mcp/src/cli/migrate.ts
+  s_79601e6ad239e0::t_802b347a7b2d4d 73-85,96-98,108,115-120
+  s_79601e6ad239e0::t_aa2fd504fef0aa 2-3
+  s_79601e6ad239e0::t_da615ccbe264d9 157-174,176-182,188
+  s_e494ddb2690bdf::t_7484958da68b1e 189
+mcp/test/migrate.test.ts
+  s_79601e6ad239e0::t_3a14f730522931 98,125-128,145-187
+  s_79601e6ad239e0::t_4577a23083acd0 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "b0d62ef0f1f34046281613758c46a7b629b8842c",
+  "prompts": {},
+  "sessions": {
+    "s_79601e6ad239e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "214dadbf-4caf-46c1-ba38-b4d5eb0eaf88",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    },
+    "s_e494ddb2690bdf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0333d-6bf6-78b1-91b9-1f7413f8c7de",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
