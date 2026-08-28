@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { trackedGraphFiles, GRAPH_FILES } from "../store/trackedGraph.js";
 import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
@@ -70,6 +70,19 @@ function warnForeignStagingHooks(root: string): void {
   }
 }
 
+/** Best-effort absolute path to the main checkout backing `root`'s git
+ *  metadata. Equal to `root` itself for a normal repo; for a linked worktree
+ *  it's the checkout that owns the shared `.git` directory (where hooks
+ *  actually live). Returns "" when it can't be determined. */
+function resolveMainCheckout(root: string): string {
+  try {
+    const commonDir = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+    return commonDir.endsWith(".git") ? dirname(commonDir) : commonDir;
+  } catch {
+    return "";
+  }
+}
+
 /** `reposkein-mcp migrate [path] [--dry-run]`: one-command repair for repos
  *  that still track the derived graph (pre-0.2.7 adopters — REP-35).
  *
@@ -80,7 +93,9 @@ function warnForeignStagingHooks(root: string): void {
  *      side effect also strips the legacy merge-driver lines from the
  *      repo-root `.gitattributes` (e.g. `nodes.jsonl merge=reposkein-jsonl`)
  *      and unsets the `merge.reposkein-jsonl.*` git config those lines
- *      relied on.
+ *      relied on. Skipped in a linked worktree (`.git` is a file there —
+ *      hooks live in the main checkout) and degraded to a warning on any
+ *      other hook-install failure — neither blocks the rest of the run.
  *   3. Re-indexes so `write_reposkein_layout` rewrites
  *      `.reposkein/.gitignore` + `.reposkein/.gitattributes` to the current
  *      templates.
@@ -90,13 +105,19 @@ function warnForeignStagingHooks(root: string): void {
  *  of side effects without touching the git index, hooks, git config, or the
  *  `.reposkein` layout. */
 export async function runMigrate(repoPath = ".", opts: RunMigrateOptions = {}): Promise<number> {
-  const root = resolve(repoPath);
+  let root = resolve(repoPath);
   try {
     git(root, ["rev-parse", "--is-inside-work-tree"]);
   } catch {
     console.error(`reposkein migrate: ${root} is not a git repository — nothing to untrack.`);
     return 0;
   }
+  // Normalize to the work-tree root (C1): a caller passing a subdirectory
+  // (or a programmatic caller passing anything but the root) would otherwise
+  // have every `git` pathspec below miss, reading as "not tracked", while
+  // the indexer step below would happily write .git/hooks + a stray
+  // .reposkein INTO the subdirectory.
+  root = git(root, ["rev-parse", "--show-toplevel"]).trim();
 
   const commitCmd = `  git -C ${root} commit -m "chore(reposkein): stop tracking the derived graph"`;
   const commitReminder = "Commit the staged untracking (migrate never commits for you):\n" + commitCmd;
@@ -133,17 +154,38 @@ export async function runMigrate(repoPath = ".", opts: RunMigrateOptions = {}): 
   // Hooks first (also strips the legacy merge-driver lines from the
   // repo-root .gitattributes and unsets merge.reposkein-jsonl.* git config),
   // then a fresh index so write_reposkein_layout rewrites the
-  // .reposkein/.gitignore + .gitattributes templates.
+  // .reposkein/.gitignore + .gitattributes templates. Neither a skipped nor
+  // a failed hook install (I2) blocks the rest of the run — the untracking
+  // above is the part that matters most, and both degrade to a warning.
+  const gitEntry = join(root, ".git");
+  let skipHooks = false;
+  if (existsSync(gitEntry) && statSync(gitEntry).isFile()) {
+    skipHooks = true;
+    const mainCheckout = resolveMainCheckout(root);
+    console.error(
+      "reposkein migrate: this is a linked worktree (`.git` here is a file, not a directory) — " +
+        "git hooks live in the main checkout" +
+        (mainCheckout ? ` at ${mainCheckout}` : "") +
+        "; skipping hook install here. Run `reposkein-mcp init`" +
+        (mainCheckout ? ` in ${mainCheckout}` : "") +
+        " to (re)install them there."
+    );
+  }
+
   const bin = await ensureIndexerBinary();
-  const hooks = await spawnIndexer(bin, ["init", "--hooks", root]);
-  if (hooks.code !== 0) {
-    console.error(`reposkein migrate: hook install failed: ${hooks.stderr || hooks.stdout}`);
-    return 1;
+  if (!skipHooks) {
+    const hooks = await spawnIndexer(bin, ["init", "--hooks", root]);
+    if (hooks.code !== 0) {
+      console.error(
+        `reposkein migrate: hook install failed (continuing without hooks): ${hooks.stderr || hooks.stdout}`
+      );
+    }
   }
   const idx = await runIndex(root);
-  if (idx !== 0) return idx;
 
   warnForeignStagingHooks(root);
+
+  if (idx !== 0) return idx;
 
   // Re-probe rather than trusting `tracked` alone: on a retry after an
   // earlier interrupted run, `git rm --cached` already happened (so

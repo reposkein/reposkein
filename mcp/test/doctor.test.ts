@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runChecks, resolveDoctorRepoPath, runDoctor, ciFailingChecks, CI_FAIL_IDS } from "../src/cli/doctor.js";
 import { decisionChecks, anchorStateChecks } from "../src/cli/doctorDecisions.js";
-import { hooksCheck, graphStaleCheck, graphTrackedCheck } from "../src/cli/doctorFreshness.js";
+import { graphTrackedCheck } from "../src/cli/doctorFreshness.js";
 import { computeBodyHash, writeDecision, decisionsDir, type DecisionRecord } from "../src/store/decisions.js";
 import { writeIndexedAtMarker } from "../src/store/indexedAt.js";
 

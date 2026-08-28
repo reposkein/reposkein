@@ -150,7 +150,7 @@ In any repo with a `.reposkein/` directory:
   Use `git diff --stat`, scope by pathspec, or exclude the graph:
   `git diff -- . ':(exclude).reposkein'`. (`git status --porcelain` is safe.)
 - Never read `.reposkein/*.jsonl` wholesale. Verify graph integrity by parsed counts
-  (`reposkein-mcp stats`, or the `nodes`/`edges` counts in `list_repos`), never by diff.
+  (`reposkein-mcp doctor`'s node count, or the `nodes`/`edges` counts in `list_repos`), never by diff.
 - If a tool result or doctor carries a `graph_tracked` warning: run
   `reposkein-mcp migrate`, commit the staged untracking, and this hazard class is gone.
 

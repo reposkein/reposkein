@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, existsSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,7 +95,7 @@ describe("runMigrate", () => {
     expect(errs.join("\n")).toContain("git add");
   });
 
-  it("prints the exact commit command on a hook-install failure, and again on retry", async () => {
+  it("degrades a hook-install failure to a warning (I2) and still prints the commit command, retry included", async () => {
     trackedFixture(dir);
 
     // Fake indexer that fails ONLY the `init --hooks` step (argv contains
@@ -122,7 +122,10 @@ describe("runMigrate", () => {
       console.error = orig;
       process.env.REPOSKEIN_INDEXER_BIN = okBin;
     }
-    expect(code1).toBe(1);
+    // I2: a hook-install failure degrades to a warning and the run continues
+    // (index still happens) — it must NOT read as total failure (exit 1).
+    expect(code1).toBe(0);
+    expect(errs1.join("\n")).toContain("hook install failed");
     expect(errs1.join("\n")).toContain('chore(reposkein): stop tracking the derived graph');
 
     // Retry with the always-ok bin restored. `git ls-files` is already empty
@@ -138,5 +141,48 @@ describe("runMigrate", () => {
     }
     expect(code2).toBe(0);
     expect(errs2.join("\n")).toContain('chore(reposkein): stop tracking the derived graph');
+  });
+
+  it("C1: resolves the repo root when invoked from a subdirectory", async () => {
+    trackedFixture(dir);
+    const nested = join(dir, "src", "nested");
+    mkdirSync(nested, { recursive: true });
+
+    expect(await runMigrate(nested)).toBe(0);
+    // Untrack happened at the ROOT, not inside the subdirectory.
+    expect(git(dir, ["ls-files", ".reposkein"]).trim()).toBe("");
+    // No bogus .git/.reposkein got written INTO the subdirectory.
+    expect(existsSync(join(nested, ".git"))).toBe(false);
+    expect(existsSync(join(nested, ".reposkein"))).toBe(false);
+  });
+
+  it("I2: degrades gracefully in a linked worktree (skips hook install, still untracks + indexes)", async () => {
+    trackedFixture(dir);
+    const wtParent = mkdtempSync(join(tmpdir(), "rs-migrate-wt-"));
+    const wtPath = join(wtParent, "wt");
+    try {
+      git(dir, ["worktree", "add", wtPath, "-b", "tmp-branch"]);
+      // Sanity: this really is a linked worktree — `.git` is a file, not a directory.
+      expect(statSync(join(wtPath, ".git")).isFile()).toBe(true);
+
+      const errs: string[] = [];
+      const orig = console.error;
+      console.error = (...a: unknown[]) => { errs.push(a.join(" ")); };
+      let code: number;
+      try {
+        code = await runMigrate(wtPath);
+      } finally {
+        console.error = orig;
+      }
+
+      expect(code).toBe(0);
+      const status = git(wtPath, ["status", "--porcelain"]);
+      expect(status).toContain("D  .reposkein/nodes.jsonl");
+      expect(status).toContain("D  .reposkein/edges.jsonl");
+      const output = errs.join("\n");
+      expect(/worktree|reposkein-mcp init/.test(output)).toBe(true);
+    } finally {
+      rmSync(wtParent, { recursive: true, force: true });
+    }
   });
 });

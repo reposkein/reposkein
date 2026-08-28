@@ -42,7 +42,7 @@ If `reposkein-mcp doctor` reports `graph_tracked` — the repo predates 0.2.7 an
 }
 ```
 
-Pin `--agents` explicitly in a devcontainer/CI image — auto-detection depends on what's installed on PATH, which is less predictable in an ephemeral container than on a developer's own machine. `doctor --ci` exits non-zero (failing the container build / CI job) on a stale committed graph, missing/foreign git hooks, or an unsplit legacy `summaries.jsonl` — the same checks `doctor` already reports, just promoted from a warning to a hard failure so drift gets caught before merge instead of at the next `init`.
+Pin `--agents` explicitly in a devcontainer/CI image — auto-detection depends on what's installed on PATH, which is less predictable in an ephemeral container than on a developer's own machine. `doctor --ci` exits non-zero (failing the container build / CI job) on a stale committed graph, missing/foreign git hooks, an unsplit legacy `summaries.jsonl`, or a tracked derived graph (`graph_tracked`) — the same checks `doctor` already reports, just promoted from a warning to a hard failure so drift gets caught before merge instead of at the next `init`.
 
 ---
 
@@ -457,7 +457,7 @@ For multi-repo workspaces under OpenCode, define one server **per repo** under d
 
 After everything is configured, restart the user's agent (most agents only read MCP config at startup), then ask the agent to run:
 
-1. **`reposkein-mcp doctor .`** in each indexed repo — expects `✓ binary  ✓ indexed (N nodes)  ✓ ready`. Add `--ci` in CI/devcontainer contexts to fail the job on a stale graph, missing hooks, or an unsplit legacy `summaries.jsonl`; add `--json` for machine-readable output.
+1. **`reposkein-mcp doctor .`** in each indexed repo — expects `✓ binary  ✓ indexed (N nodes)  ✓ ready`. Add `--ci` in CI/devcontainer contexts to fail the job on a stale graph, missing hooks, an unsplit legacy `summaries.jsonl`, or a tracked derived graph (`graph_tracked`); add `--json` for machine-readable output.
 2. **A `semantic_find` call** through the MCP tool — should return ranked candidates with one-line summaries.
 3. **A `get_context_profile` call** on one of those candidates — should return caller/callee neighborhood as prose.
 4. **If Neo4j:** open <http://localhost:7474> and run `MATCH (n) RETURN count(n)` — should match `meta.json` node counts (cumulative across loaded repos).

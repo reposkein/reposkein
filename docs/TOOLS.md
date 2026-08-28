@@ -49,7 +49,7 @@ RepoSkein ships two cross-agent [Agent Skills](https://skills.sh). Claude Code u
 
 | Tool | What it does |
 | --- | --- |
-| `list_repos` | enumerate the repos discovered by resolution — path, name, cheap node/edge counts. One entry in single-repo mode; workspace mode lists every sibling repo found. |
+| `list_repos` | enumerate the repos discovered by resolution — path, name, cheap node/edge counts, and a `graph_tracked` flag when the derived graph is still committed (REP-35). One entry in single-repo mode; workspace mode lists every sibling repo found. |
 | `select_repo` | set the session-active repo (by `path` or `name` from `list_repos`) for every repo-scoped tool below, for the rest of the connection. |
 | `semantic_find` | find where to start — rank functions/classes by meaning (lexical BM25F; optional [embeddings](EMBEDDINGS.md)). "Why" questions also surface `Decision` rows — follow up with `get_decision`. |
 | `get_context_profile` | resolve a function/class → its caller/callee neighborhood as ready-to-read prose, plus up to 5 governing decisions. |

@@ -40,7 +40,7 @@ Usage:
   reposkein-mcp                 start the MCP server (stdio transport)
   reposkein-mcp init [path]     set up a repo (indexer, git hooks, skill, graph); --no-index skips the initial index, --ci also writes a GitHub Pages publish workflow (see docs/HOSTING.md). On a repo joined from a committed .reposkein/meta.json, also auto-writes local agent MCP config (--agents claude,opencode,cursor to override detection, --dry-run to preview)
   reposkein-mcp index [path]    (re)build the committed graph
-  reposkein-mcp doctor [path]   health check (indexer binary, index, repo id, hooks, graph freshness); --json for machine output, --ci additionally fails on stale graph / missing hooks / unsplit legacy summaries
+  reposkein-mcp doctor [path]   health check (indexer binary, index, repo id, hooks, graph freshness); --json for machine output, --ci additionally fails on stale graph / missing hooks / unsplit legacy summaries / a tracked derived graph (graph_tracked)
   reposkein-mcp migrate [path] [--dry-run]  untrack a still-committed derived graph (pre-0.2.7 repos), refresh hooks + .gitignore/.gitattributes
   reposkein-mcp adr <sub> ...   decision-log utilities (export|import|reanchor)
   reposkein-mcp stats [path]    session usage report (calls, tokens saved vs grep)
@@ -126,7 +126,12 @@ if (invokedAsBin()) {
   } else if (sub === "migrate") {
     const rest = process.argv.slice(3);
     const dryRun = rest.includes("--dry-run");
-    const path = rest.find((a) => !a.startsWith("-")) ?? process.env.REPOSKEIN_REPO_PATH ?? ".";
+    const explicitPath = rest.find((a) => !a.startsWith("-"));
+    const { path, error } = resolveDoctorRepoPath(explicitPath, process.cwd(), process.env.REPOSKEIN_REPO_PATH);
+    if (error) {
+      console.error(`reposkein migrate: ${error}`);
+      process.exit(1);
+    }
     runMigrate(path, { dryRun })
       .then((code) => process.exit(code))
       .catch((err) => { console.error(err); process.exit(1); });
