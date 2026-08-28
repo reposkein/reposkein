@@ -1,0 +1,30 @@
+indexer/Cargo.toml
+  s_43478fb88a7021::t_5eebd7d834336f 6
+.claude-plugin/plugin.json
+  s_43478fb88a7021::t_80731e5ad8dbe5 16
+  s_43478fb88a7021::t_5be2d4caf25285 4
+CHANGELOG.md
+  s_43478fb88a7021::t_dc6da7311cf369 9-38
+mcp/package.json
+  s_43478fb88a7021::t_2a2c4d7f999bd8 3
+indexer/Cargo.lock
+  s_43478fb88a7021::t_abcdc2da370ddb 1086,1098,1118,1126,1137,1148,1159,1170,1181,1192
+mcp/package-lock.json
+  s_43478fb88a7021::t_65997342097346 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5be7dca03b9bbab4542764fd37b5ee547cbb4910",
+  "prompts": {},
+  "sessions": {
+    "s_43478fb88a7021": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "45c2931e-c9f3-46c6-a9d6-84251f1727df",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
