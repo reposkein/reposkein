@@ -1,0 +1,24 @@
+docs/INSTALL.md
+  s_4bfd08f35ac329::t_7485f8f6ac6b33 35-36
+  s_4bfd08f35ac329::t_b0ecb727ad498e 264-280
+docs/migrations/2026-08-06-stop-committing-derived-graph.md
+  s_4bfd08f35ac329::t_dd26c0278d7be1 8-10
+skills/reposkein-graph-rag/SKILL.md
+  s_4bfd08f35ac329::t_a9552334d514e4 140-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "96f4ac422c60f3039935873b7e447a9e52c2a72b",
+  "prompts": {},
+  "sessions": {
+    "s_4bfd08f35ac329": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0a8fce5-46c9-4bd2-b659-7feadc6e5106",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
