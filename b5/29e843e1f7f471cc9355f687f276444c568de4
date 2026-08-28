@@ -1,0 +1,21 @@
+mcp/src/cli/migrate.ts
+  s_bcdeb090011092::t_e9ac4544b14653 4,14,25-47,75-91,101-103,105,110-116,123-124,126-127,133-136,148-154
+mcp/test/migrate.test.ts
+  s_bcdeb090011092::t_a8e61eff7b19c3 97-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "b529e843e1f7f471cc9355f687f276444c568de4",
+  "prompts": {},
+  "sessions": {
+    "s_bcdeb090011092": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e11826ef-4252-44c3-95d8-5b2ad3a73d00",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
