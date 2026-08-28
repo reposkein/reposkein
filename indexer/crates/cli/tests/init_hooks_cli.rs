@@ -182,6 +182,9 @@ fn init_declares_union_for_the_summary_shards_inside_reposkein() {
     // reader dedupes duplicates and preserves divergence losers), and the
     // declaration lives inside .reposkein/ so it never collides with a user
     // rule and `rm -r .reposkein` is a complete uninstall.
+    // REP-35: Also declare -diff/linguist-generated for the derived graph
+    // (nodes.jsonl, edges.jsonl) for backwards compatibility with pre-0.2.7
+    // repos that still track it.
     let dir = git_repo();
     let root = dir.path();
     fs::create_dir_all(root.join(".reposkein")).unwrap();
@@ -192,12 +195,12 @@ fn init_declares_union_for_the_summary_shards_inside_reposkein() {
     assert!(
         attrs
             .lines()
-            .any(|l| l.trim() == "summaries/*.jsonl merge=union"),
+            .any(|l| l.trim() == "summaries/*.jsonl merge=union linguist-generated"),
         "expected a union declaration scoped to the shards: {attrs}"
     );
     assert!(
-        !attrs.contains("nodes.jsonl") && !attrs.contains("edges.jsonl"),
-        "the derived graph is not committed and must not be declared: {attrs}"
+        attrs.contains("nodes.jsonl -diff linguist-generated") && attrs.contains("edges.jsonl -diff linguist-generated"),
+        "the derived graph must be declared with -diff/linguist-generated for backwards compatibility (REP-35): {attrs}"
     );
     assert!(
         !root.join(".gitattributes").exists(),
