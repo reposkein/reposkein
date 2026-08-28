@@ -32,6 +32,8 @@ Every config file `init` edits is idempotent (re-running never adds a duplicate 
 
 Restart your agent afterward (most only read MCP config at startup), then verify with `reposkein-mcp doctor .`.
 
+If `reposkein-mcp doctor` reports `graph_tracked` — the repo predates 0.2.7 and still commits the derived graph — run `reposkein-mcp migrate` (see §4.2).
+
 **Devcontainer / CI**: to join automatically on container create, add to `.devcontainer/devcontainer.json`:
 
 ```jsonc
@@ -258,6 +260,23 @@ If your repo-root `.gitignore` has a blanket rule over `.reposkein/`, add a nega
 ```
 
 `reposkein-mcp doctor` checks for exactly this.
+
+**Untracking the derived graph (pre-0.2.7 repos).** If the repo still has
+`.reposkein/nodes.jsonl` / `edges.jsonl` under version control (`reposkein-mcp doctor`
+fails the `graph_tracked` check), run:
+
+```sh
+reposkein-mcp migrate
+git commit -m "chore(reposkein): stop tracking the derived graph"
+```
+
+`migrate` stages the untracking (`git rm --cached` — files stay on disk), refreshes the
+managed git hooks, and rewrites `.reposkein/.gitignore` / `.gitattributes` to the current
+templates; it never commits for you. Leaving the graph tracked is an agent-killer: a bare
+`git diff` or `gh pr diff` can pull megabytes of machine-generated JSONL into a context
+window (the incident that motivated this: 7.2 MB, ~1.9× a 1M-token window). `doctor --ci`
+fails on it. Historical background: see
+[`migrations/2026-08-06-stop-committing-derived-graph.md`](migrations/2026-08-06-stop-committing-derived-graph.md).
 
 #### Bulk re-summarization
 
