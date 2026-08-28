@@ -1,0 +1,21 @@
+mcp/src/store/trackedGraph.ts
+  s_79ebd55772755a::t_958e9816dbd68d 1-41
+mcp/test/trackedGraph.test.ts
+  s_79ebd55772755a::t_d9aebaee3aa0ac 1-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "666ecab7de41d4ad38124f5a8d7d4833e6948c17",
+  "prompts": {},
+  "sessions": {
+    "s_79ebd55772755a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c72098e-94bf-4026-9772-737357858cb5",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
