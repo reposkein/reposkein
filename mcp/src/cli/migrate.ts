@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { trackedGraphFiles } from "../store/trackedGraph.js";
+import { trackedGraphFiles, GRAPH_FILES } from "../store/trackedGraph.js";
 import { ensureIndexerBinary } from "../indexer/fetchBinary.js";
 import { spawnIndexer } from "../indexer/runIndexer.js";
 import { runIndex } from "./init.js";
@@ -11,7 +11,7 @@ const HOOK_MARKER = "# reposkein-managed";
 const HOOK_NAMES = ["pre-commit", "post-commit", "post-merge", "post-checkout"] as const;
 
 export interface RunMigrateOptions {
-  /** Report what would change without touching the git index, hooks, or layout. */
+  /** Report what would change without touching the git index, hooks, config, or layout. */
   dryRun?: boolean;
 }
 
@@ -20,6 +20,29 @@ function git(repoPath: string, args: string[]): string {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+/** Repo-relative paths of the derived graph files STAGED for deletion but not
+ *  yet committed — i.e. `git rm --cached` already ran this migration (or a
+ *  prior, interrupted one) but the resulting commit hasn't happened yet.
+ *  `trackedGraphFiles` alone goes empty the moment the deletion is staged, so
+ *  a retry after a hook/reindex failure would otherwise lose the "you still
+ *  need to commit" reminder — this probe keeps it alive until the commit
+ *  actually happens. */
+function stagedGraphDeletions(repoPath: string): string[] {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", repoPath, "diff", "--cached", "--name-only", "--diff-filter=D", "--", ...GRAPH_FILES],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    return out
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 /** Pre-0.2.7 hooks did `git add .reposkein/...` themselves. `init --hooks`
@@ -49,12 +72,23 @@ function warnForeignStagingHooks(root: string): void {
 
 /** `reposkein-mcp migrate [path] [--dry-run]`: one-command repair for repos
  *  that still track the derived graph (pre-0.2.7 adopters — REP-35).
- *  Untracks nodes.jsonl/edges.jsonl (staged, NEVER committed), refreshes the
- *  managed git hooks (which also strips the legacy merge-driver declaration
- *  — see indexer `init --hooks`), and re-indexes so `write_reposkein_layout`
- *  rewrites `.reposkein/.gitignore` + `.gitattributes` to the current
- *  templates. Idempotent; a graceful no-op outside a git work tree (e.g. a
- *  workspace root holding .reposkein/ with no .git). */
+ *
+ *  Side effects on a real run (none of them commit anything):
+ *   1. Untracks nodes.jsonl/edges.jsonl via `git rm --cached` — STAGED only,
+ *      never committed; the files stay on disk.
+ *   2. Refreshes the managed git hooks (`indexer init --hooks`), which as a
+ *      side effect also strips the legacy merge-driver lines from the
+ *      repo-root `.gitattributes` (e.g. `nodes.jsonl merge=reposkein-jsonl`)
+ *      and unsets the `merge.reposkein-jsonl.*` git config those lines
+ *      relied on.
+ *   3. Re-indexes so `write_reposkein_layout` rewrites
+ *      `.reposkein/.gitignore` + `.reposkein/.gitattributes` to the current
+ *      templates.
+ *
+ *  Idempotent; a graceful no-op outside a git work tree (e.g. a workspace
+ *  root holding .reposkein/ with no .git). `--dry-run` reports the same list
+ *  of side effects without touching the git index, hooks, git config, or the
+ *  `.reposkein` layout. */
 export async function runMigrate(repoPath = ".", opts: RunMigrateOptions = {}): Promise<number> {
   const root = resolve(repoPath);
   try {
@@ -64,29 +98,42 @@ export async function runMigrate(repoPath = ".", opts: RunMigrateOptions = {}): 
     return 0;
   }
 
+  const commitCmd = `  git -C ${root} commit -m "chore(reposkein): stop tracking the derived graph"`;
+  const commitReminder = "Commit the staged untracking (migrate never commits for you):\n" + commitCmd;
+
   const tracked = trackedGraphFiles(root);
+
   if (opts.dryRun) {
     console.error(
       tracked.length > 0
         ? `reposkein migrate (dry-run): would untrack ${tracked.join(", ")} (git rm --cached), ` +
-            "refresh hooks, and rewrite .reposkein/.gitignore + .gitattributes. Nothing was changed."
-        : "reposkein migrate (dry-run): derived graph is not tracked; would refresh hooks and templates only."
+            "refresh git hooks, strip the legacy merge-driver lines from the repo-root " +
+            ".gitattributes, unset the merge.reposkein-jsonl.* git config, and rewrite " +
+            ".reposkein/.gitignore + .gitattributes via a fresh index. Nothing was changed."
+        : "reposkein migrate (dry-run): derived graph is not tracked; would still refresh git " +
+            "hooks, strip the legacy merge-driver lines from the repo-root .gitattributes, " +
+            "unset the merge.reposkein-jsonl.* git config, and rewrite the .reposkein templates " +
+            "via a fresh index. Nothing was changed."
     );
     return 0;
   }
 
   if (tracked.length > 0) {
     git(root, ["rm", "--cached", "--quiet", "--", ...tracked]);
+    // Print the full commit command right away — a hook/reindex failure
+    // below must not be the only chance the operator sees it (Finding 2).
     console.error(
-      `reposkein migrate: untracked ${tracked.join(", ")} — deletion is STAGED, files stay on disk.`
+      `reposkein migrate: untracked ${tracked.join(", ")} — deletion is STAGED, files stay on disk.\n` +
+        commitReminder
     );
   } else {
     console.error("reposkein migrate: derived graph is not tracked — nothing to untrack.");
   }
 
-  // Hooks first (also strips the legacy merge-driver declaration + git
-  // config), then a fresh index so write_reposkein_layout rewrites the
-  // .gitignore/.gitattributes templates.
+  // Hooks first (also strips the legacy merge-driver lines from the
+  // repo-root .gitattributes and unsets merge.reposkein-jsonl.* git config),
+  // then a fresh index so write_reposkein_layout rewrites the
+  // .reposkein/.gitignore + .gitattributes templates.
   const bin = await ensureIndexerBinary();
   const hooks = await spawnIndexer(bin, ["init", "--hooks", root]);
   if (hooks.code !== 0) {
@@ -98,11 +145,13 @@ export async function runMigrate(repoPath = ".", opts: RunMigrateOptions = {}): 
 
   warnForeignStagingHooks(root);
 
-  if (tracked.length > 0) {
-    console.error(
-      "\nDone. Commit the staged untracking (migrate never commits for you):\n" +
-        `  git -C ${root} commit -m "chore(reposkein): stop tracking the derived graph"`
-    );
+  // Re-probe rather than trusting `tracked` alone: on a retry after an
+  // earlier interrupted run, `git rm --cached` already happened (so
+  // `tracked` above reads empty) but the deletion is still only staged —
+  // `stagedGraphDeletions` catches that case so the reminder survives.
+  const needsCommit = tracked.length > 0 || stagedGraphDeletions(root).length > 0;
+  if (needsCommit) {
+    console.error("\nDone. " + commitReminder);
   }
   console.error("Verify with `reposkein-mcp doctor` — the `graph_tracked` check should pass.");
   return 0;

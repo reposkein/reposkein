@@ -94,4 +94,49 @@ describe("runMigrate", () => {
     expect(errs.join("\n")).toContain("not managed by RepoSkein");
     expect(errs.join("\n")).toContain("git add");
   });
+
+  it("prints the exact commit command on a hook-install failure, and again on retry", async () => {
+    trackedFixture(dir);
+
+    // Fake indexer that fails ONLY the `init --hooks` step (argv contains
+    // "init"), so the earlier `git rm --cached` has already run and staged
+    // the deletion before this failure hits.
+    const failBin = join(fixtureDir, "reposkein-indexer-fail-init");
+    writeFileSync(
+      failBin,
+      '#!/usr/bin/env node\n' +
+        'if (process.argv.includes("init")) { console.error("boom"); process.exit(1); }\n' +
+        'console.log("ok");\nprocess.exit(0);\n'
+    );
+    chmodSync(failBin, 0o755);
+    const okBin = process.env.REPOSKEIN_INDEXER_BIN; // the always-ok fixture bin
+
+    const errs1: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => { errs1.push(a.join(" ")); };
+    let code1: number;
+    try {
+      process.env.REPOSKEIN_INDEXER_BIN = failBin;
+      code1 = await runMigrate(dir);
+    } finally {
+      console.error = orig;
+      process.env.REPOSKEIN_INDEXER_BIN = okBin;
+    }
+    expect(code1).toBe(1);
+    expect(errs1.join("\n")).toContain('chore(reposkein): stop tracking the derived graph');
+
+    // Retry with the always-ok bin restored. `git ls-files` is already empty
+    // (the earlier `git rm --cached` staged the deletion), so the reminder
+    // on this run must come from the staged-deletions probe, not `tracked`.
+    const errs2: string[] = [];
+    console.error = (...a: unknown[]) => { errs2.push(a.join(" ")); };
+    let code2: number;
+    try {
+      code2 = await runMigrate(dir);
+    } finally {
+      console.error = orig;
+    }
+    expect(code2).toBe(0);
+    expect(errs2.join("\n")).toContain('chore(reposkein): stop tracking the derived graph');
+  });
 });
