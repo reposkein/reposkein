@@ -202,11 +202,28 @@ describe("runMigrate", () => {
 
   it("N1: does not walk a nested RepoSkein root up to the outer work-tree root", async () => {
     const nested = nestedTrackedFixture(dir, ["packages", "api"]);
-    expect(await runMigrate(nested)).toBe(0);
+
+    const errs: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => { errs.push(a.join(" ")); };
+    let code: number;
+    try {
+      code = await runMigrate(nested);
+    } finally {
+      console.error = orig;
+    }
+
+    expect(code).toBe(0);
     // Untracked at the NESTED root, not left alone because we walked past it.
     expect(git(dir, ["ls-files", "packages/api/.reposkein"]).trim()).toBe("");
     // Must not have created (or touched) a .reposkein at the outer root.
     expect(existsSync(join(dir, ".reposkein"))).toBe(false);
+    // N3: a nested root has no .git of its own — `init --hooks` must not be
+    // run against it (that would conjure a dead <nested>/.git/hooks git
+    // never reads, while a real stale hook in the actual gitdir survives
+    // untouched and silently re-stages the graph).
+    expect(existsSync(join(nested, ".git"))).toBe(false);
+    expect(errs.join("\n")).toContain("skipping hook install");
   });
 
   it("N2: a foreign staging hook in the main checkout is caught while migrating a linked worktree", async () => {

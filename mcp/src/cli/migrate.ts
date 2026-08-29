@@ -180,13 +180,23 @@ export async function runMigrate(repoPath = ".", opts: RunMigrateOptions = {}): 
   // .reposkein/.gitignore + .gitattributes templates. Neither a skipped nor
   // a failed hook install (I2) blocks the rest of the run — the untracking
   // above is the part that matters most, and both degrade to a warning.
+  //
+  // Gate on OWNING a gitdir (N3), not just "`.git` isn't a file" (I2's
+  // original linked-worktree check): a nested RepoSkein root (N1's case —
+  // a monorepo package with no `.git` of its own at all) would otherwise
+  // slip past the I2 check and get `init --hooks <nested>` run against it,
+  // which conjures a dead `<nested>/.git/hooks` that git never reads while
+  // a real stale/foreign hook in the actual gitdir survives untouched and
+  // silently re-stages the graph on the next commit — a silent self-undo.
   const gitEntry = join(root, ".git");
+  const hasOwnGitDir = existsSync(gitEntry) && statSync(gitEntry).isDirectory();
   let skipHooks = false;
-  if (existsSync(gitEntry) && statSync(gitEntry).isFile()) {
+  if (!hasOwnGitDir) {
     skipHooks = true;
     const mainCheckout = resolveMainCheckout(root);
     console.error(
-      "reposkein migrate: this is a linked worktree (`.git` here is a file, not a directory) — " +
+      `reposkein migrate: ${root} has no git directory of its own here ` +
+        "(a linked worktree, or a nested RepoSkein root sharing the parent repo's .git) — " +
         "git hooks live in the main checkout" +
         (mainCheckout ? ` at ${mainCheckout}` : "") +
         "; skipping hook install here. Run `reposkein-mcp init`" +
