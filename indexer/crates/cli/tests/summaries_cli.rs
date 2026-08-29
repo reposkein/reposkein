@@ -128,7 +128,7 @@ fn shards_carry_a_union_merge_declaration_scoped_to_reposkein() {
     assert!(
         attrs
             .lines()
-            .any(|l| l.trim() == "summaries/*.jsonl merge=union"),
+            .any(|l| l.trim() == "summaries/*.jsonl merge=union linguist-generated"),
         "shards should declare union for LOCAL merges: {attrs}"
     );
     assert!(

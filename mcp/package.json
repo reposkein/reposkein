@@ -1,6 +1,6 @@
 {
   "name": "@reposkein/mcp",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "RepoSkein gives your AI coding agent a map of your codebase — so it navigates structure instead of grepping and guessing.",
   "keywords": [
     "mcp",

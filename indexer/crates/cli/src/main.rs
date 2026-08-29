@@ -969,14 +969,25 @@ const REPOSKEIN_GITIGNORE: &str = "local/\nnodes.jsonl\nedges.jsonl\nsummaries/.
 /// so this only helps LOCAL merges and rebases. It is still worth having,
 /// because that is where a developer hits the conflict by hand — and union's
 /// failure mode (a duplicated line) is one the tolerant reader dedupes.
+/// Also carries -diff/linguist-generated for the derived graph (REP-35): inert
+/// in the normal untracked layout, but collapses context-window-exhausting diffs
+/// in repos that still track it.
 const REPOSKEIN_GITATTRIBUTES: &str = "\
+# Derived graph: normally untracked (see .gitignore). These attributes are a
+# safety net for pre-0.2.7 repos that still track it: `-diff` collapses the
+# files to a single line in local `git diff` / `git show` output (a full diff
+# of a tracked graph can exceed an agent's entire context window), and
+# `linguist-generated` collapses them in GitHub PR views. Harmless once
+# untracked — run `reposkein-mcp migrate` to get there.
+nodes.jsonl -diff linguist-generated
+edges.jsonl -diff linguist-generated
 # Local merges of the authored summary shards resolve by keeping both sides.
 # Duplicate or divergent records are harmless: the reader dedupes by id with a
 # deterministic tiebreak and preserves the loser in local/conflicts.jsonl, and
 # the next `index` rewrites the shard canonically.
 # NOTE: forges compute mergeability in a bare repo, where this file is never
 # consulted. Merge smoothness comes from the sharding, not from this line.
-summaries/*.jsonl merge=union
+summaries/*.jsonl merge=union linguist-generated
 ";
 
 /// Writes meta.json, .reposkein/.gitignore, .reposkein/.gitattributes, the
@@ -1625,6 +1636,16 @@ mod tests {
         // Single responsibility: record the commit, don't reindex (pre-commit
         // already indexed the tree that became it).
         assert!(!POST_COMMIT.contains("index ."));
+    }
+
+    #[test]
+    fn gitattributes_template_hardens_derived_graph() {
+        use super::REPOSKEIN_GITATTRIBUTES;
+        assert!(REPOSKEIN_GITATTRIBUTES.contains("nodes.jsonl -diff linguist-generated"));
+        assert!(REPOSKEIN_GITATTRIBUTES.contains("edges.jsonl -diff linguist-generated"));
+        assert!(
+            REPOSKEIN_GITATTRIBUTES.contains("summaries/*.jsonl merge=union linguist-generated")
+        );
     }
 
     #[test]
