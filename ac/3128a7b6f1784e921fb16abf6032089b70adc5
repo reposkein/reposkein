@@ -1,0 +1,19 @@
+indexer/crates/cli/src/main.rs
+  s_021078164a4800::t_975b5d178db64b 1646-1648
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ac3128a7b6f1784e921fb16abf6032089b70adc5",
+  "prompts": {},
+  "sessions": {
+    "s_021078164a4800": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1018afd0-0aa4-4a4c-ae25-e02c7d6281fb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
