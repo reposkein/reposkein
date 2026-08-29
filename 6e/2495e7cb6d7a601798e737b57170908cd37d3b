@@ -1,0 +1,21 @@
+mcp/test/migrate.test.ts
+  s_79601e6ad239e0::t_7d70fe9fc56633 205-216,221-226
+mcp/src/cli/migrate.ts
+  s_79601e6ad239e0::t_e19e645e16e687 183-190,192,194,198-199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6e2495e7cb6d7a601798e737b57170908cd37d3b",
+  "prompts": {},
+  "sessions": {
+    "s_79601e6ad239e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "214dadbf-4caf-46c1-ba38-b4d5eb0eaf88",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "mjnong <marcusnagy@icloud.com>"
+    }
+  }
+}
