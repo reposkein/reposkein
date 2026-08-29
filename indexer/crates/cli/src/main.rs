@@ -1643,7 +1643,9 @@ mod tests {
         use super::REPOSKEIN_GITATTRIBUTES;
         assert!(REPOSKEIN_GITATTRIBUTES.contains("nodes.jsonl -diff linguist-generated"));
         assert!(REPOSKEIN_GITATTRIBUTES.contains("edges.jsonl -diff linguist-generated"));
-        assert!(REPOSKEIN_GITATTRIBUTES.contains("summaries/*.jsonl merge=union linguist-generated"));
+        assert!(
+            REPOSKEIN_GITATTRIBUTES.contains("summaries/*.jsonl merge=union linguist-generated")
+        );
     }
 
     #[test]
