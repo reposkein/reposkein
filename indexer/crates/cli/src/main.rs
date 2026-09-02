@@ -334,6 +334,14 @@ enabled = ["python", "typescript", "rust", "go", "java", "csharp"]
 uri = "neo4j://localhost:7687"
 # credentials come from env (NEO4J_USER / NEO4J_PASSWORD), never committed
 
+[index]
+# Files larger than this are recorded but never parsed. A tree-sitter syntax
+# tree is roughly 10-20x the size of its source, so a vendored minified bundle
+# or a generated file can turn a few megabytes on disk into a gigabyte of peak
+# memory - for symbols nobody searches for. Committed rather than an env var so
+# the graph stays a pure function of the tree on every machine. 0 disables it.
+max_file_bytes = 2097152
+
 [hooks]
 # Stage `.reposkein/summaries/` from the pre-commit hook when it changed.
 # The shards are authored prose an agent wrote during the session; without
@@ -376,6 +384,35 @@ fn config_bool(out_dir: &Path, section: &str, key: &str) -> Option<bool> {
             "false" => Some(false),
             _ => None,
         };
+    }
+    None
+}
+
+/// Reads a non-negative integer key from a `[section]` of `.reposkein/config.toml`.
+/// Same deliberate scanner as `config_bool`; an unparseable value reads as absent
+/// so a typo degrades to the default rather than failing an index.
+fn config_u64(out_dir: &Path, section: &str, key: &str) -> Option<u64> {
+    let text = std::fs::read_to_string(out_dir.join("config.toml")).ok()?;
+    let mut in_section = false;
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('#') {
+            continue;
+        }
+        if l.starts_with('[') {
+            in_section = l == format!("[{section}]");
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let Some((k, v)) = l.split_once('=') else {
+            continue;
+        };
+        if k.trim() != key {
+            continue;
+        }
+        return v.split('#').next().unwrap_or("").trim().parse::<u64>().ok();
     }
     None
 }
@@ -443,6 +480,11 @@ fn run_index(
         cache: cache
             .as_ref()
             .map(|c| c as &dyn reposkein_core::cache::ExtractCache),
+        // From the COMMITTED config, never the environment: the graph has to
+        // stay a pure function of the working tree, and a machine-local knob
+        // deciding which files get parsed would break that for everyone.
+        max_file_bytes: config_u64(&path.join(".reposkein"), "index", "max_file_bytes")
+            .unwrap_or(reposkein_core::DEFAULT_MAX_FILE_BYTES),
     };
     let out = index_tree_with(path, &repo, &repo_name, extractors, opts)
         .context("failed to index repository tree")?;
@@ -492,16 +534,25 @@ fn run_index(
     //    first index after upgrading harvests them instead of dropping them.
     //    ONE-SHOT — see `legacy_nodes_harvest_needed` for why running this on
     //    every index is actively harmful. Best-effort: a corrupt derived file
-    //    must never abort an index. `prev_nodes` is retained regardless (not
-    //    just absorbed) so the graph_delta diff below is free.
-    let prev_nodes: Option<Vec<reposkein_core::model::Node>> = std::fs::read_to_string(&nodes_path)
-        .ok()
-        .and_then(|prev| reposkein_core::jsonl::read_nodes(&prev).ok());
-    if legacy_nodes_harvest_needed(&out_dir) {
-        if let Some(ref existing) = prev_nodes {
-            authored.absorb_nodes(existing);
-        }
-    }
+    //    must never abort an index.
+    //
+    //    What survives this block is `prev_fingerprints`: id -> one comparison
+    //    string, all the graph_delta diff below actually needs. The parsed
+    //    `Vec<Node>` used to be retained instead, keeping every label and prop
+    //    map of the previous graph alive through the graft, the write AND the
+    //    diff — hundreds of megabytes on a large repository, alongside the new
+    //    graph. Only the legacy harvest needs real nodes, and only once ever.
+    let harvest = legacy_nodes_harvest_needed(&out_dir);
+    let prev_fingerprints: Option<std::collections::BTreeMap<String, String>> =
+        std::fs::read_to_string(&nodes_path)
+            .ok()
+            .and_then(|prev| reposkein_core::jsonl::read_nodes(&prev).ok())
+            .map(|prev_nodes| {
+                if harvest {
+                    authored.absorb_nodes(&prev_nodes);
+                }
+                reposkein_core::delta::node_fingerprints(&prev_nodes)
+            });
     // Claim every file that must be folded in and then removed, BEFORE reading
     // any of it: renaming aside is atomic, so a write_semantic_summary landing
     // during this window writes a FRESH sidecar that survives to the next index
@@ -588,9 +639,9 @@ fn run_index(
     // post-merge — teammate changes landing — is precisely when decisions go
     // stale; the persisted file lets the MCP server surface decisions_affected
     // on its next call. Best-effort: drift detection must never fail an index.
-    let delta = prev_nodes
-        .as_deref()
-        .map(|prev| reposkein_core::delta::compute_graph_delta(prev, &graph.nodes));
+    let delta = prev_fingerprints
+        .as_ref()
+        .map(|prev| reposkein_core::delta::compute_graph_delta_indexed(prev, &graph.nodes));
     if let Some(ref d) = delta {
         if !d.is_empty() {
             let pending_path = out_dir.join("local").join("last_delta.json");
@@ -1084,17 +1135,16 @@ fn load_federation(
     let nodes = reposkein_core::jsonl::read_nodes(&nodes_txt)?;
     let edges = reposkein_core::jsonl::read_edges(&edges_txt)?;
     store.purge(repo_id)?;
-    store.import_graph(
-        repo_id,
-        &reposkein_core::Graph {
-            nodes: nodes.clone(),
-            edges: edges.clone(),
-        },
-    )?;
+    // Move, don't clone. The graph was cloned here only so `nodes.len()` stayed
+    // reachable afterwards — a second full copy of the whole repository to
+    // report a number. Read the counts off the Graph instead; in a federation
+    // this ran once per nested repo.
+    let graph = reposkein_core::Graph { nodes, edges };
+    store.import_graph(repo_id, &graph)?;
     let mut repos = 1u64;
-    let mut n = nodes.len() as u64;
-    let mut e = edges.len() as u64;
-    for node in &nodes {
+    let mut n = graph.nodes.len() as u64;
+    let mut e = graph.edges.len() as u64;
+    for node in &graph.nodes {
         if node.labels == ["Repository"] {
             if let (Some(fed), Some(rp)) = (
                 node.props.get("federated_repo_id").and_then(|v| v.as_str()),
@@ -1216,19 +1266,14 @@ fn main() -> Result<()> {
                         .context("read edges.jsonl")?,
                 )?;
                 store.purge(&repo)?;
-                store.import_graph(
-                    &repo,
-                    &reposkein_core::Graph {
-                        nodes: nodes.clone(),
-                        edges: edges.clone(),
-                    },
-                )?;
+                let graph = reposkein_core::Graph { nodes, edges };
+                store.import_graph(&repo, &graph)?;
                 if json {
                     let stats = serde_json::json!({
                         "repo_id": repo,
                         "repos": 1,
-                        "nodes": nodes.len(),
-                        "edges": edges.len(),
+                        "nodes": graph.nodes.len(),
+                        "edges": graph.edges.len(),
                     });
                     println!("{}", serde_json::to_string(&stats).unwrap());
                 } else {

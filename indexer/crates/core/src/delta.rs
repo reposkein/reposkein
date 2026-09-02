@@ -53,15 +53,6 @@ fn comparable(props: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-fn content_changed(old: &Node, new: &Node) -> bool {
-    let oh = old.props.get("content_hash").and_then(Value::as_str);
-    let nh = new.props.get("content_hash").and_then(Value::as_str);
-    match (oh, nh) {
-        (Some(a), Some(b)) => a != b,
-        _ => comparable(&old.props) != comparable(&new.props),
-    }
-}
-
 fn cap(mut ids: Vec<String>) -> (Vec<String>, bool) {
     ids.sort();
     let truncated = ids.len() > DELTA_ID_CAP;
@@ -72,25 +63,52 @@ fn cap(mut ids: Vec<String>) -> (Vec<String>, bool) {
 /// Diffs the previous graph's nodes against the fresh ones. Deterministic:
 /// sorted id lists, exact counts, capped lists flagged via `truncated`.
 pub fn compute_graph_delta(prev: &[Node], next: &[Node]) -> GraphDelta {
-    let old: BTreeMap<&str, &Node> = prev.iter().map(|n| (n.id.as_str(), n)).collect();
+    compute_graph_delta_indexed(&node_fingerprints(prev), next)
+}
+
+/// The comparison key for one node: its content hash when it has one, and
+/// otherwise the same normalised props the full comparison would have used.
+fn fingerprint(node: &Node) -> String {
+    match node.props.get("content_hash").and_then(Value::as_str) {
+        Some(h) => format!("h:{h}"),
+        None => format!("c:{}", Value::Object(comparable(&node.props))),
+    }
+}
+
+/// Reduce a node set to id -> fingerprint.
+///
+/// This is what the previous index has to leave behind for the next one to diff
+/// against. Retaining the parsed `Vec<Node>` instead kept every label and every
+/// prop map alive through the graft, the write and the diff — hundreds of
+/// megabytes on a large repository, to answer a question that only needs one
+/// string per node.
+pub fn node_fingerprints(nodes: &[Node]) -> BTreeMap<String, String> {
+    nodes
+        .iter()
+        .map(|n| (n.id.clone(), fingerprint(n)))
+        .collect()
+}
+
+/// Diff against fingerprints rather than a retained node set.
+pub fn compute_graph_delta_indexed(prev: &BTreeMap<String, String>, next: &[Node]) -> GraphDelta {
     let new: BTreeMap<&str, &Node> = next.iter().map(|n| (n.id.as_str(), n)).collect();
 
     let mut added = Vec::new();
     let mut removed = Vec::new();
     let mut modified = Vec::new();
     for (id, node) in &new {
-        match old.get(id) {
+        match prev.get(*id) {
             None => added.push((*id).to_string()),
-            Some(prev_node) => {
-                if content_changed(prev_node, node) {
+            Some(prev_fp) => {
+                if *prev_fp != fingerprint(node) {
                     modified.push((*id).to_string());
                 }
             }
         }
     }
-    for id in old.keys() {
-        if !new.contains_key(id) {
-            removed.push((*id).to_string());
+    for id in prev.keys() {
+        if !new.contains_key(id.as_str()) {
+            removed.push(id.clone());
         }
     }
 
