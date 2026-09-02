@@ -1,0 +1,9 @@
+# RepoSkein configuration (committed; no secrets).
+schema_version = 1
+
+[languages]
+enabled = ["python", "typescript", "rust", "go", "java", "csharp"]
+
+[neo4j]
+uri = "neo4j://localhost:7687"
+# credentials come from env (NEO4J_USER / NEO4J_PASSWORD), never committed

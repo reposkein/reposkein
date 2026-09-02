@@ -1,36 +1,19 @@
 /**
- * Derived embedding cache for semantic_find.
+ * How a corpus node becomes a document string, and how that string is keyed.
  *
- * Vectors are stored in `.reposkein/local/embeddings/<providerId>__<modelId>__d<dims>.jsonl`
- * — gitignored, never committed, never required.
+ * Storage itself lives in vectorStore.ts — fixed-stride float32 beside a JSONL
+ * index — and the orchestration in corpusVectors.ts. This file is only the
+ * text: what we embed, and the hash that decides when to re-embed it.
  *
- * Cache key / invalidation:
- *   1. Filename encodes provider + model + dims (switching any → different file → miss).
- *   2. Per-row `doc_hash` must match hash of the freshly-built document string
- *      (changes to qualified_name, signature, semantic_summary, or file_path → re-embed).
- *   Note: CorpusNode does not expose the committed content_hash, so doc_hash is the
- *   sole per-row invalidation key. It covers all code/summary changes since the doc
- *   string is built from the same fields (qualified_name + signature + summary + file_path).
- *
- * Mirrors the atomic-write + best-effort pattern from mcp/src/store/sidecar.ts.
- * Any I/O or provider failure in embedCorpus must NOT propagate — callers catch and
- * fall back to the lexical result.
+ * Invalidation: `doc_hash` must match the hash of a freshly-built document
+ * string, so a change to qualified_name, signature, semantic_summary or
+ * file_path re-embeds the node. CorpusNode does not expose the committed
+ * content_hash, so this is the sole per-row key — which is sufficient, since
+ * the document is built from exactly those fields.
  */
 
-import { existsSync, readFileSync, writeFileSync, appendFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
-import type { EmbeddingProvider } from "./provider.js";
-import { embedInBatches } from "./batch.js";
 import type { CorpusNode } from "../store/GraphStore.js";
-
-/** One cached record per embedded node. */
-export interface EmbedRecord {
-  id: string;
-  /** doc_hash: SHA-256 of the embedded document string (invalidation key). */
-  doc_hash: string;
-  v: number[];
-}
 
 /** Build the document string for a corpus node (deterministic, same for all calls).
  *  voyage-code-3 is code-specialized, so including code-ish context plays to its strength.
@@ -90,189 +73,4 @@ export function sanitizeModelId(modelId: string): string {
   // Replace /, \, :, *, ?, ", <, >, |, NUL and control chars with "_"
   // Also collapse multiple consecutive underscores to avoid "___"-confusing names.
   return modelId.replace(/[/\\:*?"<>|\x00-\x1f]+/g, "_");
-}
-
-/** Derive the cache file path for a given repo root + provider. */
-export function cachePath(repoPath: string, provider: EmbeddingProvider): string {
-  const safeModel = sanitizeModelId(provider.modelId());
-  const name = `${provider.id()}__${safeModel}__d${provider.dims()}`;
-  return join(repoPath, ".reposkein", "local", "embeddings", `${name}.jsonl`);
-}
-
-/**
- * Load cache into a Map keyed by node id. Missing file → empty map. Best-effort.
- *
- * Row validation: any row whose `v` is not an array of finite numbers of the
- * correct length (matching provider.dims) is dropped — treated as a miss so
- * it will be re-embedded.  Pass `expectedDims` to enable dim-length validation;
- * omit (undefined) to skip the length check (e.g. when the provider is not known
- * at load time — but the embedCorpus function always passes it).
- */
-export function loadCache(path: string, expectedDims?: number): Map<string, EmbedRecord> {
-  const map = new Map<string, EmbedRecord>();
-  if (!existsSync(path)) return map;
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return map;
-  }
-  for (const line of text.split("\n")) {
-    if (line.trim() === "") continue;
-    try {
-      const o = JSON.parse(line) as Record<string, unknown>;
-      if (
-        typeof o["id"] === "string" &&
-        typeof o["doc_hash"] === "string" &&
-        Array.isArray(o["v"])
-      ) {
-        const v = o["v"] as unknown[];
-        // Validate: every element must be a finite number
-        const allFinite = v.every((x) => typeof x === "number" && isFinite(x));
-        if (!allFinite) continue; // corrupt row — drop it (will be re-embedded)
-        // Validate: length must match the expected dims (when known)
-        if (expectedDims !== undefined && v.length !== expectedDims) continue;
-        map.set(o["id"] as string, {
-          id: o["id"] as string,
-          doc_hash: o["doc_hash"] as string,
-          v: v as number[],
-        });
-      }
-    } catch {
-      // skip malformed line
-    }
-  }
-  return map;
-}
-
-/** Rewrite the cache file (sorted by id). Atomic: write to .tmp then rename. Best-effort. */
-export function saveCache(path: string, records: Map<string, EmbedRecord>): void {
-  const lines = [...records.keys()].sort().map((id) => {
-    const r = records.get(id)!;
-    return JSON.stringify({ id: r.id, doc_hash: r.doc_hash, v: r.v });
-  });
-  // Unique per write: two MCP sessions embedding the same repo would otherwise
-  // rename through the SAME temp path, and the loser's rename would publish a
-  // snapshot taken before the winner's appends — silently discarding vectors
-  // that were already computed and paid for.
-  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(tmp, lines.length ? lines.join("\n") + "\n" : "");
-    renameSync(tmp, path);
-  } catch {
-    // best-effort; write failure must not break the tool call
-    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* ignore */ }
-  }
-}
-
-/**
- * Append freshly-embedded records to the cache file. Best-effort.
- *
- * This is the kill-safe half of persistence: an OOM-kill does not unwind the
- * stack, so a final write would never run. Appending after each batch means a
- * killed cold run leaves everything it had already computed on disk, and the
- * re-run embeds only the remainder instead of starting over.
- *
- * Duplicate ids are fine — loadCache keeps the last row for an id, and
- * saveCache compacts the file once the run completes.
- */
-export function appendCache(path: string, records: EmbedRecord[]): void {
-  if (records.length === 0) return;
-  const text = records
-    .map((r) => JSON.stringify({ id: r.id, doc_hash: r.doc_hash, v: r.v }))
-    .join("\n") + "\n";
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, text);
-  } catch {
-    // best-effort; a failed flush costs re-embedding, never correctness
-  }
-}
-
-/**
- * Embed the corpus nodes using the provider, leveraging the cache for nodes
- * whose doc_hash hasn't changed.
- *
- * Returns a Map<id, vector> for all nodes in corpus.
- * Only embeds nodes whose cache entry is missing or stale.
- * Persists updated cache to disk.
- *
- * Throws on embedding failure — callers must catch and fall back to lexical.
- */
-export async function embedCorpus(
-  provider: EmbeddingProvider,
-  repoPath: string,
-  corpus: CorpusNode[],
-): Promise<Map<string, number[]>> {
-  const path = cachePath(repoPath, provider);
-  const cache = loadCache(path, provider.dims());
-
-  // Compute document strings + hashes for all corpus nodes
-  const docStrings = new Map<string, string>();
-  const docHashes = new Map<string, string>();
-  for (const node of corpus) {
-    const doc = buildDocString(node);
-    docStrings.set(node.id, doc);
-    docHashes.set(node.id, sha256(doc));
-  }
-
-  // Identify which nodes need embedding (cache miss or stale doc_hash)
-  const toEmbed: CorpusNode[] = [];
-  for (const node of corpus) {
-    const cached = cache.get(node.id);
-    const isHit = cached !== undefined && cached.doc_hash === docHashes.get(node.id);
-    if (!isHit) {
-      toEmbed.push(node);
-    }
-  }
-
-  // Embed only misses, in bounded batches, persisting each batch as it lands.
-  if (toEmbed.length > 0) {
-    const texts = toEmbed.map((n) => docStrings.get(n.id)!);
-    const expectedDims = provider.dims();
-    let embedded = 0;
-
-    try {
-      await embedInBatches(provider, texts, "document", (offset, vectors) => {
-        const fresh: EmbedRecord[] = [];
-        for (let i = 0; i < vectors.length; i++) {
-          const vec = vectors[i];
-          if (!Array.isArray(vec) || vec.length !== expectedDims) {
-            throw new Error(
-              `Embedding provider returned a vector with ${Array.isArray(vec) ? vec.length : "undefined"} dims at index ${offset + i}; expected ${expectedDims} — refusing to cache`
-            );
-          }
-          const node = toEmbed[offset + i]!;
-          const rec: EmbedRecord = {
-            id: node.id,
-            doc_hash: docHashes.get(node.id)!,
-            v: vec,
-          };
-          cache.set(node.id, rec);
-          fresh.push(rec);
-        }
-        appendCache(path, fresh);
-        embedded += fresh.length;
-      });
-    } finally {
-      // Deliberately NO rewrite here. The per-batch appends above are already
-      // the durable record, and loadCache keeps the last row for an id — so a
-      // compaction would buy tidiness at the price of a lost update: two MCP
-      // sessions embedding the same repo each rewrite from their own snapshot,
-      // and whichever renames last erases the other's appended vectors. It also
-      // meant holding the whole cache as text to write it out.
-      void embedded;
-    }
-  }
-
-  // Build result map for all corpus nodes
-  const result = new Map<string, number[]>();
-  for (const node of corpus) {
-    const rec = cache.get(node.id);
-    if (rec) {
-      result.set(node.id, rec.v);
-    }
-  }
-  return result;
 }
