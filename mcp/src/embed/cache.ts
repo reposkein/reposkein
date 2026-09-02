@@ -36,12 +36,43 @@ export interface EmbedRecord {
  *  voyage-code-3 is code-specialized, so including code-ish context plays to its strength.
  *  Document = qualified_name + optional signature + optional summary + file_path.
  */
-export function buildDocString(node: CorpusNode): string {
-  const parts: string[] = [node.qualified_name];
-  if (node.signature) parts.push(node.signature);
-  if (node.summary) parts.push(node.summary);
-  parts.push(node.file_path);
-  return parts.join("\n");
+export function buildDocString(node: CorpusNode, budget = docCharBudget()): string {
+  const head: string[] = [node.qualified_name];
+  if (node.signature) head.push(node.signature);
+  const tail: string[] = [node.file_path];
+
+  // Trim the SUMMARY to fit, not the tail. It is the one unbounded field —
+  // agents author it — and the identifiers are what a search matches on.
+  const overhead = [...head, ...tail].join("\n").length + (node.summary ? 1 : 0);
+  let summary = node.summary ?? "";
+  if (overhead + summary.length > budget) {
+    summary = summary.slice(0, Math.max(0, budget - overhead));
+  }
+
+  const parts = [...head];
+  if (summary) parts.push(summary);
+  parts.push(...tail);
+  // Last resort, for a node whose own name and path already exceed the budget.
+  return parts.join("\n").slice(0, budget);
+}
+
+/**
+ * Longest document string we will hand a provider.
+ *
+ * This is a correctness bound, not a preference. The bundled embedding server
+ * rejects an over-long input with 413 (EMBED_MAX_INPUT_CHARS, default 8000),
+ * and one rejected document fails the whole embed call — so `semantic_find`
+ * would fall back to lexical, and keep falling back, because the offending
+ * document is never embedded and every later attempt reissues it. Keep this at
+ * or below the server's cap.
+ */
+export const DEFAULT_DOC_CHAR_BUDGET = 8000;
+
+export function docCharBudget(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["REPOSKEIN_EMBED_MAX_INPUT_CHARS"];
+  if (raw === undefined) return DEFAULT_DOC_CHAR_BUDGET;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_DOC_CHAR_BUDGET;
 }
 
 /** SHA-256 of a string, hex-encoded. */
@@ -120,7 +151,11 @@ export function saveCache(path: string, records: Map<string, EmbedRecord>): void
     const r = records.get(id)!;
     return JSON.stringify({ id: r.id, doc_hash: r.doc_hash, v: r.v });
   });
-  const tmp = `${path}.tmp`;
+  // Unique per write: two MCP sessions embedding the same repo would otherwise
+  // rename through the SAME temp path, and the loser's rename would publish a
+  // snapshot taken before the winner's appends — silently discarding vectors
+  // that were already computed and paid for.
+  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(tmp, lines.length ? lines.join("\n") + "\n" : "");
@@ -221,10 +256,13 @@ export async function embedCorpus(
         embedded += fresh.length;
       });
     } finally {
-      // Compact what we have — sorted, deduplicated — whether the run finished
-      // or threw. Nothing to compact means nothing was written, so leave any
-      // pre-existing cache file untouched.
-      if (embedded > 0) saveCache(path, cache);
+      // Deliberately NO rewrite here. The per-batch appends above are already
+      // the durable record, and loadCache keeps the last row for an id — so a
+      // compaction would buy tidiness at the price of a lost update: two MCP
+      // sessions embedding the same repo each rewrite from their own snapshot,
+      // and whichever renames last erases the other's appended vectors. It also
+      // meant holding the whole cache as text to write it out.
+      void embedded;
     }
   }
 

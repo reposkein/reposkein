@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildDocString,
+  docCharBudget,
+  DEFAULT_DOC_CHAR_BUDGET,
   sha256,
   cachePath,
   loadCache,
@@ -121,6 +123,57 @@ describe("buildDocString", () => {
 
   it("is deterministic across calls", () => {
     expect(buildDocString(NODE_A)).toBe(buildDocString(NODE_A));
+  });
+});
+
+describe("buildDocString length budget", () => {
+  // The bundled embed server rejects an over-long input with 413, and ONE
+  // rejected document fails the whole embed call — so semantic_find would fall
+  // back to lexical and keep falling back, because the offending document is
+  // never embedded and every later attempt reissues it.
+  const long = (n: number) => "s".repeat(n);
+
+  it("never emits a document longer than the budget", () => {
+    const node = cn("id:x", "pkg.fn", "(a: number)", long(50_000), "src/x.ts");
+    expect(buildDocString(node, 8000).length).toBeLessThanOrEqual(8000);
+  });
+
+  it("keeps the identifiers and drops summary prose to fit", () => {
+    const node = cn("id:x", "pkg.veryDistinctName", "(a: number)", long(50_000), "src/x.ts");
+    const doc = buildDocString(node, 8000);
+    expect(doc).toContain("pkg.veryDistinctName");
+    expect(doc).toContain("(a: number)");
+    expect(doc).toContain("src/x.ts");
+  });
+
+  it("leaves a document that already fits completely alone", () => {
+    const node = cn("id:x", "pkg.fn", "(a: number)", "short summary", "src/x.ts");
+    expect(buildDocString(node, 8000)).toBe(buildDocString(node, 1_000_000));
+  });
+
+  it("is still deterministic once truncated", () => {
+    const node = cn("id:x", "pkg.fn", "()", long(20_000), "src/x.ts");
+    expect(buildDocString(node, 8000)).toBe(buildDocString(node, 8000));
+  });
+
+  it("survives a node whose own name and path exceed the budget", () => {
+    const node = cn("id:x", long(9000), "", "", long(9000));
+    expect(buildDocString(node, 8000).length).toBe(8000);
+  });
+});
+
+describe("docCharBudget", () => {
+  it("defaults to the server's own cap", () => {
+    expect(docCharBudget({})).toBe(DEFAULT_DOC_CHAR_BUDGET);
+  });
+
+  it("follows an explicitly configured server cap", () => {
+    expect(docCharBudget({ REPOSKEIN_EMBED_MAX_INPUT_CHARS: "2000" })).toBe(2000);
+  });
+
+  it("ignores a malformed value rather than emitting unbounded documents", () => {
+    expect(docCharBudget({ REPOSKEIN_EMBED_MAX_INPUT_CHARS: "lots" })).toBe(DEFAULT_DOC_CHAR_BUDGET);
+    expect(docCharBudget({ REPOSKEIN_EMBED_MAX_INPUT_CHARS: "0" })).toBe(DEFAULT_DOC_CHAR_BUDGET);
   });
 });
 

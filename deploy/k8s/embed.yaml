@@ -71,7 +71,15 @@ spec:
         # The image already runs as an unprivileged user; say so explicitly so
         # a restrictive PodSecurity policy admits the pod rather than the
         # cluster rejecting it at deploy time.
+        #
+        # runAsUser is REQUIRED alongside runAsNonRoot, not decoration: the
+        # image declares `USER app`, a name, and the kubelet cannot resolve a
+        # name to a uid without running the image. With runAsNonRoot set and no
+        # numeric uid it refuses to start the container at all —
+        # CreateContainerConfigError, "image has non-numeric user (app)".
         runAsNonRoot: true
+        runAsUser: 1000 # `app` in the image
+        runAsGroup: 1000
         fsGroup: 1000
       containers:
         - name: embed
