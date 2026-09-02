@@ -223,10 +223,10 @@ export class VectorStore {
 
       if (best.length < k) {
         best.push({ id, score });
-        best.sort((a, b) => b.score - a.score);
+        best.sort(byScoreThenId);
       } else if (score > best[best.length - 1]!.score) {
         best[best.length - 1] = { id, score };
-        best.sort((a, b) => b.score - a.score);
+        best.sort(byScoreThenId);
       }
     }
     return best;
@@ -273,6 +273,14 @@ export class VectorStore {
     if (capacity === 0) return 0;
     return (capacity - this.slots.size) / capacity;
   }
+}
+
+/** Descending score, ties broken by ascending id.
+ *  Ranking feeds a tool result, so equal scores must not reorder run to run. */
+function byScoreThenId(a: ScoredId, b: ScoredId): number {
+  const d = b.score - a.score;
+  if (d !== 0) return d;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 export function openVectorStore(base: string, dims: number): VectorStore {

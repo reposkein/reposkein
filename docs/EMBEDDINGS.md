@@ -33,7 +33,7 @@ REPOSKEIN_EMBED_DIMS=768          # must match the model
 `voyage-4-nano` (Apache-2.0) is a custom Qwen3-based model Ollama can't run, so RepoSkein ships a prebuilt server. The image is **published to GHCR — public and multi-arch (amd64/arm64)** — so there's nothing to build:
 
 ```sh
-docker run -p 8080:8080 -v reposkein-hf:/root/.cache/huggingface \
+docker run -p 8080:8080 -v reposkein-hf:/home/app/.cache/huggingface \
   ghcr.io/reposkein/reposkein-embed          # auto-picks your architecture; first run downloads the model
 ```
 ```sh

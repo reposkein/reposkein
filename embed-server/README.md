@@ -37,7 +37,7 @@ services: `docker compose up -d` (see the root [`docker-compose.yml`](../docker-
 **Don't want to build?** Pull the prebuilt multi-arch image (amd64/arm64) — `docker run` auto-picks your architecture:
 
 ```sh
-docker run -p 8080:8080 -v reposkein-hf:/root/.cache/huggingface \
+docker run -p 8080:8080 -v reposkein-hf:/home/app/.cache/huggingface \
   ghcr.io/reposkein/reposkein-embed
 ```
 
