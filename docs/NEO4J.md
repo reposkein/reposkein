@@ -26,6 +26,12 @@ NEO4J_server_memory_pagecache_size=512M
 
 RepoSkein's graph is small — a 200k-node repository is roughly 130 MB on disk — so these are generous. For a dedicated machine, generate your own numbers with `neo4j-admin server memory-recommendation --memory=<size> --docker`.
 
+`reposkein-indexer load` writes in bounded chunks — 5,000 rows per transaction by default, one transaction per chunk — so a large graph never builds a single payload the server has to hold whole. Lower it if your instance is tight:
+
+```sh
+REPOSKEIN_IMPORT_CHUNK_SIZE=1000 reposkein-indexer load .
+```
+
 ## See also
 
 - [`INSTALL.md` §2](INSTALL.md) — the agent-facing decision tree for JSONL vs Neo4j, including env vars for a non-Docker Neo4j instance.
