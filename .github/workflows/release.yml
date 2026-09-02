@@ -136,7 +136,7 @@ jobs:
       # Build the viz/ SPA (pnpm) BEFORE the mcp build/publish so `bundle-viz.mjs`
       # (run by mcp's `prepare`) can copy viz/dist into dist/viz — otherwise the
       # published tarball would ship without the `reposkein-mcp view` bundle.
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: "10.15.0" # keep in sync with viz/package.json packageManager
       - name: Build viz SPA bundle
