@@ -47,6 +47,19 @@ Everything stays on your machine. The image is **CPU-only and runs with no NVIDI
 
 > `REPOSKEIN_EMBED_DIMS` on the client **must match** the model's output dimension, or cosine scoring is skipped.
 
+## Batch size (memory)
+
+Embedding a repository for the first time is the one moment RepoSkein does bulk work. Requests are **batched**, and each batch is written to the cache as it lands — so an interrupted first run resumes rather than starting over.
+
+Each provider declares what one request may carry (Voyage: 1000 texts / 120k tokens; the local `http` provider: 32 texts / 8192 tokens, sized for a single-model CPU server). Lower either if the machine is tight — these can only tighten a provider's limit, never raise it:
+
+```sh
+REPOSKEIN_EMBED_MAX_BATCH_ITEMS=16     # texts per request
+REPOSKEIN_EMBED_MAX_BATCH_TOKENS=4096  # estimated tokens per request
+```
+
+Peak memory on the embed path tracks one batch, not the size of the repository. If a first run is being killed by the OOM killer, halve these before anything else.
+
 ## See also
 
 - [`INSTALL.md` §3](INSTALL.md) — the agent-facing decision tree (off / cloud / local) with defaults to suggest.

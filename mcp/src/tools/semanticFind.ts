@@ -134,7 +134,7 @@ export function makeSemanticFind(
         // Attempt hybrid embedding path — catch all errors → fallback to lexical
         try {
           const corpusVecs = await embedCorpus(provider, repoPath, corpus);
-          const queryVecs = await provider.embed([query], "query");
+          const queryVecs = await provider.embedBatch([query], "query");
           const queryVec = queryVecs[0];
 
           if (queryVec && corpusVecs.size > 0) {

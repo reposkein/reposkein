@@ -18,7 +18,7 @@ import {
   sanitizeModelId,
 } from "../src/embed/cache.js";
 import { MockProvider, hashVec } from "./embedProvider.test.js";
-import type { EmbeddingProvider, EmbedKind } from "../src/embed/provider.js";
+import type { EmbeddingProvider, EmbedKind, BatchLimits } from "../src/embed/provider.js";
 import type { CorpusNode } from "../src/store/GraphStore.js";
 
 /**
@@ -37,7 +37,8 @@ class WrongCountProvider implements EmbeddingProvider {
   id(): string { return "wrong-count"; }
   modelId(): string { return "wrong-count-v1"; }
   dims(): number { return this._dims; }
-  async embed(texts: string[], _kind: EmbedKind): Promise<number[][]> {
+  limits(): BatchLimits { return { maxItems: 1000, maxTokens: 1_000_000 }; }
+  async embedBatch(texts: string[], _kind: EmbedKind): Promise<number[][]> {
     const correct = texts.map((t) => hashVec(t, this._dims));
     if (this._returnExtra) {
       correct.push(hashVec("extra", this._dims)); // one too many
@@ -62,7 +63,8 @@ class WrongDimsProvider implements EmbeddingProvider {
   id(): string { return "wrong-dims"; }
   modelId(): string { return "wrong-dims-v1"; }
   dims(): number { return this._declaredDims; }
-  async embed(texts: string[], _kind: EmbedKind): Promise<number[][]> {
+  limits(): BatchLimits { return { maxItems: 1000, maxTokens: 1_000_000 }; }
+  async embedBatch(texts: string[], _kind: EmbedKind): Promise<number[][]> {
     return texts.map((t) => hashVec(t, this._actualDims));
   }
 }

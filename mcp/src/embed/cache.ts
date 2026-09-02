@@ -17,10 +17,11 @@
  * fall back to the lexical result.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import type { EmbeddingProvider } from "./provider.js";
+import { embedInBatches } from "./batch.js";
 import type { CorpusNode } from "../store/GraphStore.js";
 
 /** One cached record per embedded node. */
@@ -131,6 +132,30 @@ export function saveCache(path: string, records: Map<string, EmbedRecord>): void
 }
 
 /**
+ * Append freshly-embedded records to the cache file. Best-effort.
+ *
+ * This is the kill-safe half of persistence: an OOM-kill does not unwind the
+ * stack, so a final write would never run. Appending after each batch means a
+ * killed cold run leaves everything it had already computed on disk, and the
+ * re-run embeds only the remainder instead of starting over.
+ *
+ * Duplicate ids are fine — loadCache keeps the last row for an id, and
+ * saveCache compacts the file once the run completes.
+ */
+export function appendCache(path: string, records: EmbedRecord[]): void {
+  if (records.length === 0) return;
+  const text = records
+    .map((r) => JSON.stringify({ id: r.id, doc_hash: r.doc_hash, v: r.v }))
+    .join("\n") + "\n";
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, text);
+  } catch {
+    // best-effort; a failed flush costs re-embedding, never correctness
+  }
+}
+
+/**
  * Embed the corpus nodes using the provider, leveraging the cache for nodes
  * whose doc_hash hasn't changed.
  *
@@ -167,37 +192,40 @@ export async function embedCorpus(
     }
   }
 
-  // Embed only misses
+  // Embed only misses, in bounded batches, persisting each batch as it lands.
   if (toEmbed.length > 0) {
     const texts = toEmbed.map((n) => docStrings.get(n.id)!);
-    const vectors = await provider.embed(texts, "document");
-
-    // Guard: provider must return exactly as many vectors as we sent.
-    // A count mismatch means the provider is broken or mis-aligned — throw so
-    // the caller's try/catch falls back to lexical.  Never write corrupt data.
-    if (vectors.length !== toEmbed.length) {
-      throw new Error(
-        `Embedding provider returned ${vectors.length} vectors for ${toEmbed.length} texts — count mismatch; refusing to cache`
-      );
-    }
-
     const expectedDims = provider.dims();
-    for (let i = 0; i < toEmbed.length; i++) {
-      const vec = vectors[i];
-      if (!Array.isArray(vec) || vec.length !== expectedDims) {
-        throw new Error(
-          `Embedding provider returned a vector with ${Array.isArray(vec) ? vec.length : "undefined"} dims at index ${i}; expected ${expectedDims} — refusing to cache`
-        );
-      }
-      const node = toEmbed[i]!;
-      cache.set(node.id, {
-        id: node.id,
-        doc_hash: docHashes.get(node.id)!,
-        v: vec,
-      });
-    }
+    let embedded = 0;
 
-    saveCache(path, cache);
+    try {
+      await embedInBatches(provider, texts, "document", (offset, vectors) => {
+        const fresh: EmbedRecord[] = [];
+        for (let i = 0; i < vectors.length; i++) {
+          const vec = vectors[i];
+          if (!Array.isArray(vec) || vec.length !== expectedDims) {
+            throw new Error(
+              `Embedding provider returned a vector with ${Array.isArray(vec) ? vec.length : "undefined"} dims at index ${offset + i}; expected ${expectedDims} — refusing to cache`
+            );
+          }
+          const node = toEmbed[offset + i]!;
+          const rec: EmbedRecord = {
+            id: node.id,
+            doc_hash: docHashes.get(node.id)!,
+            v: vec,
+          };
+          cache.set(node.id, rec);
+          fresh.push(rec);
+        }
+        appendCache(path, fresh);
+        embedded += fresh.length;
+      });
+    } finally {
+      // Compact what we have — sorted, deduplicated — whether the run finished
+      // or threw. Nothing to compact means nothing was written, so leave any
+      // pre-existing cache file untouched.
+      if (embedded > 0) saveCache(path, cache);
+    }
   }
 
   // Build result map for all corpus nodes
