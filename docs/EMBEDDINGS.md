@@ -58,7 +58,7 @@ REPOSKEIN_EMBED_MAX_BATCH_ITEMS=16     # texts per request
 REPOSKEIN_EMBED_MAX_BATCH_TOKENS=4096  # estimated tokens per request
 ```
 
-Peak memory on the embed path tracks one batch, not the size of the repository. If a first run is being killed by the OOM killer, halve these before anything else.
+Peak memory *per request* tracks one batch rather than the size of the repository. If a first run is being killed by the OOM killer, halve these before anything else. (The vector cache itself is still held whole in memory while it is read and written — that is a separate piece of work.)
 
 ## See also
 

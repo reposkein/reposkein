@@ -213,9 +213,31 @@ export class JsonlGraphStore implements GraphStore {
     }
 
     if (overlayKey !== this.overlayStamp) {
-      this.overlayStamp = overlayKey;
-      this.applyOverlay();
+      // Only bank the stamp when the overlay actually landed. Banking it first
+      // and then throwing would leave the graph with its previous overlay
+      // already undone and no new one applied — every summary silently gone
+      // until some unrelated change moved the key again.
+      this.overlayStamp = this.applyOverlay() ? overlayKey : "";
     }
+  }
+
+  /** Write overlay props onto a node, remembering what they displaced.
+   *
+   *  Every in-place summary mutation goes through here — the overlay fold AND
+   *  writeSummary. A mutation that skipped it would be invisible to the undo
+   *  pass, and worse, the NEXT fold would record the value it wrote as the
+   *  pre-overlay original: removing that summary would then restore it. */
+  private overlayProps(id: string, n: ParsedNode, props: Record<string, unknown>): void {
+    const saved = this.overlayUndo.get(id) ?? {};
+    for (const [k, v] of Object.entries(props)) {
+      // First writer wins the undo slot: it holds the pristine value, and a
+      // later overwrite would replace it with an already-overlaid one.
+      if (!Object.prototype.hasOwnProperty.call(saved, k)) {
+        saved[k] = Object.prototype.hasOwnProperty.call(n.props, k) ? n.props[k] : undefined;
+      }
+      n.props[k] = v;
+    }
+    this.overlayUndo.set(id, saved);
   }
 
   /** Fold the authored summaries onto the parsed graph, in place.
@@ -234,7 +256,7 @@ export class JsonlGraphStore implements GraphStore {
    *  Re-applying is now routine rather than a side effect of a rebuild, so it
    *  undoes the previous overlay first: a summary that has gone away must take
    *  its props with it. */
-  private applyOverlay(): void {
+  private applyOverlay(): boolean {
     try {
       for (const [id, saved] of this.overlayUndo) {
         const n = this.graph.byId.get(id);
@@ -263,19 +285,16 @@ export class JsonlGraphStore implements GraphStore {
         // are stamped with the node's live hash at write time, so an unchanged
         // node passes this the same way a shard record does.
         if (rec.props.summary_of_hash !== n.props.content_hash) continue;
-        const saved: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(rec.props)) {
-          saved[k] = Object.prototype.hasOwnProperty.call(n.props, k) ? n.props[k] : undefined;
-          n.props[k] = v;
-        }
-        this.overlayUndo.set(id, saved);
+        this.overlayProps(id, n, rec.props);
       }
       // Divergence losers — from a merged shard, or from two agents writing the
       // same node — are authored prose. Preserve them for a human rather than
       // discarding them on the read path.
       recordSummaryConflicts(this.repoPath, [...shards.conflicts, ...overlay.conflicts]);
+      return true;
     } catch {
       // An unreadable overlay must not cost the caller the graph.
+      return false;
     }
   }
 
@@ -359,11 +378,16 @@ export class JsonlGraphStore implements GraphStore {
     const oldSummary = str(n.props.semantic_summary);
     const oldHash = str(n.props.summary_of_hash);
     const stale_replaced = oldSummary !== null && oldHash !== chash;
-    n.props.semantic_summary = fields.summary;
-    n.props.summary_of_hash = chash;
-    n.props.summary_model = fields.model;
-    n.props.summary_at = fields.at;
-    n.props.summary_by = fields.by;
+    // Through overlayProps, not raw assignment: this mutation has to be
+    // undoable like any other overlay write, or the next fold would mistake
+    // what it wrote for the node's pre-overlay state.
+    this.overlayProps(id, n, {
+      semantic_summary: fields.summary,
+      summary_of_hash: chash,
+      summary_model: fields.model,
+      summary_at: fields.at,
+      summary_by: fields.by,
+    });
     upsertSidecar(this.sidecarFile, {
       id,
       semantic_summary: fields.summary,

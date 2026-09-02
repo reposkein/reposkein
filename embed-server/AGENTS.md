@@ -37,6 +37,12 @@ Prompts (applied via `encode_query` / `encode_document` on recent sentence-trans
 | `EMBED_DIMS` | `1024` | **Matryoshka truncation**: `2048`/`1024`/`512`/`256`. Client `REPOSKEIN_EMBED_DIMS` MUST match or cosine scoring is skipped. |
 | `EMBED_DEVICE` | auto | `cpu`/`mps`/`cuda`. Auto-detects `cuda > mps > cpu`. |
 | `HF_TOKEN` | — | Gated/private models only. |
+| `EMBED_MAX_BATCH_ITEMS` | `64` | Texts per request; more → `413`. Must stay ≥ the client's `REPOSKEIN_EMBED_MAX_BATCH_ITEMS` (default 32). |
+| `EMBED_MAX_INPUT_CHARS` | `8000` | Characters per text; longer → `413`. |
+| `EMBED_MAX_CONCURRENCY` | `2` | Forward passes in flight. The endpoint is a sync `def`, so Starlette's threadpool would otherwise run 40 against one model. Past the limit: wait, then `503` + `Retry-After`. |
+| `EMBED_QUEUE_TIMEOUT_S` | `30` | How long a request waits for a slot before `503`. |
+| `EMBED_MAX_SEQ_LENGTH` | `1024` | Tokens per text. The model card says 32768; attention memory is quadratic in this. Applied as `min(model default, this)`. |
+| `EMBED_NUM_THREADS` | `4` | torch intra-op threads; also seeds `OMP_NUM_THREADS`/`MKL_NUM_THREADS`. |
 
 ## INVARIANTS
 

@@ -210,41 +210,48 @@ pub fn index_tree_with(
 
             edges.push(Edge::new(parent_node, "CONTAINS", file_id.clone()));
 
-            if opts.max_file_bytes > 0 && bytes.len() as u64 > opts.max_file_bytes {
-                // The File node stays — the tree really does contain this file,
-                // and dropping it would move the graph around under callers.
-                // Only the parse is skipped, which is where the memory goes.
-                warnings.push(format!(
-                    "skipped parsing {} ({} bytes exceeds [index] max_file_bytes = {})",
-                    e.rel_path,
-                    bytes.len(),
-                    opts.max_file_bytes
-                ));
-            } else if let Some(ext_impl) = extractors.iter().find(|x| x.language() == language) {
-                let ctx = FileContext {
-                    repo,
-                    rel_path: &e.rel_path,
-                    file_id: &file_id,
-                    source: &bytes,
-                };
-                let mut extracted = match opts.cache {
-                    Some(c) => match c.get(repo, &e.rel_path, &content_hash) {
-                        Some(hit) => hit,
-                        None => {
-                            let fresh = ext_impl.extract(&ctx);
-                            c.put(repo, &e.rel_path, &content_hash, &fresh);
-                            fresh
-                        }
-                    },
-                    None => ext_impl.extract(&ctx),
-                };
-                nodes.append(&mut extracted.nodes);
-                edges.append(&mut extracted.edges);
-                all_imports.append(&mut extracted.imports);
-                all_calls.append(&mut extracted.calls);
-                all_heritage.append(&mut extracted.heritage);
-                all_module_aliases.append(&mut extracted.module_aliases);
-                all_constructions.append(&mut extracted.constructions);
+            let oversized = opts.max_file_bytes > 0 && bytes.len() as u64 > opts.max_file_bytes;
+            if let Some(ext_impl) = extractors.iter().find(|x| x.language() == language) {
+                if oversized {
+                    // The File node stays — the tree really does contain this file,
+                    // and dropping it would move the graph around under callers.
+                    // Only the parse is skipped, which is where the memory goes.
+                    //
+                    // Checked INSIDE the extractor branch on purpose: a 3 MB .json
+                    // or .lock has no extractor, so it was never going to be parsed
+                    // and warning about it would be noise the user cannot act on.
+                    warnings.push(format!(
+                        "skipped parsing {} ({} bytes exceeds [index] max_file_bytes = {})",
+                        e.rel_path,
+                        bytes.len(),
+                        opts.max_file_bytes
+                    ));
+                } else {
+                    let ctx = FileContext {
+                        repo,
+                        rel_path: &e.rel_path,
+                        file_id: &file_id,
+                        source: &bytes,
+                    };
+                    let mut extracted = match opts.cache {
+                        Some(c) => match c.get(repo, &e.rel_path, &content_hash) {
+                            Some(hit) => hit,
+                            None => {
+                                let fresh = ext_impl.extract(&ctx);
+                                c.put(repo, &e.rel_path, &content_hash, &fresh);
+                                fresh
+                            }
+                        },
+                        None => ext_impl.extract(&ctx),
+                    };
+                    nodes.append(&mut extracted.nodes);
+                    edges.append(&mut extracted.edges);
+                    all_imports.append(&mut extracted.imports);
+                    all_calls.append(&mut extracted.calls);
+                    all_heritage.append(&mut extracted.heritage);
+                    all_module_aliases.append(&mut extracted.module_aliases);
+                    all_constructions.append(&mut extracted.constructions);
+                }
             }
         }
     }
@@ -668,6 +675,37 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("src/big.py") && w.contains("max_file_bytes")),
             "the skip is reported, not silent: {:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn oversized_file_with_no_extractor_is_not_warned_about() {
+        // A 3 MB .json or .lock was never going to be parsed — there is no
+        // extractor for it — so reporting a "skipped parsing" for it is noise
+        // the user cannot act on.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/huge.json"), "x".repeat(4096)).unwrap();
+
+        let stub = StubExtractor; // registers "python" only
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let out = index_tree_with(
+            dir.path(),
+            "r",
+            "demo",
+            extractors,
+            IndexOptions {
+                federation: false,
+                cache: None,
+                max_file_bytes: 1024,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            out.warnings.is_empty(),
+            "no extractor for .json, so nothing was skipped: {:?}",
             out.warnings
         );
     }

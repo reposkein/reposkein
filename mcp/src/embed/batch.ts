@@ -86,7 +86,7 @@ export async function embedInBatches(
     while (end < texts.length) {
       const next = estimateTokens(texts[end]!);
       // Always take at least one text, however oversized, so the loop advances.
-      if (end > start && (end - start >= maxItems || tokens + next > maxTokens)) break;
+      if (end > start && tokens + next > maxTokens) break;
       tokens += next;
       end++;
       if (end - start >= maxItems) break;

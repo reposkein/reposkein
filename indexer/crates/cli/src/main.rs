@@ -350,15 +350,12 @@ max_file_bytes = 2097152
 stage_summaries = true
 "#;
 
-/// Reads a boolean key from a `[section]` of `.reposkein/config.toml`.
+/// Reads the raw right-hand side of `key` in a `[section]` of
+/// `.reposkein/config.toml`, with any trailing `# comment` stripped.
 ///
 /// A deliberate 20-line scanner rather than a TOML dependency: the indexer
-/// reads exactly one setting, and its config is a file this binary writes.
-/// Absent file, absent section, or absent key all mean `None` — which is how
-/// an existing repo (whose config.toml predates the section, and which
-/// `write_reposkein_layout` never rewrites) keeps its current behaviour until
-/// someone opts in by hand.
-fn config_bool(out_dir: &Path, section: &str, key: &str) -> Option<bool> {
+/// reads a handful of settings, and its config is a file this binary writes.
+fn config_raw(out_dir: &Path, section: &str, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(out_dir.join("config.toml")).ok()?;
     let mut in_section = false;
     for line in text.lines() {
@@ -379,42 +376,24 @@ fn config_bool(out_dir: &Path, section: &str, key: &str) -> Option<bool> {
         if k.trim() != key {
             continue;
         }
-        return match v.split('#').next().unwrap_or("").trim() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        };
+        return Some(v.split('#').next().unwrap_or("").trim().to_string());
     }
     None
 }
 
-/// Reads a non-negative integer key from a `[section]` of `.reposkein/config.toml`.
-/// Same deliberate scanner as `config_bool`; an unparseable value reads as absent
-/// so a typo degrades to the default rather than failing an index.
-fn config_u64(out_dir: &Path, section: &str, key: &str) -> Option<u64> {
-    let text = std::fs::read_to_string(out_dir.join("config.toml")).ok()?;
-    let mut in_section = false;
-    for line in text.lines() {
-        let l = line.trim();
-        if l.starts_with('#') {
-            continue;
-        }
-        if l.starts_with('[') {
-            in_section = l == format!("[{section}]");
-            continue;
-        }
-        if !in_section {
-            continue;
-        }
-        let Some((k, v)) = l.split_once('=') else {
-            continue;
-        };
-        if k.trim() != key {
-            continue;
-        }
-        return v.split('#').next().unwrap_or("").trim().parse::<u64>().ok();
+/// Reads a boolean key. A value that is neither `true` nor `false` reads as
+/// absent, so a typo degrades to the default rather than failing an index.
+fn config_bool(out_dir: &Path, section: &str, key: &str) -> Option<bool> {
+    match config_raw(out_dir, section, key)?.as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
     }
-    None
+}
+
+/// Reads a non-negative integer key. Same degrade-to-default rule as above.
+fn config_u64(out_dir: &Path, section: &str, key: &str) -> Option<u64> {
+    config_raw(out_dir, section, key)?.parse::<u64>().ok()
 }
 
 struct IndexRun {

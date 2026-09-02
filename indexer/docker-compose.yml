@@ -13,6 +13,8 @@ services:
       NEO4J_server_memory_heap_initial__size: 512M
       NEO4J_server_memory_heap_max__size: 512M
       NEO4J_server_memory_pagecache_size: 256M
+      NEO4J_dbms_memory_transaction_total_max: 256M
+      NEO4J_db_memory_transaction_max: 128M
     volumes:
       - reposkein-neo4j-data:/data
 volumes:
