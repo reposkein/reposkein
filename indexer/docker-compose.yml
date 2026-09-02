@@ -2,11 +2,16 @@ services:
   neo4j:
     image: neo4j:5-community
     container_name: reposkein-neo4j
+    # Bounded for the same reason as the root compose file: the image pins only
+    # the page cache, so an unset heap takes 25% of the whole Docker VM.
+    mem_limit: 2g
     ports:
       - "7474:7474"
       - "7687:7687"
     environment:
       NEO4J_AUTH: neo4j/reposkeintest
+      NEO4J_server_memory_heap_initial__size: 512M
+      NEO4J_server_memory_heap_max__size: 512M
       NEO4J_server_memory_pagecache_size: 256M
     volumes:
       - reposkein-neo4j-data:/data
