@@ -91,6 +91,14 @@ curl -s localhost:8080/v1/embeddings \
 | `EMBED_DIMS` | `1024` | voyage-4-nano Matryoshka: `2048` \| `1024` \| `512` \| `256`. The client's `REPOSKEIN_EMBED_DIMS` must match. |
 | `HF_TOKEN` | — | only for gated/private models |
 | `EMBED_DEVICE` | auto | `cpu` \| `mps` \| `cuda`. Auto-detects (cuda > mps > cpu). In Docker only `cpu` is reachable — even on Apple Silicon. Run natively with `mps` for Apple unified-memory GPU. |
+| `EMBED_MAX_BATCH_ITEMS` | `64` | texts per request; more → `413`. Keep ≥ the client's `REPOSKEIN_EMBED_MAX_BATCH_ITEMS`. |
+| `EMBED_MAX_INPUT_CHARS` | `8000` | characters per text; longer → `413` |
+| `EMBED_MAX_CONCURRENCY` | `2` | forward passes in flight. The endpoint is sync, so Starlette's threadpool would otherwise run 40. Past the limit, requests wait then get `503` + `Retry-After`. |
+| `EMBED_QUEUE_TIMEOUT_S` | `30` | how long a request waits for a slot before `503` |
+| `EMBED_MAX_SEQ_LENGTH` | `1024` | tokens per text. The model card says 32768; attention memory is quadratic in this, so a single long input is otherwise fatal. |
+| `EMBED_NUM_THREADS` | `4` | torch intra-op threads (also sets `OMP_NUM_THREADS` / `MKL_NUM_THREADS`) |
+
+`GET /health` reports the active limits.
 
 ## Run without Docker
 
