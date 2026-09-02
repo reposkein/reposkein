@@ -23,6 +23,10 @@ const PRE_COMMIT: &str = r#"#!/bin/sh
 # and were left out of the commit, and stages them only if you opted in with
 # `[hooks] stage_summaries = true` in .reposkein/config.toml.
 #
+# The refresh itself is `refresh`, not a bare `index`: that subcommand holds an
+# exclusive lock, so this commit cannot end up indexing alongside a checkout
+# that fired a moment ago, and coalesces a burst into one pass.
+#
 # On success, drops a transient flag (.reposkein/local/.precommit-indexed-ok)
 # for post-commit to consume: pre-commit and post-commit are separate
 # processes with no shared exit status, and post-commit must never record
@@ -37,7 +41,7 @@ if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
   rm -f "$FLAG"
   exit 0
 fi
-if "$BIN" index . >/dev/null 2>&1; then
+if "$BIN" refresh . >/dev/null 2>&1; then
   mkdir -p .reposkein/local
   : > "$FLAG"
 else
@@ -80,24 +84,26 @@ exit 0
 const POST_MERGE: &str = r#"#!/bin/sh
 # reposkein-managed
 # RepoSkein: a merge/checkout can change the tree without going through your
-# own pre-commit, so re-index the local graph here too, record the commit it
-# was just built from (.reposkein/local/indexed-at — same marker post-commit
-# writes, read by `doctor --ci`'s graph_stale check), then import into the
-# local database (async, best-effort). The marker is only written when the
-# reindex actually succeeds — a failed index must never be recorded as
-# "fresh".
+# own pre-commit, so refresh the local graph here too.
+#
+# `refresh` rather than `index` + a detached `load`, which is what this used to
+# be. That older shape was the single worst thing RepoSkein did to a working
+# machine: post-checkout fires on every branch switch, stash and file checkout,
+# so a few quick switches left several full indexes AND several detached
+# database imports running at once, each holding its own copy of the graph,
+# after git had already handed control back to you.
+#
+# refresh takes an exclusive lock. A second hook firing while one is in flight
+# leaves a note and exits, and the holder makes one more pass over the tree as
+# it then stands. The database import runs inside that same lock, so imports
+# cannot stack either. The indexed-at marker (read by `doctor --ci`'s
+# graph_stale check) is still written only after an index that succeeded.
 BIN="${REPOSKEIN_INDEXER_BIN:-reposkein-indexer}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
   echo "reposkein: indexer not found; skipping graph refresh" >&2
   exit 0
 fi
-if "$BIN" index . >/dev/null 2>&1; then
-  mkdir -p .reposkein/local
-  git rev-parse HEAD > .reposkein/local/indexed-at 2>/dev/null || true
-else
-  echo "reposkein: index failed; skipping refresh (indexed-at marker left untouched)" >&2
-fi
-( "$BIN" load . >/dev/null 2>&1 || echo "reposkein: graph import skipped (database unavailable)" >&2 ) &
+"$BIN" refresh . --load >/dev/null 2>&1 || true
 exit 0
 "#;
 
@@ -159,6 +165,18 @@ enum Commands {
         no_federation: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Bring the local graph back in step with the working tree, at most once
+    /// at a time. This is what the git hooks call: it holds a lock so two
+    /// checkouts cannot index concurrently, and coalesces a burst of hook
+    /// firings into a single pass.
+    Refresh {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Also import into the local database, inside the lock. Without this,
+        /// a detached import could still stack behind the one we just took.
+        #[arg(long)]
+        load: bool,
     },
     /// Load committed .reposkein JSONL into Neo4j (reconstruct the DB).
     Load {
@@ -394,6 +412,159 @@ fn config_bool(out_dir: &Path, section: &str, key: &str) -> Option<bool> {
 /// Reads a non-negative integer key. Same degrade-to-default rule as above.
 fn config_u64(out_dir: &Path, section: &str, key: &str) -> Option<u64> {
     config_raw(out_dir, section, key)?.parse::<u64>().ok()
+}
+
+/// A refresh already in flight is asked to do one more pass rather than being
+/// duplicated. Bounded so a pathological writer cannot spin the loop forever.
+const MAX_COALESCED_PASSES: u32 = 3;
+
+/// A lock older than this is assumed to belong to a process that died without
+/// cleaning up. Generous: an index on a very large repository is minutes, not
+/// tens of minutes, and stealing early is worse than waiting.
+const LOCK_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Exclusive refresh lock, released on drop.
+///
+/// The whole point of REP-41: `post-checkout` fires on every branch switch,
+/// stash and file checkout, and used to run a full blocking index followed by a
+/// DETACHED database import. Git handed control back while the import was still
+/// running, so a few quick branch switches left several indexers and several
+/// importers running at once, each holding its own copy of the graph.
+struct RefreshLock {
+    path: PathBuf,
+}
+
+impl RefreshLock {
+    /// `Ok(None)` when another refresh holds it — that is an ordinary outcome,
+    /// not an error.
+    fn acquire(local_dir: &Path) -> Result<Option<Self>> {
+        let path = local_dir.join(".refresh.lock");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = writeln!(f, "{}", std::process::id());
+                Ok(Some(Self { path }))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if Self::is_stale(&path) {
+                    let _ = std::fs::remove_file(&path);
+                    // One retry only. Losing the race here means someone else
+                    // legitimately holds it, which is the answer we want.
+                    return match std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                    {
+                        Ok(mut f) => {
+                            use std::io::Write;
+                            let _ = writeln!(f, "{}", std::process::id());
+                            Ok(Some(Self { path }))
+                        }
+                        Err(_) => Ok(None),
+                    };
+                }
+                Ok(None)
+            }
+            Err(e) => Err(e).context("create refresh lock"),
+        }
+    }
+
+    fn is_stale(path: &Path) -> bool {
+        std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map(|t| t.elapsed().map(|d| d > LOCK_STALE_AFTER).unwrap_or(false))
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for RefreshLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn pending_path(local_dir: &Path) -> PathBuf {
+    local_dir.join(".refresh-pending")
+}
+
+/// The one place that decides when the graph gets rebuilt.
+///
+/// Deliberately still EAGER rather than deferred-to-first-read. Deferral was
+/// considered and rejected for now: the MCP server builds the graph only when
+/// it is *missing* (`ensureGraph`), not when it is stale, so deferring here
+/// would serve a stale graph indefinitely rather than moving the cost. The
+/// staleness marker stays exactly as honest as before — it is written only
+/// after an index that actually succeeded, so `doctor --ci`'s graph_stale check
+/// is unaffected by this change.
+fn run_refresh(path: &Path, load: bool) -> Result<()> {
+    let local = path.join(".reposkein").join("local");
+    std::fs::create_dir_all(&local).context("create .reposkein/local/")?;
+
+    let Some(_lock) = RefreshLock::acquire(&local)? else {
+        // Someone is already refreshing. Leave a note so they make one more
+        // pass over the tree as it is NOW, and get out of the way.
+        let _ = std::fs::write(pending_path(&local), b"");
+        eprintln!("reposkein: a refresh is already running; coalesced into it");
+        return Ok(());
+    };
+
+    for _ in 0..MAX_COALESCED_PASSES {
+        // Clear BEFORE indexing: a request arriving mid-pass must survive into
+        // the next one rather than being cleared by the pass it arrived during.
+        let _ = std::fs::remove_file(pending_path(&local));
+
+        match run_index(path, None, None, false, false, None) {
+            Ok(_) => {
+                if let Ok(head) = git_head(path) {
+                    let _ = std::fs::write(local.join("indexed-at"), format!("{head}\n"));
+                }
+                if load {
+                    // In-process would mean duplicating the load path; a child
+                    // held INSIDE the lock is enough to stop imports stacking,
+                    // which is the actual problem.
+                    let exe = std::env::current_exe().context("locate reposkein-indexer")?;
+                    let status = std::process::Command::new(exe)
+                        .arg("load")
+                        .arg(path)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                    if !matches!(status, Ok(st) if st.success()) {
+                        eprintln!("reposkein: graph import skipped (database unavailable)");
+                    }
+                }
+            }
+            Err(e) => {
+                // Never write the marker off a failed index: it would read as
+                // "fresh" when the graph is stale or absent.
+                eprintln!("reposkein: index failed; leaving the indexed-at marker as-is ({e})");
+            }
+        }
+
+        if !pending_path(&local).exists() {
+            return Ok(());
+        }
+    }
+    let _ = std::fs::remove_file(pending_path(&local));
+    Ok(())
+}
+
+/// HEAD's commit sha, or an error outside a git repo.
+fn git_head(path: &Path) -> Result<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .context("run git rev-parse HEAD")?;
+    if !out.status.success() {
+        anyhow::bail!("git rev-parse HEAD failed");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 struct IndexRun {
@@ -1226,6 +1397,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Commands::Refresh { path, load } => run_refresh(&path, load),
         Commands::Load {
             path,
             repo_id,
@@ -1652,49 +1824,58 @@ mod tests {
     }
 
     #[test]
-    fn post_merge_hook_reindexes_before_recording_the_marker() {
+    fn post_merge_hook_delegates_to_the_refresh_supervisor() {
         use super::POST_MERGE;
-        assert!(POST_MERGE.contains("index ."));
-        assert!(POST_MERGE.contains(".reposkein/local/indexed-at"));
-        // Search for the actual command invocation, not the prose comment
-        // above it (which also happens to contain the substring "index ").
-        let index_pos = POST_MERGE.find("\"$BIN\" index .").unwrap();
-        let marker_pos = POST_MERGE.find("> .reposkein/local/indexed-at").unwrap();
-        assert!(index_pos < marker_pos);
-    }
-
-    #[test]
-    fn post_merge_hook_gates_the_marker_write_on_index_success() {
-        use super::POST_MERGE;
-        // The marker write must be reachable only through the success branch
-        // of an `if "$BIN" index . ...; then ... fi` — not written
-        // unconditionally after a `||`-swallowed failure (the bug this test
-        // guards against: an `if`/`then` gate is required, a bare `||` isn't
-        // enough since control flow continues past it either way).
-        assert!(POST_MERGE.contains("if \"$BIN\" index ."));
-        let then_pos = POST_MERGE.find("if \"$BIN\" index .").unwrap();
-        let marker_pos = POST_MERGE.find("> .reposkein/local/indexed-at").unwrap();
-        let else_pos = POST_MERGE
-            .find("else")
-            .expect("post-merge must have an else branch for a failed index");
+        // The whole point of REP-41. post-checkout carries this same body and
+        // fires on every branch switch, stash and file checkout, so the policy
+        // has to live somewhere that can hold a lock — not inline in shell.
         assert!(
-            then_pos < marker_pos,
-            "marker write must be inside the success branch"
+            POST_MERGE.contains("\"$BIN\" refresh . --load"),
+            "post-merge must go through refresh, which locks and coalesces:\n{POST_MERGE}"
         );
         assert!(
-            marker_pos < else_pos,
-            "marker write must come before the else (failure) branch"
+            !POST_MERGE.contains("\"$BIN\" index ."),
+            "a bare index here cannot know another one is already running"
         );
     }
 
     #[test]
-    fn pre_commit_hook_gates_its_success_flag_on_index_success_and_clears_it_on_failure() {
+    fn post_merge_hook_never_detaches_the_database_import() {
+        use super::POST_MERGE;
+        // This used to end with `( "$BIN" load . ... ) &`. Git returned control
+        // while the import was still running, so a few quick checkouts left
+        // several importers competing for memory, invisibly. The import now
+        // runs inside refresh's lock instead.
+        assert!(
+            !POST_MERGE.contains(") &"),
+            "no detached background work in a hook:\n{POST_MERGE}"
+        );
+        assert!(
+            !POST_MERGE.contains("\"$BIN\" load ."),
+            "the import belongs inside the lock refresh holds, not beside it"
+        );
+    }
+
+    #[test]
+    fn post_merge_hook_leaves_the_staleness_marker_to_the_supervisor() {
+        use super::POST_MERGE;
+        // refresh writes .reposkein/local/indexed-at, and only after an index
+        // that actually succeeded. The hook must not write it too, or a failed
+        // index could still read as fresh to `doctor --ci`.
+        assert!(
+            !POST_MERGE.contains("> .reposkein/local/indexed-at"),
+            "the marker is the supervisor's to write:\n{POST_MERGE}"
+        );
+    }
+
+    #[test]
+    fn pre_commit_hook_gates_its_success_flag_on_refresh_success_and_clears_it_on_failure() {
         use super::PRE_COMMIT;
         const FLAG: &str = ".reposkein/local/.precommit-indexed-ok";
         assert!(PRE_COMMIT.contains(FLAG));
         assert!(
-            PRE_COMMIT.contains("if \"$BIN\" index ."),
-            "the flag write must be gated by an if/then on the index command's exit status"
+            PRE_COMMIT.contains("if \"$BIN\" refresh ."),
+            "the flag write must be gated by an if/then on the refresh command's exit status"
         );
         // Both branches must mention the flag: the success branch writes it,
         // the failure branch (and the indexer-not-found branch) remove it —

@@ -72,8 +72,9 @@ fn pre_commit_hook_stages_nothing() {
          git-ignored, and authored summaries are staged by hand.\n{body}"
     );
     assert!(
-        body.contains("index ."),
-        "the hook should still refresh the local graph"
+        body.contains("refresh ."),
+        "the hook should still refresh the local graph — through the supervisor, \
+         which locks so two hook firings cannot index at once"
     );
 }
 
@@ -251,8 +252,7 @@ fn reinit_adds_post_commit_to_a_repo_that_predates_it() {
     // The old post-merge (reposkein-managed, so eligible for overwrite) gets
     // upgraded to the new reindex+marker content.
     let post_merge = fs::read_to_string(hooks_dir.join("post-merge")).unwrap();
-    assert!(post_merge.contains("index ."));
-    assert!(post_merge.contains(".reposkein/local/indexed-at"));
+    assert!(post_merge.contains("refresh . --load"));
     assert!(!post_merge.contains("load-only"));
 }
 
@@ -292,29 +292,23 @@ fn post_commit_hook_only_records_the_marker_no_reindex() {
 }
 
 #[test]
-fn post_merge_hook_reindexes_then_records_the_marker() {
+fn post_merge_hook_refreshes_through_the_supervisor() {
     let dir = git_repo();
     let root = dir.path();
     run_init(root);
 
     let body = fs::read_to_string(root.join(".git/hooks/post-merge")).unwrap();
     assert!(
-        body.contains("index ."),
-        "post-merge must reindex — a merge/checkout changes the tree without \
-         going through the developer's own pre-commit:\n{body}"
+        body.contains("refresh . --load"),
+        "post-merge must refresh — a merge/checkout changes the tree without \
+         going through the developer's own pre-commit — and it must do so \
+         through the supervisor, which holds a lock and folds a burst of \
+         checkouts into one pass:\n{body}"
     );
     assert!(
-        body.contains(".reposkein/local/indexed-at"),
-        "post-merge should record the indexed-at marker after reindexing:\n{body}"
-    );
-    // Order matters: the marker write must follow the reindex, or a stale
-    // marker could read as fresh. Search for the actual command invocation,
-    // not the prose comment above it (which also contains "index ").
-    let index_pos = body.find("\"$BIN\" index .").unwrap();
-    let marker_pos = body.find("> .reposkein/local/indexed-at").unwrap();
-    assert!(
-        index_pos < marker_pos,
-        "reindex must happen before the marker write:\n{body}"
+        !body.contains(") &"),
+        "and it must not detach the database import: git would hand control \
+         back while several importers were still running:\n{body}"
     );
 }
 
