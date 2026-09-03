@@ -32,6 +32,8 @@ Every config file `init` edits is idempotent (re-running never adds a duplicate 
 
 Restart your agent afterward (most only read MCP config at startup), then verify with `reposkein-mcp doctor .`.
 
+If `reposkein-mcp doctor` reports `graph_tracked` — the repo predates 0.2.7 and still commits the derived graph — run `reposkein-mcp migrate` (see §4.2).
+
 **Devcontainer / CI**: to join automatically on container create, add to `.devcontainer/devcontainer.json`:
 
 ```jsonc
@@ -40,7 +42,7 @@ Restart your agent afterward (most only read MCP config at startup), then verify
 }
 ```
 
-Pin `--agents` explicitly in a devcontainer/CI image — auto-detection depends on what's installed on PATH, which is less predictable in an ephemeral container than on a developer's own machine. `doctor --ci` exits non-zero (failing the container build / CI job) on a stale committed graph, missing/foreign git hooks, or an unsplit legacy `summaries.jsonl` — the same checks `doctor` already reports, just promoted from a warning to a hard failure so drift gets caught before merge instead of at the next `init`.
+Pin `--agents` explicitly in a devcontainer/CI image — auto-detection depends on what's installed on PATH, which is less predictable in an ephemeral container than on a developer's own machine. `doctor --ci` exits non-zero (failing the container build / CI job) on a stale committed graph, missing/foreign git hooks, an unsplit legacy `summaries.jsonl`, or a tracked derived graph (`graph_tracked`) — the same checks `doctor` already reports, just promoted from a warning to a hard failure so drift gets caught before merge instead of at the next `init`.
 
 ---
 
@@ -261,6 +263,23 @@ If your repo-root `.gitignore` has a blanket rule over `.reposkein/`, add a nega
 
 `reposkein-mcp doctor` checks for exactly this.
 
+**Untracking the derived graph (pre-0.2.7 repos).** If the repo still has
+`.reposkein/nodes.jsonl` / `edges.jsonl` under version control (`reposkein-mcp doctor`
+fails the `graph_tracked` check), run:
+
+```sh
+reposkein-mcp migrate
+git commit -m "chore(reposkein): stop tracking the derived graph"
+```
+
+`migrate` stages the untracking (`git rm --cached` — files stay on disk), refreshes the
+managed git hooks, and rewrites `.reposkein/.gitignore` / `.gitattributes` to the current
+templates; it never commits for you. Leaving the graph tracked is an agent-killer: a bare
+`git diff` or `gh pr diff` can pull megabytes of machine-generated JSONL into a context
+window (the incident that motivated this: 7.2 MB, ~1.9× a 1M-token window). `doctor --ci`
+fails on it. Historical background: see
+[`migrations/2026-08-06-stop-committing-derived-graph.md`](migrations/2026-08-06-stop-committing-derived-graph.md).
+
 #### Bulk re-summarization
 
 A sweep that rewrites many summaries at once touches many shards at once, which is the one workload sharding does *not* smooth over. Run those through a single serialized job on `main` rather than from a branch — see `docs/policies/bulk-resummarization-sweeps.md`.
@@ -440,7 +459,7 @@ For multi-repo workspaces under OpenCode, define one server **per repo** under d
 
 After everything is configured, restart the user's agent (most agents only read MCP config at startup), then ask the agent to run:
 
-1. **`reposkein-mcp doctor .`** in each indexed repo — expects `✓ binary  ✓ indexed (N nodes)  ✓ ready`. Add `--ci` in CI/devcontainer contexts to fail the job on a stale graph, missing hooks, or an unsplit legacy `summaries.jsonl`; add `--json` for machine-readable output.
+1. **`reposkein-mcp doctor .`** in each indexed repo — expects `✓ binary  ✓ indexed (N nodes)  ✓ ready`. Add `--ci` in CI/devcontainer contexts to fail the job on a stale graph, missing hooks, an unsplit legacy `summaries.jsonl`, or a tracked derived graph (`graph_tracked`); add `--json` for machine-readable output.
 2. **A `semantic_find` call** through the MCP tool — should return ranked candidates with one-line summaries.
 3. **A `get_context_profile` call** on one of those candidates — should return caller/callee neighborhood as prose.
 4. **If Neo4j:** open <http://localhost:7474> and run `MATCH (n) RETURN count(n)` — should match `meta.json` node counts (cumulative across loaded repos).

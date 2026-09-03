@@ -6,7 +6,7 @@ import { resolveRepoId } from "../store/repoId.js";
 import { resolveRepoPath } from "../store/resolveRepoPath.js";
 import { anchorStateChecks, decisionChecks } from "./doctorDecisions.js";
 import { summaryChecks } from "./doctorSummaries.js";
-import { hooksCheck, graphStaleCheck } from "./doctorFreshness.js";
+import { hooksCheck, graphStaleCheck, graphTrackedCheck } from "./doctorFreshness.js";
 
 export interface DoctorPathResolution {
   path: string;
@@ -129,6 +129,11 @@ export async function runChecks(repoPath: string): Promise<DoctorReport> {
   checks.push(hooksCheck(repoPath));
   checks.push(graphStaleCheck(repoPath));
 
+  // 7) Derived graph must not be tracked by git (REP-35: tracked graphs
+  //    exhaust agent context windows via bare diffs). Non-critical; `--ci`
+  //    promotes it.
+  checks.push(graphTrackedCheck(repoPath));
+
   const ok = checks.filter((c) => c.critical).every((c) => c.ok);
   return { repoPath, ok, checks };
 }
@@ -136,10 +141,10 @@ export async function runChecks(repoPath: string): Promise<DoctorReport> {
 /** Check ids that `doctor --ci` treats as build-breaking even though they're
  *  non-critical for interactive use (degrade gracefully for a human at the
  *  keyboard, but should fail a CI job so drift gets caught before it's
- *  merged): missing/foreign git hooks, a stale committed graph, and an
+ *  merged): missing/foreign git hooks, a stale committed graph, an
  *  unsplit legacy `summaries.jsonl` (see docs/INSTALL.md §4.2 — every branch
- *  that writes a summary would conflict on it). */
-export const CI_FAIL_IDS = new Set(["hooks_installed", "graph_stale", "summaries_unsplit"]);
+ *  that writes a summary would conflict on it), and a git-tracked derived graph (REP-35 — tracked graphs exhaust agent context windows via bare diffs). */
+export const CI_FAIL_IDS = new Set(["hooks_installed", "graph_stale", "summaries_unsplit", "graph_tracked"]);
 
 /** Checks (by id) that `doctor --ci` additionally fails on, beyond the
  *  normal critical-check gate. */

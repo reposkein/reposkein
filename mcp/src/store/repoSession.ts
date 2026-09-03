@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { resolveRepoPath, walkUp, walkDown, type RepoResolution } from "./resolveRepoPath.js";
+import { trackedGraphFiles, trackedGraphWarning } from "./trackedGraph.js";
 
 export interface RepoInfo {
   path: string;
@@ -13,6 +14,9 @@ export interface RepoInfo {
   /** Cheap line counts (not full parses) — omitted where the file is absent. */
   nodes?: number;
   edges?: number;
+  /** True when git still TRACKS the derived graph here (pre-0.2.7 adopter —
+   *  REP-35). Omitted when clean, so existing consumers see no change. */
+  graph_tracked?: boolean;
 }
 
 function countLines(text: string): number {
@@ -51,11 +55,13 @@ function cheapCounts(path: string): { nodes?: number; edges?: number } {
 
 export function describeRepo(path: string): RepoInfo {
   const repo_id = readMetaRepoId(path);
+  const tracked = trackedGraphFiles(path).length > 0;
   return {
     path,
     ...(repo_id ? { repo_id } : {}),
     name: repo_id ?? basename(path),
     ...cheapCounts(path),
+    ...(tracked ? { graph_tracked: true } : {}),
   };
 }
 
@@ -89,6 +95,9 @@ export class RepoSession {
   private readonly cwd: string;
   private readonly envRepoPath: string | undefined;
   private selectedPath: string | undefined;
+  /** Repo paths whose tracked-graph state this session has already probed —
+   *  warned or clean, either way we never probe (or repeat) again. */
+  private readonly graphWarned = new Set<string>();
 
   constructor(opts: { cwd: string; envRepoPath: string | undefined }) {
     this.cwd = opts.cwd;
@@ -99,6 +108,25 @@ export class RepoSession {
   resolve(): RepoResolution {
     if (this.selectedPath) return { repoPath: this.selectedPath, source: "explicit" };
     return resolveRepoPath({ cwd: this.cwd, envRepoPath: this.envRepoPath });
+  }
+
+  /** One-shot, once per repo per session: the tracked-graph warning for the
+   *  currently resolved repo, or undefined (clean repo, no repo, or already
+   *  taken). The instrumentation layer (instrumentTool.ts) appends it to the
+   *  first successful tool result — repeating it every call would spend the
+   *  context this feature exists to protect (REP-35).
+   *
+   *  `resolvedPath` is an optional override: `instrumentTool.ts` already
+   *  computes the call's resolution once via its ALS-memoized
+   *  `cachedResolve()` (see its "single resolution per call" invariant) and
+   *  passes that in, so this never triggers a second, unmemoized
+   *  `resolve()` walk for the same tool call. Omit it (as a standalone
+   *  caller would) to resolve directly. */
+  takeTrackedGraphWarning(resolvedPath?: string): string | undefined {
+    const path = resolvedPath ?? this.resolve().repoPath;
+    if (!path || this.graphWarned.has(path)) return undefined;
+    this.graphWarned.add(path);
+    return trackedGraphWarning(path);
   }
 
   /** Every candidate repo for this session — see `discoverRepoPaths`. Each

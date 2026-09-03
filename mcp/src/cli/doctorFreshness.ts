@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Check } from "./doctor.js";
 import { readIndexedAtSha } from "../store/indexedAt.js";
+import { trackedGraphFiles } from "../store/trackedGraph.js";
 
 /** Marker `init --hooks` (the Rust indexer) writes into every hook it
  *  installs — see indexer/crates/cli/src/main.rs `write_hook`. Doctor uses
@@ -143,5 +144,38 @@ export function graphStaleCheck(repoPath: string): Check {
     `graph was indexed at ${recordedSha.slice(0, 7)}, but HEAD is now ${headSha.slice(0, 7)} — commits landed since ` +
       "the last index without the marker advancing (hooks missing/bypassed, or the graph was never re-indexed)",
     "run `reposkein-mcp index`"
+  );
+}
+
+/** Pre-0.2.7 adopters committed the derived graph; a tracked pair reached
+ *  7.2MB (~1.9× a 1M-token context window) in the wild and repeatedly killed
+ *  agents whose bare `git diff`/`gh pr diff` pulled it into context
+ *  (REP-35). Non-critical (reads still work fine); `doctor --ci` promotes it
+ *  — see CI_FAIL_IDS in doctor.ts. */
+export function graphTrackedCheck(repoPath: string): Check {
+  try {
+    execFileSync("git", ["-C", repoPath, "rev-parse", "--is-inside-work-tree"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+  } catch {
+    return warn("graph_tracked", "derived graph untracked", true, "not a git repository (skipped)");
+  }
+  const tracked = trackedGraphFiles(repoPath);
+  if (tracked.length === 0) {
+    return warn(
+      "graph_tracked",
+      "derived graph untracked",
+      true,
+      "nodes.jsonl / edges.jsonl are not tracked by git"
+    );
+  }
+  return warn(
+    "graph_tracked",
+    "derived graph untracked",
+    false,
+    `${tracked.join(" + ")} are TRACKED in git — a bare \`git diff\`/\`git show\`/\`gh pr diff\` ` +
+      "over this repo can pull the whole machine-generated graph into an agent's context window " +
+      "and exhaust it",
+    "run `reposkein-mcp migrate` (untracks the graph, refreshes .gitignore/.gitattributes/hooks), then commit"
   );
 }

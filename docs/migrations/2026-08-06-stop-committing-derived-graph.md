@@ -5,8 +5,9 @@ For humans. Historical — describes a past migration; the single-file
 `summaries/<xx>.jsonl` (see [`../INSTALL.md` §4.2](../INSTALL.md#42-merge-behaviour-for-reposkein)
 for the current scheme and the follow-up migration off this file).
 
-Status: plan only. Nothing here has been executed.
-Written: 2026-08-06.
+Status: automated. `reposkein-mcp migrate` (v0.8.0) performs this procedure —
+run it instead of the manual steps below, which are kept for background.
+Written: 2026-08-06. Automated: 2026-08-27 (REP-35).
 Applies to: any repository that already has `.reposkein/nodes.jsonl` and
 `.reposkein/edges.jsonl` under version control.
 
