@@ -26,28 +26,57 @@ export interface ParsedGraph {
   edges: ParsedEdge[];
 }
 
-function parseNodeLine(line: string, repoId: string): ParsedNode | null {
+/** Reuse one string per distinct id.
+ *
+ *  An id appears once in nodes.jsonl and twice more per edge (`from`, `to`).
+ *  At two edges per node that is three copies of a ~90-character string for
+ *  every node in the graph, none of which JSON.parse deduplicates for us. */
+export type Interner = (s: string) => string;
+
+export function makeInterner(): Interner {
+  const pool = new Map<string, string>();
+  return (s: string) => {
+    const hit = pool.get(s);
+    if (hit !== undefined) return hit;
+    pool.set(s, s);
+    return s;
+  };
+}
+
+const identity: Interner = (s) => s;
+
+function parseNodeLine(line: string, repoId: string, intern: Interner = identity): ParsedNode | null {
   const obj = JSON.parse(line) as Record<string, unknown>;
   const id = obj.id;
   const labels = obj.labels;
   if (typeof id !== "string" || !Array.isArray(labels)) return null;
-  const props: Record<string, unknown> = { ...obj };
-  delete props.id;
-  delete props.labels;
-  return { id, repoId, labels: labels.filter((l): l is string => typeof l === "string"), props };
+  // Built by omission rather than by spreading and deleting: the old form
+  // allocated a second object per record only to mutate it back down.
+  const props: Record<string, unknown> = {};
+  for (const k in obj) {
+    if (k === "id" || k === "labels") continue;
+    props[k] = obj[k];
+  }
+  return {
+    id: intern(id),
+    repoId,
+    labels: labels.filter((l): l is string => typeof l === "string"),
+    props,
+  };
 }
 
-function parseEdgeLine(line: string): ParsedEdge | null {
+function parseEdgeLine(line: string, intern: Interner = identity): ParsedEdge | null {
   const obj = JSON.parse(line) as Record<string, unknown>;
   const from = obj.from;
   const type = obj.type;
   const to = obj.to;
   if (typeof from !== "string" || typeof type !== "string" || typeof to !== "string") return null;
-  const props: Record<string, unknown> = { ...obj };
-  delete props.from;
-  delete props.type;
-  delete props.to;
-  return { from, type, to, props };
+  const props: Record<string, unknown> = {};
+  for (const k in obj) {
+    if (k === "from" || k === "type" || k === "to") continue;
+    props[k] = obj[k];
+  }
+  return { from: intern(from), type: intern(type), to: intern(to), props };
 }
 
 export function parseNodes(text: string, repoId: string): ParsedNode[] {
@@ -97,6 +126,19 @@ export interface RepoSource {
   edgesText: string;
 }
 
+/** A repo as LINES rather than text.
+ *
+ *  This is the whole point of the streaming load: the caller decides where the
+ *  lines come from, so production can hand over a lazy file reader while tests
+ *  hand over an array. An `Iterable<string>` is every bit as pure as a
+ *  `string` — the module comment above claimed purity forced whole-file text,
+ *  and it never did. */
+export interface RepoLines {
+  repoId: string;
+  nodes: Iterable<string>;
+  edges: Iterable<string>;
+}
+
 const isFunction = (n: ParsedNode): boolean => n.labels.includes("Function");
 
 /** Builds one merged graph from several repos' committed JSONL, then injects
@@ -106,28 +148,62 @@ const isFunction = (n: ParsedNode): boolean => n.labels.includes("Function");
  *  - CALLS edges (Function→Function) from external_calls, import-scoped first
  *    (confidence 0.6) with federation-wide unique fallback (0.5); ambiguous
  *    skipped. Per-name (mirrors Neo4j stitch_cross_repo_calls). */
+/** Text in, graph out — an adapter over the streaming build, kept because it
+ *  is the shape tests want. Production goes through buildFederatedGraphLines. */
 export function buildFederatedGraph(repos: RepoSource[]): ParsedGraph {
+  return buildFederatedGraphLines(
+    repos.map((r) => ({
+      repoId: r.repoId,
+      nodes: r.nodesText.split("\n"),
+      edges: r.edgesText.split("\n"),
+    }))
+  );
+}
+
+export function buildFederatedGraphLines(repos: Iterable<RepoLines>): ParsedGraph {
   const byId = new Map<string, ParsedNode>();
   const callsFrom = new Map<string, ParsedEdge[]>();
   const callsTo = new Map<string, ParsedEdge[]>();
   const nodes: ParsedNode[] = [];
   const edges: ParsedEdge[] = [];
+  const intern = makeInterner();
   const pushCall = (e: ParsedEdge) => {
     (callsFrom.get(e.from) ?? callsFrom.set(e.from, []).get(e.from)!).push(e);
     (callsTo.get(e.to) ?? callsTo.set(e.to, []).get(e.to)!).push(e);
   };
 
-  // 1) Parse + merge every repo.
+  // 1) Stream every repo straight into the shared maps.
+  //
+  //    No per-repo intermediate graph, and no per-repo text: one line is live
+  //    at a time. Previously each repo was parsed into its own complete
+  //    ParsedGraph and then merged, on top of holding every repo's full text
+  //    for the duration.
   for (const r of repos) {
-    const g = buildGraph(r.nodesText, r.edgesText, r.repoId);
-    for (const n of g.nodes) {
-      if (!byId.has(n.id)) {
+    for (const line of r.nodes) {
+      if (line === "" || line.trim() === "") continue;
+      let n: ParsedNode | null;
+      try {
+        n = parseNodeLine(line, r.repoId, intern);
+      } catch {
+        continue;
+      }
+      if (n && !byId.has(n.id)) {
         byId.set(n.id, n);
         nodes.push(n);
       }
     }
-    for (const e of g.edges) edges.push(e);
-    for (const [, list] of g.callsFrom) for (const e of list) pushCall(e);
+    for (const line of r.edges) {
+      if (line === "" || line.trim() === "") continue;
+      let e: ParsedEdge | null;
+      try {
+        e = parseEdgeLine(line, intern);
+      } catch {
+        continue;
+      }
+      if (!e) continue;
+      edges.push(e);
+      if (e.type === "CALLS") pushCall(e);
+    }
   }
 
   // 2) Cross-repo name index: function name -> [{id, repoId, fileId}] (sorted by id).

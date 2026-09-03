@@ -1,4 +1,5 @@
 import { statSync, readFileSync, existsSync } from "node:fs";
+import { readLines } from "./jsonlLines.js";
 import { join, resolve, isAbsolute, sep } from "node:path";
 import {
   CypherUnsupportedError,
@@ -10,11 +11,11 @@ import {
 } from "./GraphStore.js";
 import type { TargetRow } from "../profile/types.js";
 import {
-  buildFederatedGraph,
+  buildFederatedGraphLines,
   emptyGraph,
   type ParsedGraph,
   type ParsedNode,
-  type RepoSource,
+  type RepoLines,
 } from "./jsonlGraph.js";
 import { loadAllSidecars, sidecarPaths, sidecarPath, upsertSidecar } from "./sidecar.js";
 import {
@@ -122,26 +123,30 @@ export class JsonlGraphStore implements GraphStore {
   /** Gathers committed JSONL for the root + all transitively federated
    *  children (guarded, cycle-safe). Each child's repo_id comes from the proxy
    *  Repository node's federated_repo_id in the parent's nodes.jsonl. */
-  private collectRepos(): RepoSource[] {
-    const repos: RepoSource[] = [];
+  private collectRepos(): RepoLines[] {
+    const repos: RepoLines[] = [];
     const seen = new Set<string>();
     const visit = (dir: string, repoId: string) => {
       if (seen.has(repoId)) return;
       seen.add(repoId);
       const nodesPath = join(dir, ".reposkein", "nodes.jsonl");
       const edgesPath = join(dir, ".reposkein", "edges.jsonl");
-      let nodesText = "";
-      let edgesText = "";
-      try {
-        if (existsSync(nodesPath)) nodesText = readFileSync(nodesPath, "utf8");
-        if (existsSync(edgesPath)) edgesText = readFileSync(edgesPath, "utf8");
-      } catch {
-        return;
-      }
-      repos.push({ repoId, nodesText, edgesText });
-      // Discover children from this repo's Repository proxy nodes.
-      for (const line of nodesText.split("\n")) {
-        if (line.trim() === "") continue;
+      if (!existsSync(nodesPath) && !existsSync(edgesPath)) return;
+
+      // Lazy: nothing is read until the build iterates them, and only one line
+      // is live at a time. This used to hold the COMPLETE text of every
+      // federated repo simultaneously — a root plus ten children meant the
+      // whole federation resident at once, before a single line was parsed.
+      repos.push({
+        repoId,
+        nodes: { [Symbol.iterator]: () => readLines(nodesPath) },
+        edges: { [Symbol.iterator]: () => readLines(edgesPath) },
+      });
+
+      // Discover children from this repo's Repository proxy nodes. A second
+      // streaming pass over the same file, which costs I/O rather than the
+      // second full line array the old code built.
+      for (const line of readLines(nodesPath)) {
         let obj: Record<string, unknown>;
         try {
           obj = JSON.parse(line) as Record<string, unknown>;
@@ -205,7 +210,7 @@ export class JsonlGraphStore implements GraphStore {
       this.overlayUndo.clear();
       this.overlayStamp = "";
       try {
-        this.graph = buildFederatedGraph(this.collectRepos());
+          this.graph = buildFederatedGraphLines(this.collectRepos());
       } catch {
         this.graph = emptyGraph();
         return;
