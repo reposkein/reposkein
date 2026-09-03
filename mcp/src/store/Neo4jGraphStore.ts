@@ -14,6 +14,15 @@ export class Neo4jGraphStore implements GraphStore {
   constructor(uri: string, user: string, password: string) {
     this.driver = neo4j.driver(uri, neo4j.auth.basic(user, password), {
       disableLosslessIntegers: true,
+      // Stream in pages instead of letting the driver buffer whatever the
+      // server sends. Without this a broad query materialises the entire
+      // result before anyone can look at it.
+      fetchSize: 1000,
+      // The default pool is 100. A stdio MCP server is one agent; a shared
+      // `serve --http` process should not be able to open a hundred sockets
+      // to one database either.
+      maxConnectionPoolSize: 16,
+      connectionAcquisitionTimeout: 30_000,
     });
   }
 
@@ -192,19 +201,36 @@ export class Neo4jGraphStore implements GraphStore {
     return ids;
   }
 
+  /**
+   * Run a read query, optionally stopping after `maxRows`.
+   *
+   * The cap is applied WHILE streaming, not after. `session.run()` in promise
+   * mode buffers every record and then `.map(toObject)` built a second full
+   * array beside it — so `MATCH (n) RETURN n` pulled the whole database into
+   * heap in two representations, and the caller's 200-row cap then threw
+   * almost all of it away. Iterating the Result consumes it in `fetchSize`
+   * pages, so breaking early means the rest is never materialised at all.
+   */
   async runRead(
     query: string,
     params: Record<string, unknown> = {},
-    opts: { timeoutMs?: number } = {}
+    opts: { timeoutMs?: number; maxRows?: number } = {}
   ): Promise<Record<string, unknown>[]> {
     const session = this.driver.session({
       defaultAccessMode: neo4j.session.READ,
     });
+    const max = opts.maxRows;
     try {
-      const result = await session.run(query, params, {
+      const result = session.run(query, params, {
         timeout: opts.timeoutMs ?? 10_000,
       });
-      return result.records.map((r) => r.toObject() as Record<string, unknown>);
+      const rows: Record<string, unknown>[] = [];
+      for await (const record of result) {
+        rows.push(record.toObject() as Record<string, unknown>);
+        // One past the cap, so the caller can still report `truncated`.
+        if (max !== undefined && rows.length > max) break;
+      }
+      return rows;
     } finally {
       await session.close();
     }

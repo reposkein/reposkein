@@ -106,7 +106,10 @@ export interface GraphStore {
   runRead(
     query: string,
     params?: Record<string, unknown>,
-    opts?: { timeoutMs?: number }
+    /** `maxRows` is a request to STOP STREAMING there, not a post-hoc filter.
+     *  An implementation that cannot stream may return everything, but one
+     *  that can must not materialise past the cap. */
+    opts?: { timeoutMs?: number; maxRows?: number }
   ): Promise<Record<string, unknown>[]>;
 
   close(): Promise<void>;

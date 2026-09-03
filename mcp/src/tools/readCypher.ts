@@ -1,5 +1,5 @@
 import { assertReadOnly } from "../guard/readonly.js";
-import { applyCaps } from "../guard/caps.js";
+import { applyCaps, MAX_ROWS } from "../guard/caps.js";
 import type { GraphStore } from "../store/GraphStore.js";
 import { federationIds } from "../store/federation.js";
 
@@ -33,7 +33,14 @@ export function makeReadCypher(store: GraphStore, repoId?: string) {
       merged.repo_ids = args.federated ? await federationIds(store, repoId) : [repoId];
     }
     try {
-      const rows = await store.runRead(query, merged, { timeoutMs: 10_000 });
+      // Ask for one row past the cap rather than for everything: the store
+      // stops streaming there, so a broad query never materialises the whole
+      // database just to have 200 rows kept. applyCaps still decides the
+      // final shape (and the byte cap).
+      const rows = await store.runRead(query, merged, {
+        timeoutMs: 10_000,
+        maxRows: MAX_ROWS,
+      });
       const { rows: capped, truncated } = applyCaps(rows);
       return {
         content: [
