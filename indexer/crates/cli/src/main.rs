@@ -747,13 +747,25 @@ fn run_index(
     // Derived output. Summaries are grafted in only where `summary_of_hash`
     // still matches the node, so a stale summary never reads as current.
     let nodes = reposkein_core::merge::graft_summaries(&graph.nodes, &authored_nodes);
-    std::fs::write(&nodes_path, jsonl::nodes_to_jsonl(&nodes))
-        .context("failed to write nodes.jsonl")?;
-    std::fs::write(
-        out_dir.join("edges.jsonl"),
-        jsonl::edges_to_jsonl(&graph.edges),
-    )
-    .context("failed to write edges.jsonl")?;
+    // Streamed through a BufWriter rather than built as one String and handed
+    // to fs::write. On a large repository that String was a second full copy of
+    // the output — 150-400 MB — alive at the same instant as the graph it was
+    // serialised from.
+    {
+        use std::io::Write;
+        let f = std::fs::File::create(&nodes_path).context("failed to create nodes.jsonl")?;
+        let mut w = std::io::BufWriter::new(f);
+        jsonl::write_nodes(&mut w, &nodes).context("failed to write nodes.jsonl")?;
+        w.flush().context("failed to flush nodes.jsonl")?;
+    }
+    {
+        use std::io::Write;
+        let f = std::fs::File::create(out_dir.join("edges.jsonl"))
+            .context("failed to create edges.jsonl")?;
+        let mut w = std::io::BufWriter::new(f);
+        jsonl::write_edges(&mut w, &graph.edges).context("failed to write edges.jsonl")?;
+        w.flush().context("failed to flush edges.jsonl")?;
+    }
 
     // Authored output. Kept verbatim rather than hash-filtered: a summary whose
     // node changed is *stale*, not wrong, and a reader detects that by comparing
