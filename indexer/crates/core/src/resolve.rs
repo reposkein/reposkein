@@ -6,13 +6,29 @@ use crate::id;
 use crate::model::{Edge, Node};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
+
+/// An interned symbol.
+///
+/// Resolution builds a dozen indexes over the same identifiers, and every one
+/// of them used to hold its own `String`: a function id appeared in `by_name`,
+/// `by_file_freefn`, `by_file_funcs`, `by_file_qual` and `by_id_dir`, so the
+/// same ~90-character string was allocated six times over. `Rc<str>` makes
+/// those clones a pointer bump.
+///
+/// It changes nothing about output. `Rc<str>` orders and compares by content,
+/// exactly like `String`, so every `BTreeMap` iterates in the same order and
+/// the emitted JSONL stays byte-identical — which the determinism gates check.
+/// Single-threaded by design: the indexer has no threads at all, so `Rc` is
+/// the right cell and `Arc`'s atomics would be pure cost.
+type Sym = Rc<str>;
 
 /// A lightweight view of the Function nodes needed for resolution.
 struct FuncView {
-    id: String,
-    name: String,
-    qualified: String,
-    file_path: String,
+    id: Sym,
+    name: Sym,
+    qualified: Sym,
+    file_path: Sym,
 }
 
 fn prop_str(node: &Node, key: &str) -> String {
@@ -27,12 +43,20 @@ fn functions(nodes: &[Node]) -> Vec<FuncView> {
         .iter()
         .filter(|n| n.labels == ["Function"])
         .map(|n| FuncView {
-            id: n.id.clone(),
-            name: prop_str(n, "name"),
-            qualified: prop_str(n, "qualified_name"),
-            file_path: prop_str(n, "file_path"),
+            id: Rc::from(n.id.as_str()),
+            name: prop_sym(n, "name"),
+            qualified: prop_sym(n, "qualified_name"),
+            file_path: prop_sym(n, "file_path"),
         })
         .collect()
+}
+
+/// Like `prop_str`, but interned.
+fn prop_sym(node: &Node, key: &str) -> Sym {
+    match node.props.get(key) {
+        Some(Value::String(s)) => Rc::from(s.as_str()),
+        _ => Rc::from(""),
+    }
 }
 
 fn file_paths(nodes: &[Node]) -> BTreeSet<String> {
@@ -77,7 +101,7 @@ fn resolve_imports(
     imports: &[RawImport],
     files: &BTreeSet<String>,
     repo: &str,
-    by_file_funcs: &BTreeMap<String, Vec<(String, String)>>,
+    by_file_funcs: &BTreeMap<Sym, Vec<(Sym, Sym)>>,
 ) -> (Vec<Edge>, ImportTargets) {
     // Pass 1: build re-export map from reexport=true imports
     let mut reexports: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
@@ -115,12 +139,12 @@ fn resolve_imports(
         // Check if this is a glob sentinel (symbols == [("", "*")])
         if imp.symbols == [(String::new(), "*".to_string())] {
             // Expand: add each free fn of the target file as a binding (no reexport chasing for globs)
-            if let Some(fns) = by_file_funcs.get(target) {
+            if let Some(fns) = by_file_funcs.get(target.as_str()) {
                 for (name, _id) in fns {
-                    entry.insert(name.clone());
+                    entry.insert(name.to_string());
                     sym_map.insert(
-                        (imp.importing_file_id.clone(), name.clone()),
-                        (target.clone(), name.clone()),
+                        (imp.importing_file_id.clone(), name.to_string()),
+                        (target.clone(), name.to_string()),
                     );
                 }
             }
@@ -157,15 +181,15 @@ fn round2(x: f64) -> f64 {
 #[allow(clippy::too_many_arguments)]
 fn resolve_one(
     c: &RawCall,
-    by_name: &BTreeMap<String, Vec<String>>, // name -> sorted func ids
-    by_file_freefn: &BTreeMap<(String, String), Vec<String>>, // (path,name) -> module-level fn ids only
-    by_file_qual: &BTreeMap<(String, String), String>,        // (path,qualified) -> id
-    import_targets: &ImportTargets, // (importing_file_id, local) -> (path, original)
+    by_name: &BTreeMap<Sym, Vec<Sym>>, // name -> sorted func ids
+    by_file_freefn: &BTreeMap<Sym, BTreeMap<Sym, Vec<Sym>>>, // path -> name -> module-level fn ids
+    by_file_qual: &BTreeMap<Sym, BTreeMap<Sym, Sym>>, // path -> qualified -> id
+    import_targets: &ImportTargets,    // (importing_file_id, local) -> (path, original)
     module_aliases: &BTreeMap<(String, String), String>, // (importing_file_id, alias) -> target_path
-    by_id_dir: &BTreeMap<String, String>,                // func id -> directory of its file
+    by_id_dir: &BTreeMap<Sym, Sym>,                      // func id -> directory of its file
     caller_file_id: &str,
     bindings: &BTreeMap<(String, String), (String, String)>, // (caller_id, local) -> (class_id, class_file)
-    class_by_id_qual: &BTreeMap<String, String>,             // class id -> qualified_name
+    class_by_id_qual: &BTreeMap<Sym, Sym>,                   // class id -> qualified_name
 ) -> Vec<(String, &'static str, f64)> {
     // Rung 1: self/cls method call.
     if matches!(
@@ -174,8 +198,11 @@ fn resolve_one(
     ) {
         if let Some((class, _)) = c.caller_qualified.rsplit_once('.') {
             let target_q = format!("{class}.{}", c.callee_name);
-            if let Some(id) = by_file_qual.get(&(c.caller_path.clone(), target_q)) {
-                return vec![(id.clone(), "exact", 1.0)];
+            if let Some(id) = by_file_qual
+                .get(c.caller_path.as_str())
+                .and_then(|m| m.get(target_q.as_str()))
+            {
+                return vec![(id.to_string(), "exact", 1.0)];
             }
         }
     }
@@ -186,9 +213,14 @@ fn resolve_one(
             if let Some(target_path) =
                 module_aliases.get(&(caller_file_id.to_string(), alias.clone()))
             {
-                if let Some(ids) = by_file_freefn.get(&(target_path.clone(), c.callee_name.clone()))
+                if let Some(ids) = by_file_freefn
+                    .get(target_path.as_str())
+                    .and_then(|m| m.get(c.callee_name.as_str()))
                 {
-                    return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
+                    return ids
+                        .iter()
+                        .map(|id| (id.to_string(), "exact", 1.0))
+                        .collect();
                 }
                 // Alias is known but callee not found as a free function in the target module.
                 // HARD STOP: do NOT fall through to name_match rungs, since the module is
@@ -204,10 +236,13 @@ fn resolve_one(
         if !matches!(recv.as_str(), "self" | "cls" | "this") {
             if let Some((class_id, class_file)) = bindings.get(&(c.caller_id.clone(), recv.clone()))
             {
-                if let Some(class_qual) = class_by_id_qual.get(class_id) {
+                if let Some(class_qual) = class_by_id_qual.get(class_id.as_str()) {
                     let method_qual = format!("{class_qual}.{}", c.callee_name);
-                    if let Some(method_id) = by_file_qual.get(&(class_file.clone(), method_qual)) {
-                        return vec![(method_id.clone(), "exact", 1.0)];
+                    if let Some(method_id) = by_file_qual
+                        .get(class_file.as_str())
+                        .and_then(|m| m.get(method_qual.as_str()))
+                    {
+                        return vec![(method_id.to_string(), "exact", 1.0)];
                     }
                     // Binding known, but method not found in class's file.
                     // FALL THROUGH (not hard-stop): method may be inherited or external.
@@ -218,36 +253,48 @@ fn resolve_one(
     }
     if c.receiver.is_none() {
         // Rung 2: same-file module-level function (bare name cannot reach a method).
-        if let Some(ids) = by_file_freefn.get(&(c.caller_path.clone(), c.callee_name.clone())) {
-            return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
+        if let Some(ids) = by_file_freefn
+            .get(c.caller_path.as_str())
+            .and_then(|m| m.get(c.callee_name.as_str()))
+        {
+            return ids
+                .iter()
+                .map(|id| (id.to_string(), "exact", 1.0))
+                .collect();
         }
         // Rung 3: import-followed module-level function.
         if let Some((target_path, original)) =
             import_targets.get(&(caller_file_id.to_string(), c.callee_name.clone()))
         {
-            if let Some(ids) = by_file_freefn.get(&(target_path.clone(), original.clone())) {
-                return ids.iter().map(|id| (id.clone(), "exact", 1.0)).collect();
+            if let Some(ids) = by_file_freefn
+                .get(target_path.as_str())
+                .and_then(|m| m.get(original.as_str()))
+            {
+                return ids
+                    .iter()
+                    .map(|id| (id.to_string(), "exact", 1.0))
+                    .collect();
             }
         }
         // Rung 3.5: scope-aware — prefer same-directory candidates before
         // going repo-wide (reduces false repo-wide `ambiguous` fan-out).
         // Only applies when the caller is in a non-root directory (caller_dir
         // non-empty) to avoid spurious matches among root-level files.
-        if let Some(ids) = by_name.get(&c.callee_name) {
+        if let Some(ids) = by_name.get(c.callee_name.as_str()) {
             if ids.len() > 1 {
                 let caller_dir = c.caller_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
                 if !caller_dir.is_empty() {
-                    let local: Vec<&String> = ids
+                    let local: Vec<&Sym> = ids
                         .iter()
-                        .filter(|id| by_id_dir.get(*id).map(|d| d.as_str()) == Some(caller_dir))
+                        .filter(|id| by_id_dir.get(&**id).map(|d| &**d) == Some(caller_dir))
                         .collect();
                     match local.len() {
-                        1 => return vec![(local[0].clone(), "name_match", 0.8)],
+                        1 => return vec![(local[0].to_string(), "name_match", 0.8)],
                         n if n > 1 => {
                             let conf = round2(0.8 / n as f64);
                             return local
                                 .iter()
-                                .map(|id| ((*id).clone(), "ambiguous", conf))
+                                .map(|id| ((*id).to_string(), "ambiguous", conf))
                                 .collect();
                         }
                         _ => {} // fall through to repo-wide rungs 4/5 (unchanged)
@@ -256,26 +303,26 @@ fn resolve_one(
             }
         }
         // Rungs 4/5: repo-wide name match.
-        if let Some(ids) = by_name.get(&c.callee_name) {
+        if let Some(ids) = by_name.get(c.callee_name.as_str()) {
             return if ids.len() == 1 {
-                vec![(ids[0].clone(), "name_match", 0.7)]
+                vec![(ids[0].to_string(), "name_match", 0.7)]
             } else {
                 let conf = round2(1.0 / ids.len() as f64);
                 ids.iter()
-                    .map(|id| (id.clone(), "ambiguous", conf))
+                    .map(|id| (id.to_string(), "ambiguous", conf))
                     .collect()
             };
         }
         return Vec::new();
     }
     // Rungs 6/7: attribute call (obj.callee), no type info.
-    if let Some(ids) = by_name.get(&c.callee_name) {
+    if let Some(ids) = by_name.get(c.callee_name.as_str()) {
         return if ids.len() == 1 {
-            vec![(ids[0].clone(), "name_match", 0.5)]
+            vec![(ids[0].to_string(), "name_match", 0.5)]
         } else {
             let conf = round2(1.0 / ids.len() as f64);
             ids.iter()
-                .map(|id| (id.clone(), "ambiguous", conf))
+                .map(|id| (id.to_string(), "ambiguous", conf))
                 .collect()
         };
     }
@@ -315,41 +362,52 @@ pub fn resolve_full(
 
     // Build function indexes FIRST (needed for glob expansion in resolve_imports).
     let funcs = functions(nodes);
-    let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut by_file_freefn: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
-    let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
+    // Nested rather than tuple-keyed, which is both smaller and FASTER.
+    // `BTreeMap<(String, String), _>` cannot be looked up by `(&str, &str)` —
+    // tuple keys do not compose `Borrow` — so every call site built an owned
+    // key first, allocating a String per lookup. Nesting lets the same lookup
+    // go through `&str` twice with no allocation at all, and stores each path
+    // once instead of once per symbol in it.
+    //
+    // Iteration order is unchanged: tuple `(a, b)` compares first-then-second,
+    // which is exactly outer-then-inner over nested maps.
+    let mut by_name: BTreeMap<Sym, Vec<Sym>> = BTreeMap::new();
+    let mut by_file_freefn: BTreeMap<Sym, BTreeMap<Sym, Vec<Sym>>> = BTreeMap::new();
+    let mut by_file_qual: BTreeMap<Sym, BTreeMap<Sym, Sym>> = BTreeMap::new();
+    let mut by_id_dir: BTreeMap<Sym, Sym> = BTreeMap::new();
     // path -> sorted (name, id) of module-level fns defined in that file
-    let mut by_file_funcs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut by_file_funcs: BTreeMap<Sym, Vec<(Sym, Sym)>> = BTreeMap::new();
     for f in &funcs {
         by_name
-            .entry(f.name.clone())
+            .entry(Rc::clone(&f.name))
             .or_default()
-            .push(f.id.clone());
+            .push(Rc::clone(&f.id));
         if !f.qualified.contains('.') {
             by_file_freefn
-                .entry((f.file_path.clone(), f.name.clone()))
+                .entry(Rc::clone(&f.file_path))
                 .or_default()
-                .push(f.id.clone());
+                .entry(Rc::clone(&f.name))
+                .or_default()
+                .push(Rc::clone(&f.id));
             by_file_funcs
-                .entry(f.file_path.clone())
+                .entry(Rc::clone(&f.file_path))
                 .or_default()
-                .push((f.name.clone(), f.id.clone()));
+                .push((Rc::clone(&f.name), Rc::clone(&f.id)));
         }
-        by_file_qual.insert((f.file_path.clone(), f.qualified.clone()), f.id.clone());
-        let dir = f
-            .file_path
-            .rsplit_once('/')
-            .map(|(d, _)| d)
-            .unwrap_or("")
-            .to_string();
-        by_id_dir.insert(f.id.clone(), dir);
+        by_file_qual
+            .entry(Rc::clone(&f.file_path))
+            .or_default()
+            .insert(Rc::clone(&f.qualified), Rc::clone(&f.id));
+        let dir: Sym = Rc::from(f.file_path.rsplit_once('/').map(|(d, _)| d).unwrap_or(""));
+        by_id_dir.insert(Rc::clone(&f.id), dir);
     }
     for v in by_name.values_mut() {
         v.sort();
     }
-    for v in by_file_freefn.values_mut() {
-        v.sort();
+    for inner in by_file_freefn.values_mut() {
+        for v in inner.values_mut() {
+            v.sort();
+        }
     }
     for v in by_file_funcs.values_mut() {
         v.sort();
@@ -413,8 +471,8 @@ pub fn resolve_full(
     for ((caller, local), classes) in binding_classes {
         if classes.len() == 1 {
             let class_id = classes.into_iter().next().unwrap();
-            if let Some(file) = class_idx.by_id_file.get(&class_id) {
-                bindings.insert((caller, local), (class_id, file.clone()));
+            if let Some(file) = class_idx.by_id_file.get(class_id.as_str()) {
+                bindings.insert((caller, local), (class_id.clone(), file.to_string()));
             }
         }
         // size != 1 → DROP (reassigned/shadowed to multiple distinct classes)
@@ -571,11 +629,11 @@ pub fn resolve_full(
 
 /// A lightweight view of the type nodes (Class/Interface/Enum) for heritage.
 struct TypeView {
-    id: String,
-    name: String,
-    qualified: String,
-    file_path: String,
-    label: String,
+    id: Sym,
+    name: Sym,
+    qualified: Sym,
+    file_path: Sym,
+    label: Sym,
 }
 
 fn type_views(nodes: &[Node]) -> Vec<TypeView> {
@@ -583,11 +641,15 @@ fn type_views(nodes: &[Node]) -> Vec<TypeView> {
         .iter()
         .filter(|n| n.labels == ["Class"] || n.labels == ["Interface"] || n.labels == ["Enum"])
         .map(|n| TypeView {
-            id: n.id.clone(),
-            name: prop_str(n, "name"),
-            qualified: prop_str(n, "qualified_name"),
-            file_path: prop_str(n, "file_path"),
-            label: n.labels.first().cloned().unwrap_or_default(),
+            id: Rc::from(n.id.as_str()),
+            name: prop_sym(n, "name"),
+            qualified: prop_sym(n, "qualified_name"),
+            file_path: prop_sym(n, "file_path"),
+            label: n
+                .labels
+                .first()
+                .map(|l| Rc::from(l.as_str()))
+                .unwrap_or_else(|| Rc::from("")),
         })
         .collect()
 }
@@ -605,19 +667,19 @@ fn dir_of(path: &str) -> &str {
 /// future map could forget to `.sort()` and break determinism.
 struct TypeIndex {
     /// base_name -> sorted type ids.
-    by_name: BTreeMap<String, Vec<String>>,
-    /// (file_path, qualified_name) -> type id.
-    by_file_qual: BTreeMap<(String, String), String>,
-    /// (file_path, name) -> sorted type ids.
-    by_file_name: BTreeMap<(String, String), Vec<String>>,
+    by_name: BTreeMap<Sym, Vec<Sym>>,
+    /// file_path -> qualified_name -> type id.
+    by_file_qual: BTreeMap<Sym, BTreeMap<Sym, Sym>>,
+    /// file_path -> name -> sorted type ids.
+    by_file_name: BTreeMap<Sym, BTreeMap<Sym, Vec<Sym>>>,
     /// type id -> first label (Class/Interface/Enum). Used by C# label-refine.
-    by_id_label: BTreeMap<String, String>,
+    by_id_label: BTreeMap<Sym, Sym>,
     /// type id -> qualified_name.
-    by_id_qual: BTreeMap<String, String>,
+    by_id_qual: BTreeMap<Sym, Sym>,
     /// type id -> directory of its file.
-    by_id_dir: BTreeMap<String, String>,
+    by_id_dir: BTreeMap<Sym, Sym>,
     /// type id -> file_path.
-    by_id_file: BTreeMap<String, String>,
+    by_id_file: BTreeMap<Sym, Sym>,
 }
 
 impl TypeIndex {
@@ -625,33 +687,40 @@ impl TypeIndex {
     /// nodes to include (e.g. Class-only vs Class/Interface/Enum) by passing
     /// the matching `TypeView` slice.
     fn build(types: &[TypeView]) -> Self {
-        let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut by_file_qual: BTreeMap<(String, String), String> = BTreeMap::new();
-        let mut by_file_name: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-        let mut by_id_label: BTreeMap<String, String> = BTreeMap::new();
-        let mut by_id_qual: BTreeMap<String, String> = BTreeMap::new();
-        let mut by_id_dir: BTreeMap<String, String> = BTreeMap::new();
-        let mut by_id_file: BTreeMap<String, String> = BTreeMap::new();
+        let mut by_name: BTreeMap<Sym, Vec<Sym>> = BTreeMap::new();
+        let mut by_file_qual: BTreeMap<Sym, BTreeMap<Sym, Sym>> = BTreeMap::new();
+        let mut by_file_name: BTreeMap<Sym, BTreeMap<Sym, Vec<Sym>>> = BTreeMap::new();
+        let mut by_id_label: BTreeMap<Sym, Sym> = BTreeMap::new();
+        let mut by_id_qual: BTreeMap<Sym, Sym> = BTreeMap::new();
+        let mut by_id_dir: BTreeMap<Sym, Sym> = BTreeMap::new();
+        let mut by_id_file: BTreeMap<Sym, Sym> = BTreeMap::new();
         for t in types {
             by_name
-                .entry(t.name.clone())
+                .entry(Rc::clone(&t.name))
                 .or_default()
-                .push(t.id.clone());
-            by_file_qual.insert((t.file_path.clone(), t.qualified.clone()), t.id.clone());
+                .push(Rc::clone(&t.id));
+            by_file_qual
+                .entry(Rc::clone(&t.file_path))
+                .or_default()
+                .insert(Rc::clone(&t.qualified), Rc::clone(&t.id));
             by_file_name
-                .entry((t.file_path.clone(), t.name.clone()))
+                .entry(Rc::clone(&t.file_path))
                 .or_default()
-                .push(t.id.clone());
-            by_id_label.insert(t.id.clone(), t.label.clone());
-            by_id_qual.insert(t.id.clone(), t.qualified.clone());
-            by_id_dir.insert(t.id.clone(), dir_of(&t.file_path).to_string());
-            by_id_file.insert(t.id.clone(), t.file_path.clone());
+                .entry(Rc::clone(&t.name))
+                .or_default()
+                .push(Rc::clone(&t.id));
+            by_id_label.insert(Rc::clone(&t.id), Rc::clone(&t.label));
+            by_id_qual.insert(Rc::clone(&t.id), Rc::clone(&t.qualified));
+            by_id_dir.insert(Rc::clone(&t.id), Rc::from(dir_of(&t.file_path)));
+            by_id_file.insert(Rc::clone(&t.id), Rc::clone(&t.file_path));
         }
         for v in by_name.values_mut() {
             v.sort();
         }
-        for v in by_file_name.values_mut() {
-            v.sort();
+        for inner in by_file_name.values_mut() {
+            for v in inner.values_mut() {
+                v.sort();
+            }
         }
         TypeIndex {
             by_name,
@@ -670,11 +739,11 @@ impl TypeIndex {
             .iter()
             .filter(|n| n.labels == ["Class"])
             .map(|n| TypeView {
-                id: n.id.clone(),
-                name: prop_str(n, "name"),
-                qualified: prop_str(n, "qualified_name"),
-                file_path: prop_str(n, "file_path"),
-                label: "Class".to_string(),
+                id: Rc::from(n.id.as_str()),
+                name: prop_sym(n, "name"),
+                qualified: prop_sym(n, "qualified_name"),
+                file_path: prop_sym(n, "file_path"),
+                label: Rc::from("Class"),
             })
             .collect();
         Self::build(&types)
@@ -733,7 +802,7 @@ pub fn resolve_heritage_full(
         };
         // D-CS: C# refines edge_type from the resolved target's label.
         let edge_type = if h.label_refine {
-            match idx.by_id_label.get(&to_id).map(|s| s.as_str()) {
+            match idx.by_id_label.get(to_id.as_str()).map(|s| &**s) {
                 Some("Interface") => "IMPLEMENTS".to_string(),
                 Some("Class") => "INHERITS".to_string(),
                 _ => h.edge_type.clone(),
@@ -815,15 +884,15 @@ fn resolve_constructions(
 /// rungs most→least precise, stopping at the first hit. None = unresolved/skip.
 fn resolve_base(
     h: &RawHeritage,
-    by_name: &BTreeMap<String, Vec<String>>,
-    by_file_qual: &BTreeMap<(String, String), String>,
-    by_file_name: &BTreeMap<(String, String), Vec<String>>,
+    by_name: &BTreeMap<Sym, Vec<Sym>>,
+    by_file_qual: &BTreeMap<Sym, BTreeMap<Sym, Sym>>,
+    by_file_name: &BTreeMap<Sym, BTreeMap<Sym, Vec<Sym>>>,
     import_targets: &ImportTargets,
-    by_id_qual: &BTreeMap<String, String>,
-    by_id_dir: &BTreeMap<String, String>,
+    by_id_qual: &BTreeMap<Sym, Sym>,
+    by_id_dir: &BTreeMap<Sym, Sym>,
 ) -> Option<(String, &'static str, f64)> {
     // Rung 1: same-file, scope-aware (reproduces today's in-file edges).
-    if let Some(from_qual) = by_id_qual.get(&h.from_id) {
+    if let Some(from_qual) = by_id_qual.get(h.from_id.as_str()) {
         let scope: Vec<&str> = from_qual.split('.').collect();
         for i in (0..scope.len()).rev() {
             let candidate = if i == 0 {
@@ -831,14 +900,20 @@ fn resolve_base(
             } else {
                 format!("{}.{}", scope[..i].join("."), h.base_name)
             };
-            if let Some(id) = by_file_qual.get(&(h.from_path.clone(), candidate)) {
-                return Some((id.clone(), "exact", 1.0));
+            if let Some(id) = by_file_qual
+                .get(h.from_path.as_str())
+                .and_then(|m| m.get(candidate.as_str()))
+            {
+                return Some((id.to_string(), "exact", 1.0));
             }
         }
     }
-    if let Some(ids) = by_file_name.get(&(h.from_path.clone(), h.base_name.clone())) {
+    if let Some(ids) = by_file_name
+        .get(h.from_path.as_str())
+        .and_then(|m| m.get(h.base_name.as_str()))
+    {
         if ids.len() == 1 {
-            return Some((ids[0].clone(), "exact", 1.0));
+            return Some((ids[0].to_string(), "exact", 1.0));
         }
     }
 
@@ -846,33 +921,36 @@ fn resolve_base(
     if let Some((target_path, original)) =
         import_targets.get(&(h.from_file_id.clone(), h.base_name.clone()))
     {
-        if let Some(ids) = by_file_name.get(&(target_path.clone(), original.clone())) {
+        if let Some(ids) = by_file_name
+            .get(target_path.as_str())
+            .and_then(|m| m.get(original.as_str()))
+        {
             if ids.len() == 1 {
-                return Some((ids[0].clone(), "exact", 1.0));
+                return Some((ids[0].to_string(), "exact", 1.0));
             }
         }
     }
 
     // Rung 3: same-directory unique (only when the deriving file is non-root).
-    if let Some(ids) = by_name.get(&h.base_name) {
+    if let Some(ids) = by_name.get(h.base_name.as_str()) {
         if ids.len() > 1 {
             let dir = dir_of(&h.from_path);
             if !dir.is_empty() {
-                let local: Vec<&String> = ids
+                let local: Vec<&Sym> = ids
                     .iter()
-                    .filter(|id| by_id_dir.get(*id).map(|d| d.as_str()) == Some(dir))
+                    .filter(|id| by_id_dir.get(&***id).map(|d| &**d) == Some(dir))
                     .collect();
                 if local.len() == 1 {
-                    return Some((local[0].clone(), "name_match", 0.8));
+                    return Some((local[0].to_string(), "name_match", 0.8));
                 }
             }
         }
     }
 
     // Rung 4: repo-wide unique.
-    if let Some(ids) = by_name.get(&h.base_name) {
+    if let Some(ids) = by_name.get(h.base_name.as_str()) {
         if ids.len() == 1 {
-            return Some((ids[0].clone(), "name_match", 0.7));
+            return Some((ids[0].to_string(), "name_match", 0.7));
         }
         // Rung 5 (D-AMBIG): >1 → skip (no edge).
         return None;
