@@ -1,7 +1,7 @@
 {
   "name": "reposkein",
   "displayName": "RepoSkein",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Deterministic code-graph MCP server: structural navigation, semantic find, impact analysis, and architecture decision records for the current repo. Zero infrastructure — the graph lives in .reposkein/ and the indexer binary is fetched on first run.",
   "author": { "name": "Marcus Nagy Ong" },
   "license": "Apache-2.0",
@@ -13,7 +13,7 @@
     "reposkein": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@reposkein/mcp@0.9.0"],
+      "args": ["-y", "@reposkein/mcp@0.9.1"],
       "env": {
         "REPOSKEIN_REPO_PATH": "${CLAUDE_PROJECT_DIR}"
       }

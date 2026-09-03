@@ -6,6 +6,34 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-03
+
+### Changed
+
+- Cross-file resolution interns its symbols. A dozen indexes were built over the
+  same identifiers and each held its own `String` — a function id lived in
+  `by_name`, `by_file_freefn`, `by_file_funcs`, `by_file_qual` and `by_id_dir`,
+  a type id in seven more — so the same ~90-character string was allocated six
+  or seven times over. `Rc<str>` makes those clones a pointer bump.
+
+  The tuple-keyed indexes were nested (`path -> name -> value`) rather than
+  interned in place. `BTreeMap<(String, String), _>` cannot be looked up by
+  `(&str, &str)`, so every call site previously built an owned key with
+  `.clone()`; nesting lets the same lookup go through `&str` twice with no
+  allocation at all. Tuple `(a, b)` compares first-then-second, which is
+  exactly outer-then-inner over nested maps, so iteration order — and therefore
+  the emitted graph — is unchanged.
+
+  Measured on a real 13,394-node repository, five runs each: mean peak RSS
+  **180.1 → 168.1 MiB** (−12.0 MiB, 6.7%), with variance tightening from
+  178.3–181.5 to 167.2–169.3. Scaled to a federated root of ~10 repos
+  (~130k nodes, ~1.9 GB peak) that is on the order of 120 MiB.
+
+  Output is byte-identical, verified both by the determinism gates and by
+  diffing `nodes.jsonl`/`edges.jsonl` against the released v0.9.0 binary on a
+  real repository. (REP-45)
+
+
 ## [0.9.0] - 2026-09-03
 
 Memory. Every figure below is measured, not estimated — the shape that
