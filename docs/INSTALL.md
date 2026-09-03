@@ -80,6 +80,8 @@ If the user is unsure → recommend **JSONL**. Suggest Neo4j only when they expl
 
 If **Neo4j**: ask for `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` or run the bundled docker-compose Neo4j (which uses `neo4j://localhost:7687`, user `neo4j`, password `reposkeintest`).
 
+> **RAM prerequisite.** Neo4j and the local embedding server both run in Docker's Linux VM, whose memory is reserved from the host — a 32 GB machine does not give them 32 GB. Stock Docker Desktop allocates ~8 GiB. Budget **~2 GiB for Neo4j and ~3 GiB for the embedding server**, so running both wants a VM of at least 6 GiB (Docker Desktop → Settings → Resources). The bundled compose file bounds both; see [`NEO4J.md`](NEO4J.md#memory).
+
 ### Q3 — Semantic embeddings: off, cloud, or local?
 
 `semantic_find` works deterministically out-of-the-box (BM25F lexical) with **no embeddings**. The hybrid embedding tier is **opt-in** and fuses lexical + cosine via RRF.

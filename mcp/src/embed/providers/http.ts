@@ -22,11 +22,21 @@
  *   REPOSKEIN_EMBED_DIMS     (required; output dimension of the local model)
  */
 
-import type { EmbeddingProvider, EmbedKind } from "../provider.js";
+import type { EmbeddingProvider, EmbedKind, BatchLimits } from "../provider.js";
 
 const DEFAULT_DIMS = 1024;
 /** Default embedding request timeout in ms. Override with REPOSKEIN_EMBED_TIMEOUT_MS. */
 const DEFAULT_TIMEOUT_MS = 30000;
+/**
+ * Conservative per-request limits for a *local* server.
+ *
+ * The self-hosted path is usually one CPU process holding one model, so a
+ * request's activations are the memory that matters. Keep requests small and
+ * let the batcher issue more of them; lower still with
+ * REPOSKEIN_EMBED_MAX_BATCH_ITEMS / _TOKENS.
+ */
+const DEFAULT_MAX_BATCH_ITEMS = 32;
+const DEFAULT_MAX_BATCH_TOKENS = 8192;
 
 interface OpenAIEmbedResponse {
   data: Array<{ embedding: number[] }>;
@@ -73,8 +83,11 @@ export class HttpEmbeddingProvider implements EmbeddingProvider {
   id(): string { return this._id; }
   modelId(): string { return this._modelId; }
   dims(): number { return this._dims; }
+  limits(): BatchLimits {
+    return { maxItems: DEFAULT_MAX_BATCH_ITEMS, maxTokens: DEFAULT_MAX_BATCH_TOKENS };
+  }
 
-  async embed(texts: string[], kind: EmbedKind): Promise<number[][]> {
+  async embedBatch(texts: string[], kind: EmbedKind): Promise<number[][]> {
     if (texts.length === 0) return [];
 
     const body = {

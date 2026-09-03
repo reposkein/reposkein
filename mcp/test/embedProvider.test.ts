@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { providerFromEnv } from "../src/embed/provider.js";
-import type { EmbeddingProvider, EmbedKind } from "../src/embed/provider.js";
+import type { EmbeddingProvider, EmbedKind, BatchLimits } from "../src/embed/provider.js";
 
 /**
  * MockProvider: deterministic fake embeddings from a simple hash of the text.
@@ -30,8 +30,9 @@ export class MockProvider implements EmbeddingProvider {
   id(): string { return this._id; }
   modelId(): string { return this._modelId; }
   dims(): number { return this._dims; }
+  limits(): BatchLimits { return { maxItems: 1000, maxTokens: 1_000_000 }; }
 
-  async embed(texts: string[], kind: EmbedKind): Promise<number[][]> {
+  async embedBatch(texts: string[], kind: EmbedKind): Promise<number[][]> {
     this.embedCallCount++;
     this.lastTexts = texts;
     this.lastKind = kind;
@@ -185,7 +186,7 @@ describe("MockProvider", () => {
   it("tracks embed calls and records arguments", async () => {
     const p = new MockProvider({ dims: 4 });
     expect(p.embedCallCount).toBe(0);
-    await p.embed(["a", "b"], "document");
+    await p.embedBatch(["a", "b"], "document");
     expect(p.embedCallCount).toBe(1);
     expect(p.lastTexts).toEqual(["a", "b"]);
     expect(p.lastKind).toBe("document");
@@ -194,6 +195,6 @@ describe("MockProvider", () => {
   it("throws when throwError is set (for fallback testing)", async () => {
     const p = new MockProvider();
     p.throwError = new Error("simulated network failure");
-    await expect(p.embed(["x"], "query")).rejects.toThrow("simulated network failure");
+    await expect(p.embedBatch(["x"], "query")).rejects.toThrow("simulated network failure");
   });
 });

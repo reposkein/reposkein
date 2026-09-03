@@ -1,4 +1,5 @@
 import { statSync, readFileSync, existsSync } from "node:fs";
+import { readLines } from "./jsonlLines.js";
 import { join, resolve, isAbsolute, sep } from "node:path";
 import {
   CypherUnsupportedError,
@@ -10,11 +11,11 @@ import {
 } from "./GraphStore.js";
 import type { TargetRow } from "../profile/types.js";
 import {
-  buildFederatedGraph,
+  buildFederatedGraphLines,
   emptyGraph,
   type ParsedGraph,
   type ParsedNode,
-  type RepoSource,
+  type RepoLines,
 } from "./jsonlGraph.js";
 import { loadAllSidecars, sidecarPaths, sidecarPath, upsertSidecar } from "./sidecar.js";
 import {
@@ -92,7 +93,12 @@ const hasLabel = (n: ParsedNode, l: string): boolean => n.labels.includes(l);
  *  (.reposkein/local/summaries-<agent>.jsonl). */
 export class JsonlGraphStore implements GraphStore {
   private graph: ParsedGraph = emptyGraph();
-  private stamp = "";
+  private graphStamp = "";
+  private overlayStamp = "";
+  /** Per node, the prop values the overlay overwrote — its own undo log.
+   *  A key absent before the overlay is recorded as `undefined`, so removing a
+   *  summary removes the props it added instead of leaving them behind. */
+  private overlayUndo = new Map<string, Record<string, unknown>>();
   private readonly repoPath: string;
   private readonly nodesPath: string;
   private readonly edgesPath: string;
@@ -117,26 +123,30 @@ export class JsonlGraphStore implements GraphStore {
   /** Gathers committed JSONL for the root + all transitively federated
    *  children (guarded, cycle-safe). Each child's repo_id comes from the proxy
    *  Repository node's federated_repo_id in the parent's nodes.jsonl. */
-  private collectRepos(): RepoSource[] {
-    const repos: RepoSource[] = [];
+  private collectRepos(): RepoLines[] {
+    const repos: RepoLines[] = [];
     const seen = new Set<string>();
     const visit = (dir: string, repoId: string) => {
       if (seen.has(repoId)) return;
       seen.add(repoId);
       const nodesPath = join(dir, ".reposkein", "nodes.jsonl");
       const edgesPath = join(dir, ".reposkein", "edges.jsonl");
-      let nodesText = "";
-      let edgesText = "";
-      try {
-        if (existsSync(nodesPath)) nodesText = readFileSync(nodesPath, "utf8");
-        if (existsSync(edgesPath)) edgesText = readFileSync(edgesPath, "utf8");
-      } catch {
-        return;
-      }
-      repos.push({ repoId, nodesText, edgesText });
-      // Discover children from this repo's Repository proxy nodes.
-      for (const line of nodesText.split("\n")) {
-        if (line.trim() === "") continue;
+      if (!existsSync(nodesPath) && !existsSync(edgesPath)) return;
+
+      // Lazy: nothing is read until the build iterates them, and only one line
+      // is live at a time. This used to hold the COMPLETE text of every
+      // federated repo simultaneously — a root plus ten children meant the
+      // whole federation resident at once, before a single line was parsed.
+      repos.push({
+        repoId,
+        nodes: { [Symbol.iterator]: () => readLines(nodesPath) },
+        edges: { [Symbol.iterator]: () => readLines(edgesPath) },
+      });
+
+      // Discover children from this repo's Repository proxy nodes. A second
+      // streaming pass over the same file, which costs I/O rather than the
+      // second full line array the old code built.
+      for (const line of readLines(nodesPath)) {
         let obj: Record<string, unknown>;
         try {
           obj = JSON.parse(line) as Record<string, unknown>;
@@ -157,16 +167,16 @@ export class JsonlGraphStore implements GraphStore {
     return repos;
   }
 
-  /** Reloads the graph when anything it reads has changed on disk.
+  /** Two inputs, two keys.
    *
-   *  The key covers the derived JSONL, the committed summary shards, AND every
-   *  agent's sidecar. Keying on nodes/edges alone made a `git pull` that
-   *  brought in only a teammate's shards invisible for the life of the process
-   *  — the shards are committed and the derived graph is not, so that is the
-   *  ordinary case. Leaving the sidecars out did the same to a second agent
-   *  working the same checkout, which the overlay explicitly promises to
-   *  surface. Stat calls only, O(shards + sidecars). */
-  private freshnessKey(): string {
+   *  The derived JSONL and the authored overlay change independently and cost
+   *  wildly different amounts to re-read. Keying both together meant every
+   *  `write_semantic_summary` — which rewrites this machine's sidecar — threw
+   *  the parsed graph away and re-read nodes.jsonl, edges.jsonl and every
+   *  shard on the next call. The node had already been updated in place, so
+   *  that rebuild bought nothing; a summarisation loop of K writes cost K full
+   *  reloads. Stat calls only, O(shards + sidecars). */
+  private graphKey(): string {
     let m = 0;
     try {
       if (existsSync(this.nodesPath)) m = Math.max(m, statSync(this.nodesPath).mtimeMs);
@@ -174,25 +184,95 @@ export class JsonlGraphStore implements GraphStore {
     } catch {
       m = 0;
     }
-    return `${m}|${summaryShardsStamp(this.repoPath, sidecarPaths)}`;
+    return String(m);
+  }
+
+  /** The committed shards AND every agent's sidecar.
+   *
+   *  Keying on nodes/edges alone made a `git pull` that brought in only a
+   *  teammate's shards invisible for the life of the process — the shards are
+   *  committed and the derived graph is not, so that is the ordinary case.
+   *  Leaving the sidecars out did the same to a second agent working the same
+   *  checkout, which the overlay explicitly promises to surface. */
+  private overlayKey(): string {
+    return summaryShardsStamp(this.repoPath, sidecarPaths);
   }
 
   private ensureFresh(): void {
-    const key = this.freshnessKey();
-    if (key === this.stamp) return;
-    this.stamp = key;
+    const graphKey = this.graphKey();
+    const overlayKey = this.overlayKey();
+    if (graphKey === this.graphStamp && overlayKey === this.overlayStamp) return;
+
+    if (graphKey !== this.graphStamp) {
+      this.graphStamp = graphKey;
+      // A fresh graph carries no overlay, and the undo log refers to the node
+      // objects that were just discarded.
+      this.overlayUndo.clear();
+      this.overlayStamp = "";
+      try {
+          this.graph = buildFederatedGraphLines(this.collectRepos());
+      } catch {
+        this.graph = emptyGraph();
+        return;
+      }
+    }
+
+    if (overlayKey !== this.overlayStamp) {
+      // Only bank the stamp when the overlay actually landed. Banking it first
+      // and then throwing would leave the graph with its previous overlay
+      // already undone and no new one applied — every summary silently gone
+      // until some unrelated change moved the key again.
+      this.overlayStamp = this.applyOverlay() ? overlayKey : "";
+    }
+  }
+
+  /** Write overlay props onto a node, remembering what they displaced.
+   *
+   *  Every in-place summary mutation goes through here — the overlay fold AND
+   *  writeSummary. A mutation that skipped it would be invisible to the undo
+   *  pass, and worse, the NEXT fold would record the value it wrote as the
+   *  pre-overlay original: removing that summary would then restore it. */
+  private overlayProps(id: string, n: ParsedNode, props: Record<string, unknown>): void {
+    const saved = this.overlayUndo.get(id) ?? {};
+    for (const [k, v] of Object.entries(props)) {
+      // First writer wins the undo slot: it holds the pristine value, and a
+      // later overwrite would replace it with an already-overlaid one.
+      if (!Object.prototype.hasOwnProperty.call(saved, k)) {
+        saved[k] = Object.prototype.hasOwnProperty.call(n.props, k) ? n.props[k] : undefined;
+      }
+      n.props[k] = v;
+    }
+    this.overlayUndo.set(id, saved);
+  }
+
+  /** Fold the authored summaries onto the parsed graph, in place.
+   *
+   *  The committed shards first, then this machine's sidecars as a strictly
+   *  newer source, through the same rules the indexer uses. So what the server
+   *  serves is exactly what the next `index` will write — including which side
+   *  wins a divergence.
+   *
+   *  The shard overlay only matters between indexes (`index` already grafts
+   *  them into nodes.jsonl), but that is the ordinary case: a teammate's
+   *  summaries arrive with a `git pull` long before anyone re-indexes.
+   *  Sidecars are every agent's, not just this process's, so two agents on one
+   *  checkout see each other's work.
+   *
+   *  Re-applying is now routine rather than a side effect of a rebuild, so it
+   *  undoes the previous overlay first: a summary that has gone away must take
+   *  its props with it. */
+  private applyOverlay(): boolean {
     try {
-      this.graph = buildFederatedGraph(this.collectRepos());
-      // Overlay authored summaries: the committed shards first, then this
-      // machine's sidecars as a strictly newer source, folded through the same
-      // rules the indexer uses. So what the server serves is exactly what the
-      // next `index` will write — including which side wins a divergence.
-      //
-      // The shard overlay only matters between indexes (`index` already grafts
-      // them into nodes.jsonl), but that is the ordinary case: a teammate's
-      // summaries arrive with a `git pull` long before anyone re-indexes.
-      // Sidecars are every agent's, not just this process's, so two agents on
-      // one checkout see each other's work.
+      for (const [id, saved] of this.overlayUndo) {
+        const n = this.graph.byId.get(id);
+        if (!n) continue;
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete n.props[k];
+          else n.props[k] = v;
+        }
+      }
+      this.overlayUndo.clear();
+
       const shards = loadSummaryShards(this.repoPath);
       const overlay = emptyAccumulator();
       absorbSummarySource(overlay, {
@@ -210,14 +290,16 @@ export class JsonlGraphStore implements GraphStore {
         // are stamped with the node's live hash at write time, so an unchanged
         // node passes this the same way a shard record does.
         if (rec.props.summary_of_hash !== n.props.content_hash) continue;
-        for (const [k, v] of Object.entries(rec.props)) n.props[k] = v;
+        this.overlayProps(id, n, rec.props);
       }
       // Divergence losers — from a merged shard, or from two agents writing the
       // same node — are authored prose. Preserve them for a human rather than
       // discarding them on the read path.
       recordSummaryConflicts(this.repoPath, [...shards.conflicts, ...overlay.conflicts]);
+      return true;
     } catch {
-      this.graph = emptyGraph();
+      // An unreadable overlay must not cost the caller the graph.
+      return false;
     }
   }
 
@@ -301,11 +383,16 @@ export class JsonlGraphStore implements GraphStore {
     const oldSummary = str(n.props.semantic_summary);
     const oldHash = str(n.props.summary_of_hash);
     const stale_replaced = oldSummary !== null && oldHash !== chash;
-    n.props.semantic_summary = fields.summary;
-    n.props.summary_of_hash = chash;
-    n.props.summary_model = fields.model;
-    n.props.summary_at = fields.at;
-    n.props.summary_by = fields.by;
+    // Through overlayProps, not raw assignment: this mutation has to be
+    // undoable like any other overlay write, or the next fold would mistake
+    // what it wrote for the node's pre-overlay state.
+    this.overlayProps(id, n, {
+      semantic_summary: fields.summary,
+      summary_of_hash: chash,
+      summary_model: fields.model,
+      summary_at: fields.at,
+      summary_by: fields.by,
+    });
     upsertSidecar(this.sidecarFile, {
       id,
       semantic_summary: fields.summary,

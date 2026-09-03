@@ -1,0 +1,120 @@
+# Optional Neo4j backend for RepoSkein.
+#
+# Most users never need this. The committed JSONL is the source of truth and the
+# zero-infra default; Neo4j is a reconstructable projection for very large
+# graphs and raw Cypher at scale. See docs/NEO4J.md.
+#
+# Create the password secret BEFORE applying — there is deliberately no literal
+# in this file:
+#
+#   kubectl create namespace reposkein
+#   kubectl -n reposkein create secret generic reposkein-neo4j \
+#     --from-literal=auth="neo4j/$(openssl rand -base64 24 | tr -d /=+)"
+#   kubectl apply -f neo4j.yaml
+#
+# Then point the MCP server at it:
+#   kubectl -n reposkein port-forward svc/reposkein-neo4j 7687:7687
+#   REPOSKEIN_STORE=neo4j NEO4J_URI=neo4j://localhost:7687 NEO4J_USER=neo4j \
+#   NEO4J_PASSWORD=... reposkein-mcp
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: reposkein
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reposkein-neo4j
+  namespace: reposkein
+spec:
+  selector:
+    app: reposkein-neo4j
+  ports:
+    - name: bolt
+      port: 7687
+      targetPort: bolt
+    - name: http
+      port: 7474
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: reposkein-neo4j
+  namespace: reposkein
+spec:
+  serviceName: reposkein-neo4j
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reposkein-neo4j
+  template:
+    metadata:
+      labels:
+        app: reposkein-neo4j
+    spec:
+      containers:
+        - name: neo4j
+          image: neo4j:5-community
+          ports:
+            - name: bolt
+              containerPort: 7687
+            - name: http
+              containerPort: 7474
+          env:
+            - name: NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: reposkein-neo4j
+                  key: auth
+            # The Neo4j image pins only the page cache. Heap is left to JVM
+            # ergonomics, which take 25% of whatever the container can see — so
+            # it must be set explicitly, exactly as in docker-compose.yml.
+            # initial == max: no full GC just to resize the heap.
+            - name: NEO4J_server_memory_heap_initial__size
+              value: 1G
+            - name: NEO4J_server_memory_heap_max__size
+              value: 1G
+            - name: NEO4J_server_memory_pagecache_size
+              value: 512M
+            # A hand-written Cypher query should fail loudly rather than take
+            # the pod with it. The importer writes in bounded chunks already.
+            - name: NEO4J_dbms_memory_transaction_total_max
+              value: 512M
+            - name: NEO4J_db_memory_transaction_max
+              value: 256M
+            - name: NEO4J_server_jvm_additional
+              value: "-XX:+ExitOnOutOfMemoryError"
+          resources:
+            requests:
+              memory: 1500Mi
+              cpu: 500m
+            limits:
+              # Heap 1G + pagecache 512M + metaspace, GC, Netty and Lucene
+              # native. Matches the compose file.
+              memory: 2Gi
+              cpu: "2"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket: { port: bolt }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket: { port: bolt }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            # RepoSkein's graph is small: a 200k-node repository is ~130 MB of
+            # JSONL. This is mostly room for transaction logs.
+            storage: 10Gi

@@ -24,7 +24,7 @@ import { rankCorpus } from "../search/bm25f.js";
 import type { ToolResult } from "./readCypher.js";
 import type { EmbeddingProvider } from "../embed/provider.js";
 import { providerFromEnv } from "../embed/provider.js";
-import { embedCorpus } from "../embed/cache.js";
+import { ensureCorpusVectors } from "../embed/corpusVectors.js";
 import { cosineRank, rrf, type ViaKind } from "../embed/hybrid.js";
 import { neutralizeSummary } from "../guard/summaryValidation.js";
 
@@ -133,12 +133,19 @@ export function makeSemanticFind(
       if (provider !== null) {
         // Attempt hybrid embedding path — catch all errors → fallback to lexical
         try {
-          const corpusVecs = await embedCorpus(provider, repoPath, corpus);
-          const queryVecs = await provider.embed([query], "query");
+          const vectors = await ensureCorpusVectors(provider, repoPath, corpus);
+          const queryVecs = await provider.embedBatch([query], "query");
           const queryVec = queryVecs[0];
 
-          if (queryVec && corpusVecs.size > 0) {
-            const cosineRanked = cosineRank(queryVec, corpusVecs);
+          if (queryVec && vectors.size > 0) {
+            // Ranking happens inside the store: it allocates the k results,
+            // not one scored object per corpus node. Restricted to the corpus
+            // actually in play, since `kind` may have filtered it.
+            const cosineRanked = vectors.topK(
+              queryVec,
+              MAX_LIMIT * 5,
+              new Set(corpus.map((n) => n.id))
+            );
 
             // Build RankedItem arrays for RRF
             const lexicalItems = lexicalRanked.map((r) => ({ id: r.node.id, score: r.score }));

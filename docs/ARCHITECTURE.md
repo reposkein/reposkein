@@ -29,6 +29,7 @@ cross-repo federation, and the full per-language support matrix.
 - **Meaning is just-in-time.** Summaries are written as the agent visits nodes; they're content-hash-stamped (so they flag stale when code changes) and committed to git.
 - **Derived stays out of git.** `nodes.jsonl` and `edges.jsonl` are a pure function of your working tree, so committing them buys nothing a re-index cannot rebuild while making every branch that touches code conflict with every other. Only `summaries/`, `meta.json` and `config.toml` are committed — and the summaries are sharded by a hash of the node id, so two branches summarising different code write different files and never meet in a merge.
 - **Local-first.** The JSONL on disk is the source of truth; the optional [Neo4j backend](NEO4J.md) is a reconstructable projection most users never need.
+- **Big files are recorded, not parsed.** A tree-sitter syntax tree runs roughly 10–20× the size of its source, so one vendored or minified bundle can dominate an index's memory. Files over `[index] max_file_bytes` in `.reposkein/config.toml` (default 2 MiB) still get a `File` node — the tree does contain them — but are never handed to an extractor, and the skip is reported as a warning. The setting is committed rather than an env var, so the graph stays a byte-identical function of the tree on every machine.
 
 Full detail on the shard scheme, merge behavior, and upgrading an existing repo off a single-file `summaries.jsonl`: [`INSTALL.md` §4.2](INSTALL.md#42-merge-behaviour-for-reposkein).
 

@@ -1,0 +1,155 @@
+# Embedding server for RepoSkein's optional hybrid `semantic_find` tier.
+#
+# Optional. RepoSkein's default is JSONL on disk with no cluster, no database
+# and no embeddings; nothing here is required to use it.
+#
+# Why run it here rather than on your machine: on macOS and Windows the
+# container runs CPU-only inside a VM whose memory is reserved from the host, so
+# it competes with your editor for the same RAM. On a cluster it runs on a node
+# with real headroom, and your MCP server just points at a different URL.
+#
+#   kubectl apply -f embed.yaml
+#   kubectl -n reposkein port-forward svc/reposkein-embed 8080:8080
+#   REPOSKEIN_EMBED_PROVIDER=http \
+#   REPOSKEIN_EMBED_URL=http://127.0.0.1:8080/v1/embeddings \
+#   REPOSKEIN_EMBED_MODEL=voyage-4-nano \
+#   REPOSKEIN_EMBED_DIMS=1024
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: reposkein
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reposkein-embed-models
+  namespace: reposkein
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      # voyage-4-nano is ~693 MB on disk; the rest is headroom for a second
+      # model if you change EMBED_MODEL without wiping the volume.
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reposkein-embed
+  namespace: reposkein
+spec:
+  selector:
+    app: reposkein-embed
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reposkein-embed
+  namespace: reposkein
+spec:
+  # One. The model is loaded per process, so each replica costs another ~1.4 GB
+  # of weights. Scale out only if you have measured that you need to.
+  replicas: 1
+  strategy:
+    # The PVC is ReadWriteOnce: a rolling update would deadlock waiting for a
+    # second pod to mount a volume the first still holds.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: reposkein-embed
+  template:
+    metadata:
+      labels:
+        app: reposkein-embed
+    spec:
+      securityContext:
+        # The image already runs as an unprivileged user; say so explicitly so
+        # a restrictive PodSecurity policy admits the pod rather than the
+        # cluster rejecting it at deploy time.
+        #
+        # runAsUser is REQUIRED alongside runAsNonRoot, not decoration: the
+        # image declares `USER app`, a name, and the kubelet cannot resolve a
+        # name to a uid without running the image. With runAsNonRoot set and no
+        # numeric uid it refuses to start the container at all —
+        # CreateContainerConfigError, "image has non-numeric user (app)".
+        runAsNonRoot: true
+        runAsUser: 1000 # `app` in the image
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: embed
+          image: ghcr.io/reposkein/reposkein-embed:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: EMBED_MODEL
+              value: voyageai/voyage-4-nano
+            - name: EMBED_DIMS
+              # The client's REPOSKEIN_EMBED_DIMS must equal this.
+              value: "1024"
+            # Same budget as docker-compose.yml — deliberately one set of
+            # numbers, not two that drift apart.
+            - name: EMBED_MAX_BATCH_ITEMS
+              value: "64"
+            - name: EMBED_MAX_INPUT_CHARS
+              value: "8000"
+            - name: EMBED_MAX_CONCURRENCY
+              value: "2"
+            - name: EMBED_MAX_SEQ_LENGTH
+              value: "1024"
+            - name: EMBED_NUM_THREADS
+              value: "4"
+            - name: OMP_NUM_THREADS
+              value: "4"
+            - name: MKL_NUM_THREADS
+              value: "4"
+            - name: MALLOC_ARENA_MAX
+              value: "2"
+            # Only for gated or private models. Create the secret first:
+            #   kubectl -n reposkein create secret generic reposkein-embed \
+            #     --from-literal=hf-token=hf_xxx
+            # - name: HF_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: reposkein-embed, key: hf-token }
+          resources:
+            requests:
+              # ~1.4 GB of fp32 weights plus the runtime, before any request.
+              memory: 2Gi
+              cpu: "1"
+            limits:
+              # Matches docker-compose.yml. The scheduler refuses to place a pod
+              # it cannot fit, and an OOM kills this container rather than
+              # taking a workstation down with it.
+              memory: 3Gi
+              cpu: "4"
+          volumeMounts:
+            - name: models
+              mountPath: /home/app/.cache/huggingface
+          # The model is downloaded on first start and that can take minutes on
+          # a cold volume. A startup probe is the right tool: it holds the other
+          # probes off entirely rather than making them lenient forever.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60 # up to 10 minutes to become ready
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 30
+            # Generous: /health is served on the same thread pool as inference,
+            # so a busy server should not be restarted for being busy.
+            failureThreshold: 5
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: reposkein-embed-models

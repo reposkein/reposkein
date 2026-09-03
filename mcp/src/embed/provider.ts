@@ -14,6 +14,20 @@
 
 export type EmbedKind = "document" | "query";
 
+/**
+ * What a single request to this provider may carry.
+ *
+ * The shared batcher (embed/batch.ts) enforces these; an adapter never chunks
+ * for itself. `maxTokens` is measured with estimateTokens, a deterministic
+ * length heuristic — it is a memory budget, not a billing figure.
+ */
+export interface BatchLimits {
+  /** Max texts in one request. */
+  maxItems: number;
+  /** Max estimated tokens across one request's texts. */
+  maxTokens: number;
+}
+
 export interface EmbeddingProvider {
   /** Stable provider id, e.g. "voyage". Forms part of the cache key. */
   id(): string;
@@ -21,13 +35,19 @@ export interface EmbeddingProvider {
   modelId(): string;
   /** Output vector dimensionality, e.g. 1024. Part of the cache key. */
   dims(): number;
+  /** Per-request limits. Callers go through embedInBatches, which enforces them. */
+  limits(): BatchLimits;
   /**
-   * Embed a batch of texts.
+   * Embed ONE request's worth of texts. Implementations must NOT batch
+   * internally: the caller has already sized this call against limits().
+   * Splitting here would put the memory bound back inside each adapter, which
+   * is exactly how the local HTTP adapter came to send whole corpora at once.
+   *
    * kind maps to Voyage's input_type ("document" vs "query") — Voyage uses
    * asymmetric embeddings so this materially changes the vectors.
    * Returns one number[] per input, in order.
    */
-  embed(texts: string[], kind: EmbedKind): Promise<number[][]>;
+  embedBatch(texts: string[], kind: EmbedKind): Promise<number[][]>;
 }
 
 /**

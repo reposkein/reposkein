@@ -1,46 +1,61 @@
 /**
- * Derived embedding cache for semantic_find.
+ * How a corpus node becomes a document string, and how that string is keyed.
  *
- * Vectors are stored in `.reposkein/local/embeddings/<providerId>__<modelId>__d<dims>.jsonl`
- * — gitignored, never committed, never required.
+ * Storage itself lives in vectorStore.ts — fixed-stride float32 beside a JSONL
+ * index — and the orchestration in corpusVectors.ts. This file is only the
+ * text: what we embed, and the hash that decides when to re-embed it.
  *
- * Cache key / invalidation:
- *   1. Filename encodes provider + model + dims (switching any → different file → miss).
- *   2. Per-row `doc_hash` must match hash of the freshly-built document string
- *      (changes to qualified_name, signature, semantic_summary, or file_path → re-embed).
- *   Note: CorpusNode does not expose the committed content_hash, so doc_hash is the
- *   sole per-row invalidation key. It covers all code/summary changes since the doc
- *   string is built from the same fields (qualified_name + signature + summary + file_path).
- *
- * Mirrors the atomic-write + best-effort pattern from mcp/src/store/sidecar.ts.
- * Any I/O or provider failure in embedCorpus must NOT propagate — callers catch and
- * fall back to the lexical result.
+ * Invalidation: `doc_hash` must match the hash of a freshly-built document
+ * string, so a change to qualified_name, signature, semantic_summary or
+ * file_path re-embeds the node. CorpusNode does not expose the committed
+ * content_hash, so this is the sole per-row key — which is sufficient, since
+ * the document is built from exactly those fields.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
-import type { EmbeddingProvider } from "./provider.js";
 import type { CorpusNode } from "../store/GraphStore.js";
-
-/** One cached record per embedded node. */
-export interface EmbedRecord {
-  id: string;
-  /** doc_hash: SHA-256 of the embedded document string (invalidation key). */
-  doc_hash: string;
-  v: number[];
-}
 
 /** Build the document string for a corpus node (deterministic, same for all calls).
  *  voyage-code-3 is code-specialized, so including code-ish context plays to its strength.
  *  Document = qualified_name + optional signature + optional summary + file_path.
  */
-export function buildDocString(node: CorpusNode): string {
-  const parts: string[] = [node.qualified_name];
-  if (node.signature) parts.push(node.signature);
-  if (node.summary) parts.push(node.summary);
-  parts.push(node.file_path);
-  return parts.join("\n");
+export function buildDocString(node: CorpusNode, budget = docCharBudget()): string {
+  const head: string[] = [node.qualified_name];
+  if (node.signature) head.push(node.signature);
+  const tail: string[] = [node.file_path];
+
+  // Trim the SUMMARY to fit, not the tail. It is the one unbounded field —
+  // agents author it — and the identifiers are what a search matches on.
+  const overhead = [...head, ...tail].join("\n").length + (node.summary ? 1 : 0);
+  let summary = node.summary ?? "";
+  if (overhead + summary.length > budget) {
+    summary = summary.slice(0, Math.max(0, budget - overhead));
+  }
+
+  const parts = [...head];
+  if (summary) parts.push(summary);
+  parts.push(...tail);
+  // Last resort, for a node whose own name and path already exceed the budget.
+  return parts.join("\n").slice(0, budget);
+}
+
+/**
+ * Longest document string we will hand a provider.
+ *
+ * This is a correctness bound, not a preference. The bundled embedding server
+ * rejects an over-long input with 413 (EMBED_MAX_INPUT_CHARS, default 8000),
+ * and one rejected document fails the whole embed call — so `semantic_find`
+ * would fall back to lexical, and keep falling back, because the offending
+ * document is never embedded and every later attempt reissues it. Keep this at
+ * or below the server's cap.
+ */
+export const DEFAULT_DOC_CHAR_BUDGET = 8000;
+
+export function docCharBudget(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["REPOSKEIN_EMBED_MAX_INPUT_CHARS"];
+  if (raw === undefined) return DEFAULT_DOC_CHAR_BUDGET;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_DOC_CHAR_BUDGET;
 }
 
 /** SHA-256 of a string, hex-encoded. */
@@ -58,155 +73,4 @@ export function sanitizeModelId(modelId: string): string {
   // Replace /, \, :, *, ?, ", <, >, |, NUL and control chars with "_"
   // Also collapse multiple consecutive underscores to avoid "___"-confusing names.
   return modelId.replace(/[/\\:*?"<>|\x00-\x1f]+/g, "_");
-}
-
-/** Derive the cache file path for a given repo root + provider. */
-export function cachePath(repoPath: string, provider: EmbeddingProvider): string {
-  const safeModel = sanitizeModelId(provider.modelId());
-  const name = `${provider.id()}__${safeModel}__d${provider.dims()}`;
-  return join(repoPath, ".reposkein", "local", "embeddings", `${name}.jsonl`);
-}
-
-/**
- * Load cache into a Map keyed by node id. Missing file → empty map. Best-effort.
- *
- * Row validation: any row whose `v` is not an array of finite numbers of the
- * correct length (matching provider.dims) is dropped — treated as a miss so
- * it will be re-embedded.  Pass `expectedDims` to enable dim-length validation;
- * omit (undefined) to skip the length check (e.g. when the provider is not known
- * at load time — but the embedCorpus function always passes it).
- */
-export function loadCache(path: string, expectedDims?: number): Map<string, EmbedRecord> {
-  const map = new Map<string, EmbedRecord>();
-  if (!existsSync(path)) return map;
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return map;
-  }
-  for (const line of text.split("\n")) {
-    if (line.trim() === "") continue;
-    try {
-      const o = JSON.parse(line) as Record<string, unknown>;
-      if (
-        typeof o["id"] === "string" &&
-        typeof o["doc_hash"] === "string" &&
-        Array.isArray(o["v"])
-      ) {
-        const v = o["v"] as unknown[];
-        // Validate: every element must be a finite number
-        const allFinite = v.every((x) => typeof x === "number" && isFinite(x));
-        if (!allFinite) continue; // corrupt row — drop it (will be re-embedded)
-        // Validate: length must match the expected dims (when known)
-        if (expectedDims !== undefined && v.length !== expectedDims) continue;
-        map.set(o["id"] as string, {
-          id: o["id"] as string,
-          doc_hash: o["doc_hash"] as string,
-          v: v as number[],
-        });
-      }
-    } catch {
-      // skip malformed line
-    }
-  }
-  return map;
-}
-
-/** Rewrite the cache file (sorted by id). Atomic: write to .tmp then rename. Best-effort. */
-export function saveCache(path: string, records: Map<string, EmbedRecord>): void {
-  const lines = [...records.keys()].sort().map((id) => {
-    const r = records.get(id)!;
-    return JSON.stringify({ id: r.id, doc_hash: r.doc_hash, v: r.v });
-  });
-  const tmp = `${path}.tmp`;
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(tmp, lines.length ? lines.join("\n") + "\n" : "");
-    renameSync(tmp, path);
-  } catch {
-    // best-effort; write failure must not break the tool call
-    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* ignore */ }
-  }
-}
-
-/**
- * Embed the corpus nodes using the provider, leveraging the cache for nodes
- * whose doc_hash hasn't changed.
- *
- * Returns a Map<id, vector> for all nodes in corpus.
- * Only embeds nodes whose cache entry is missing or stale.
- * Persists updated cache to disk.
- *
- * Throws on embedding failure — callers must catch and fall back to lexical.
- */
-export async function embedCorpus(
-  provider: EmbeddingProvider,
-  repoPath: string,
-  corpus: CorpusNode[],
-): Promise<Map<string, number[]>> {
-  const path = cachePath(repoPath, provider);
-  const cache = loadCache(path, provider.dims());
-
-  // Compute document strings + hashes for all corpus nodes
-  const docStrings = new Map<string, string>();
-  const docHashes = new Map<string, string>();
-  for (const node of corpus) {
-    const doc = buildDocString(node);
-    docStrings.set(node.id, doc);
-    docHashes.set(node.id, sha256(doc));
-  }
-
-  // Identify which nodes need embedding (cache miss or stale doc_hash)
-  const toEmbed: CorpusNode[] = [];
-  for (const node of corpus) {
-    const cached = cache.get(node.id);
-    const isHit = cached !== undefined && cached.doc_hash === docHashes.get(node.id);
-    if (!isHit) {
-      toEmbed.push(node);
-    }
-  }
-
-  // Embed only misses
-  if (toEmbed.length > 0) {
-    const texts = toEmbed.map((n) => docStrings.get(n.id)!);
-    const vectors = await provider.embed(texts, "document");
-
-    // Guard: provider must return exactly as many vectors as we sent.
-    // A count mismatch means the provider is broken or mis-aligned — throw so
-    // the caller's try/catch falls back to lexical.  Never write corrupt data.
-    if (vectors.length !== toEmbed.length) {
-      throw new Error(
-        `Embedding provider returned ${vectors.length} vectors for ${toEmbed.length} texts — count mismatch; refusing to cache`
-      );
-    }
-
-    const expectedDims = provider.dims();
-    for (let i = 0; i < toEmbed.length; i++) {
-      const vec = vectors[i];
-      if (!Array.isArray(vec) || vec.length !== expectedDims) {
-        throw new Error(
-          `Embedding provider returned a vector with ${Array.isArray(vec) ? vec.length : "undefined"} dims at index ${i}; expected ${expectedDims} — refusing to cache`
-        );
-      }
-      const node = toEmbed[i]!;
-      cache.set(node.id, {
-        id: node.id,
-        doc_hash: docHashes.get(node.id)!,
-        v: vec,
-      });
-    }
-
-    saveCache(path, cache);
-  }
-
-  // Build result map for all corpus nodes
-  const result = new Map<string, number[]>();
-  for (const node of corpus) {
-    const rec = cache.get(node.id);
-    if (rec) {
-      result.set(node.id, rec.v);
-    }
-  }
-  return result;
 }

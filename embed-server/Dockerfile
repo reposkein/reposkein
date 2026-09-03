@@ -35,6 +35,15 @@ ENV EMBED_MODEL=voyageai/voyage-4-nano \
     EMBED_DIMS=1024 \
     HF_HOME=/home/app/.cache/huggingface
 
+# Create the cache directory IN THE IMAGE, owned by app. This is load-bearing,
+# not tidiness: when a named volume is mounted over a path that does not exist
+# in the image, Docker creates it root-owned, and the app user then cannot write
+# the model it just downloaded —
+#   PermissionError: [Errno 13] Permission denied: '/home/app/.cache/huggingface/hub'
+# on the FIRST request of a fresh `docker compose up`. When the path does exist,
+# Docker seeds the volume from it and carries this ownership across.
+RUN mkdir -p /home/app/.cache/huggingface && chown -R app:app /home/app/.cache
+
 USER app
 
 EXPOSE 8080

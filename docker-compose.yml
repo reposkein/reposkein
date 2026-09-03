@@ -25,6 +25,10 @@ services:
     # Plain `docker compose up` builds locally from ./embed-server instead.
     image: ghcr.io/reposkein/reposkein-embed:latest
     build: ./embed-server
+    # Hard ceiling. Without it the container can consume the whole Docker VM —
+    # on a stock Docker Desktop install that is ~8 GiB shared with Neo4j, and
+    # the host stalls long before you see an error.
+    mem_limit: 3g
     ports:
       # Bind to localhost only by default — the embed server is a local helper,
       # not a service to expose on the LAN. To expose on all interfaces
@@ -34,6 +38,12 @@ services:
       EMBED_MODEL: voyageai/voyage-4-nano
       EMBED_DIMS: "1024" # voyage-4-nano Matryoshka: 2048 | 1024 | 512 | 256
       # HF_TOKEN: "<token>"          # only for gated/private models
+      # Bound the math libraries. Left unset, they spawn one thread per core and
+      # glibc opens an arena per thread — memory that scales with your CPU count
+      # for no throughput gain on a request this small.
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - hf-cache:/home/app/.cache/huggingface # persist the model across restarts
     restart: unless-stopped
@@ -51,8 +61,28 @@ services:
   neo4j:
     image: neo4j:5-community
     profiles: ["neo4j"]
+    # The Neo4j docker image pins only the page cache; heap is left to JVM
+    # ergonomics, which take 25% of whatever RAM the container can see. With no
+    # limit that is the entire Docker VM. Both numbers are set explicitly below,
+    # and mem_limit makes the JVM read the cgroup rather than the VM.
+    #
+    # RepoSkein's graph is small (a 200k-node repo is ~130 MB on disk), so 1G
+    # heap / 512M page cache is generous. For a dedicated box, generate your own:
+    #   neo4j-admin server memory-recommendation --memory=8g --docker
+    mem_limit: 2g
     environment:
       NEO4J_AUTH: neo4j/reposkeintest
+      # initial == max: no full GC just to resize the heap.
+      NEO4J_server_memory_heap_initial__size: 1G
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512M
+      # Per-transaction ceilings. The importer writes in chunks, but a hand-written
+      # Cypher query should fail loudly rather than take the container with it.
+      NEO4J_dbms_memory_transaction_total_max: 512M
+      NEO4J_db_memory_transaction_max: 256M
+      # Die on heap exhaustion instead of thrashing the GC indefinitely — a
+      # restarted container is recoverable, a wedged one is not.
+      NEO4J_server_jvm_additional: "-XX:+ExitOnOutOfMemoryError"
     ports:
       - "7474:7474"
       - "7687:7687"

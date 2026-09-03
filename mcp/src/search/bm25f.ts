@@ -71,67 +71,91 @@ function fieldTokens(value: string): string[] {
   return tokenize(value);
 }
 
-interface NodeDoc {
-  node: CorpusNode;
-  fields: Record<Field, string[]>;
-  fieldLengths: Record<Field, number>;
+/** Count occurrences without allocating. The old form was
+ *  `toks.filter((t) => t === qt).length`, which built a throwaway array for
+ *  every (document x field x query token) — millions of them on a large
+ *  corpus, for a number. */
+function countOccurrences(toks: string[], needle: string): number {
+  let n = 0;
+  for (const t of toks) if (t === needle) n++;
+  return n;
+}
+
+/** Tokenize one node's fields. Callers must NOT retain the result. */
+function tokenizeFields(node: CorpusNode): { fields: Record<Field, string[]>; lengths: Record<Field, number> } {
+  const fields = {} as Record<Field, string[]>;
+  const lengths = {} as Record<Field, number>;
+  for (const f of FIELDS) {
+    const toks = fieldTokens((node as unknown as Record<string, string>)[f] ?? "");
+    fields[f] = toks;
+    lengths[f] = toks.length;
+  }
+  return { fields, lengths };
 }
 
 /**
  * Rank corpus nodes by BM25F for the given query, returning up to limit results.
  * Deterministic: identical corpus + query → identical ranking.
+ *
+ * Takes an ITERABLE, and iterates it twice — BM25F needs corpus-wide statistics
+ * (average field lengths, document frequencies) before any document can be
+ * scored, so the corpus cannot be consumed in a single pass. What it does NOT
+ * do any more is RETAIN the corpus: the old form built a tokenized copy of all
+ * five fields of every node and held it through scoring, then collected every
+ * positive-scoring document before sorting. Retention is now bounded by
+ * `limit`; tokens are discarded as soon as a document has been scored.
+ *
+ * The two passes cost tokenization twice. That is the trade: CPU proportional
+ * to the corpus, memory proportional to the limit — which is the right way
+ * round for a query path that runs inside an agent's tool call.
+ *
+ * The iterable must be re-iterable (an array, or a generator function's result
+ * re-invoked). Results are identical to the single-pass form: same maths, and
+ * the same total ordering (score desc, id asc) applied to a bounded heap.
  */
-export function rankCorpus(corpus: CorpusNode[], query: string, limit: number): Scored[] {
-  if (corpus.length === 0 || !query.trim()) return [];
+export function rankCorpus(corpus: Iterable<CorpusNode>, query: string, limit: number): Scored[] {
+  if (limit <= 0 || !query.trim()) return [];
 
-  // 1. Tokenize query
   const queryTokens = tokenize(query);
   if (queryTokens.length === 0) return [];
   const uniqueQueryTokens = [...new Set(queryTokens)];
 
-  // 2. Build per-node documents in id-sorted order (corpus is already sorted by store)
-  const docs: NodeDoc[] = corpus.map((node) => {
-    const fields = {} as Record<Field, string[]>;
-    const fieldLengths = {} as Record<Field, number>;
-    for (const f of FIELDS) {
-      const value = (node as unknown as Record<string, string>)[f] ?? "";
-      const toks = fieldTokens(value);
-      fields[f] = toks;
-      fieldLengths[f] = toks.length;
-    }
-    return { node, fields, fieldLengths };
-  });
-
-  // 3. Compute average field lengths across corpus
-  const avgFieldLen = {} as Record<Field, number>;
-  for (const f of FIELDS) {
-    const total = docs.reduce((sum, d) => sum + d.fieldLengths[f], 0);
-    avgFieldLen[f] = docs.length > 0 ? total / docs.length : 1;
-  }
-
-  // 4. Build inverted index: token → set of doc indices (for IDF)
+  // Pass 1 — corpus statistics only. Field-length totals and document
+  // frequencies; every token is dropped as soon as it has been counted.
+  const totalFieldLen = {} as Record<Field, number>;
+  for (const f of FIELDS) totalFieldLen[f] = 0;
   const dfMap = new Map<string, number>();
-  for (const qt of uniqueQueryTokens) {
-    let df = 0;
-    for (const doc of docs) {
-      // Check if token appears in any field of this doc
-      let found = false;
+  for (const qt of uniqueQueryTokens) dfMap.set(qt, 0);
+  let N = 0;
+
+  for (const node of corpus) {
+    N++;
+    const { fields, lengths } = tokenizeFields(node);
+    for (const f of FIELDS) totalFieldLen[f] += lengths[f];
+    for (const qt of uniqueQueryTokens) {
       for (const f of FIELDS) {
-        if (doc.fields[f].includes(qt)) {
-          found = true;
+        if (fields[f].includes(qt)) {
+          dfMap.set(qt, dfMap.get(qt)! + 1);
           break;
         }
       }
-      if (found) df++;
     }
-    dfMap.set(qt, df);
   }
+  if (N === 0) return [];
 
-  const N = docs.length;
+  const avgFieldLen = {} as Record<Field, number>;
+  for (const f of FIELDS) avgFieldLen[f] = totalFieldLen[f] / N;
 
-  // 5. Score each document
-  const scored: Scored[] = [];
-  for (const doc of docs) {
+  // Pass 2 — score, keeping only the best `limit`.
+  const best: Scored[] = [];
+  const worseThanWorst = (score: number, id: string): boolean => {
+    const w = best[best.length - 1]!;
+    if (score !== w.score) return score < w.score;
+    return id > w.node.id; // ties: lower id wins, matching the sort below
+  };
+
+  for (const node of corpus) {
+    const { fields, lengths } = tokenizeFields(node);
     let totalScore = 0;
     const matchedTokens = new Set<string>();
 
@@ -142,16 +166,13 @@ export function rankCorpus(corpus: CorpusNode[], query: string, limit: number): 
       // IDF: ln(1 + (N - df + 0.5) / (df + 0.5))  — always positive for df < N
       const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
 
-      // Weighted TF across fields (BM25F-style)
       let weightedTf = 0;
       for (const f of FIELDS) {
-        const toks = doc.fields[f];
-        const tf = toks.filter((t) => t === qt).length;
+        const tf = countOccurrences(fields[f], qt);
         if (tf === 0) continue;
         matchedTokens.add(qt);
-        const fieldLen = doc.fieldLengths[f];
+        const fieldLen = lengths[f];
         const avgLen = avgFieldLen[f] > 0 ? avgFieldLen[f] : 1;
-        // BM25 saturation with length normalization
         const saturated = (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * (fieldLen / avgLen)));
         weightedTf += WEIGHTS[f]! * saturated;
       }
@@ -159,19 +180,20 @@ export function rankCorpus(corpus: CorpusNode[], query: string, limit: number): 
       totalScore += idf * weightedTf;
     }
 
-    if (totalScore > 0) {
-      // Round to fixed precision to prevent cross-platform FP jitter from reordering ties
-      const roundedScore = Math.round(totalScore * SCORE_PRECISION) / SCORE_PRECISION;
-      scored.push({ node: doc.node, score: roundedScore, matched: [...matchedTokens].sort() });
-    }
+    if (totalScore <= 0) continue;
+    // Round to fixed precision to prevent cross-platform FP jitter from
+    // reordering ties.
+    const score = Math.round(totalScore * SCORE_PRECISION) / SCORE_PRECISION;
+    if (best.length >= limit && worseThanWorst(score, node.id)) continue;
+
+    best.push({ node, score, matched: [...matchedTokens].sort() });
+    best.sort((a, b) => {
+      const diff = b.score - a.score;
+      if (diff !== 0) return diff;
+      return a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0;
+    });
+    if (best.length > limit) best.pop();
   }
 
-  // 6. Sort: descending score, tie-break ascending node_id
-  scored.sort((a, b) => {
-    const diff = b.score - a.score;
-    if (diff !== 0) return diff;
-    return a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0;
-  });
-
-  return scored.slice(0, limit);
+  return best;
 }

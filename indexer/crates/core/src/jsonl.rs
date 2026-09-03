@@ -57,17 +57,32 @@ pub fn edge_line(edge: &Edge) -> String {
     canonical_object(&edge_object(edge), &["from", "type", "to"])
 }
 
-/// Serializes nodes sorted by `id`, one per line, LF-terminated (incl. final).
-pub fn nodes_to_jsonl(nodes: &[Node]) -> String {
+/// Writes nodes sorted by `id`, one per line, LF-terminated (incl. final).
+///
+/// Streaming, so the whole output never exists as one `String`. The sort and
+/// dedup still happen up front — they are what makes the output a byte-
+/// identical function of the tree, and moving them would change the invariant
+/// rather than the memory profile. Only the ACCUMULATION goes away: one line is
+/// live at a time instead of a 150-400 MB buffer on a large repository.
+pub fn write_nodes<W: std::io::Write>(w: &mut W, nodes: &[Node]) -> std::io::Result<()> {
     let mut sorted: Vec<&Node> = nodes.iter().collect();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     sorted.dedup_by(|a, b| a.id == b.id);
-    let mut out = String::new();
     for n in sorted {
-        out.push_str(&node_line(n));
-        out.push('\n');
+        w.write_all(node_line(n).as_bytes())?;
+        w.write_all(b"\n")?;
     }
-    out
+    Ok(())
+}
+
+/// Serializes nodes sorted by `id`, one per line, LF-terminated (incl. final).
+///
+/// The in-memory form, kept because tests and the determinism gates compare
+/// whole outputs. Production writes through `write_nodes`.
+pub fn nodes_to_jsonl(nodes: &[Node]) -> String {
+    let mut out: Vec<u8> = Vec::new();
+    write_nodes(&mut out, nodes).expect("writing to a Vec cannot fail");
+    String::from_utf8(out).expect("node lines are valid UTF-8")
 }
 
 /// Merges two edges that share a `(from, type, to)` key into one, deterministically.
@@ -110,9 +125,11 @@ fn merge_edge_props(base: &Edge, other: &Edge) -> Edge {
 /// rather than silently collapsed keep-first, so colliding edges with different
 /// props never silently drop data. The merge is order-independent and therefore
 /// deterministic.
-pub fn edges_to_jsonl(edges: &[Edge]) -> String {
+pub fn write_edges<W: std::io::Write>(w: &mut W, edges: &[Edge]) -> std::io::Result<()> {
     // Keyed merge into a BTreeMap keeps output sorted by (from, type, to) and
-    // makes the dedup an explicit, deterministic prop-merge.
+    // makes the dedup an explicit, deterministic prop-merge. That map has to
+    // exist before anything can be emitted — the merge is the guarantee — so
+    // what streaming removes here is the second full copy: the output text.
     let mut by_key: std::collections::BTreeMap<(String, String, String), Edge> =
         std::collections::BTreeMap::new();
     for e in edges {
@@ -127,12 +144,18 @@ pub fn edges_to_jsonl(edges: &[Edge]) -> String {
             }
         }
     }
-    let mut out = String::new();
     for e in by_key.values() {
-        out.push_str(&edge_line(e));
-        out.push('\n');
+        w.write_all(edge_line(e).as_bytes())?;
+        w.write_all(b"\n")?;
     }
-    out
+    Ok(())
+}
+
+/// The in-memory form, kept for tests and the determinism gates.
+pub fn edges_to_jsonl(edges: &[Edge]) -> String {
+    let mut out: Vec<u8> = Vec::new();
+    write_edges(&mut out, edges).expect("writing to a Vec cannot fail");
+    String::from_utf8(out).expect("edge lines are valid UTF-8")
 }
 
 use anyhow::{anyhow, Result};

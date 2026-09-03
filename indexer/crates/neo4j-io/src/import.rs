@@ -27,6 +27,57 @@ fn schema_already_exists(err_msg: &str) -> bool {
     err_msg.contains("EquivalentSchemaRuleAlreadyExists") || err_msg.contains("already exists")
 }
 
+/// Rows per import transaction.
+///
+/// Chosen to keep one in-flight batch small enough that it never approaches a
+/// default server transaction cap, while staying large enough that round-trips
+/// do not dominate. Override with REPOSKEIN_IMPORT_CHUNK_SIZE.
+pub const DEFAULT_IMPORT_CHUNK_SIZE: usize = 5_000;
+
+fn import_chunk_size() -> usize {
+    parse_chunk_size(std::env::var("REPOSKEIN_IMPORT_CHUNK_SIZE").ok().as_deref())
+}
+
+/// Split out from the env lookup so the parsing rule is testable without
+/// mutating process state from a test that runs beside others.
+fn parse_chunk_size(raw: Option<&str>) -> usize {
+    raw.and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_IMPORT_CHUNK_SIZE)
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::*;
+
+    #[test]
+    fn unset_or_malformed_falls_back_to_the_default() {
+        assert_eq!(parse_chunk_size(None), DEFAULT_IMPORT_CHUNK_SIZE);
+        assert_eq!(parse_chunk_size(Some("")), DEFAULT_IMPORT_CHUNK_SIZE);
+        assert_eq!(parse_chunk_size(Some("lots")), DEFAULT_IMPORT_CHUNK_SIZE);
+        // Zero would make chunks() panic; treat it as absent rather than
+        // letting a typo take the import down.
+        assert_eq!(parse_chunk_size(Some("0")), DEFAULT_IMPORT_CHUNK_SIZE);
+        assert_eq!(parse_chunk_size(Some("-1")), DEFAULT_IMPORT_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn an_explicit_size_is_honoured() {
+        assert_eq!(parse_chunk_size(Some("500")), 500);
+    }
+
+    #[test]
+    fn chunking_covers_every_row_exactly_once() {
+        // The property that matters: chunking is a partition, not a filter.
+        let rows: Vec<usize> = (0..12_003).collect();
+        let seen: Vec<usize> = rows
+            .chunks(parse_chunk_size(Some("5000")))
+            .flat_map(|c| c.iter().copied())
+            .collect();
+        assert_eq!(seen, rows);
+    }
+}
+
 impl Neo4jStore {
     /// Idempotent constraints + indexes (no APOC). Safe to call repeatedly AND
     /// concurrently: an "already exists" race on creation is treated as success.
@@ -60,6 +111,7 @@ impl Neo4jStore {
                 let label = n.labels.first().cloned().unwrap_or_else(|| "Rs".into());
                 by_label.entry(label).or_default().push(n);
             }
+            let chunk = import_chunk_size();
             for (label, nodes) in &by_label {
                 // Label is from our fixed schema set — safe to interpolate.
                 let q = format!(
@@ -68,20 +120,29 @@ impl Neo4jStore {
                      SET n += row.props, n.repo_id = $repo \
                      SET n:{label}"
                 );
-                let mut rows = BoltList::new();
-                for n in nodes {
-                    let mut row = BoltMap::new();
-                    row.put(BoltString::from("id"), BoltType::from(n.id.clone()));
-                    row.put(BoltString::from("props"), props_to_bolt_map(&n.props));
-                    rows.push(BoltType::Map(row));
+                // One transaction per chunk, not per label. A whole label's
+                // worth of nodes was previously built as a single BoltList —
+                // a deep copy of every property — and then serialised into one
+                // contiguous buffer before it left the process. On a large repo
+                // the Function batch alone was the biggest object in memory,
+                // and it ran straight into the server's transaction cap, which
+                // defaults to a fraction of the heap.
+                for slice in nodes.chunks(chunk) {
+                    let mut rows = BoltList::new();
+                    for n in slice {
+                        let mut row = BoltMap::new();
+                        row.put(BoltString::from("id"), BoltType::from(n.id.clone()));
+                        row.put(BoltString::from("props"), props_to_bolt_map(&n.props));
+                        rows.push(BoltType::Map(row));
+                    }
+                    self.graph
+                        .run(
+                            query(&q)
+                                .param("rows", BoltType::List(rows))
+                                .param("repo", repo),
+                        )
+                        .await?;
                 }
-                self.graph
-                    .run(
-                        query(&q)
-                            .param("rows", BoltType::List(rows))
-                            .param("repo", repo),
-                    )
-                    .await?;
             }
 
             // Edges grouped by type.
@@ -97,17 +158,21 @@ impl Neo4jStore {
                      MERGE (a)-[r:{typ}]->(b) \
                      SET r += row.props"
                 );
-                let mut rows = BoltList::new();
-                for e in edges {
-                    let mut row = BoltMap::new();
-                    row.put(BoltString::from("from"), BoltType::from(e.from.clone()));
-                    row.put(BoltString::from("to"), BoltType::from(e.to.clone()));
-                    row.put(BoltString::from("props"), props_to_bolt_map(&e.props));
-                    rows.push(BoltType::Map(row));
+                // Same chunking as nodes: CALLS is typically the largest
+                // single relationship set in the graph.
+                for slice in edges.chunks(chunk) {
+                    let mut rows = BoltList::new();
+                    for e in slice {
+                        let mut row = BoltMap::new();
+                        row.put(BoltString::from("from"), BoltType::from(e.from.clone()));
+                        row.put(BoltString::from("to"), BoltType::from(e.to.clone()));
+                        row.put(BoltString::from("props"), props_to_bolt_map(&e.props));
+                        rows.push(BoltType::Map(row));
+                    }
+                    self.graph
+                        .run(query(&q).param("rows", BoltType::List(rows)))
+                        .await?;
                 }
-                self.graph
-                    .run(query(&q).param("rows", BoltType::List(rows)))
-                    .await?;
             }
             Ok(())
         })

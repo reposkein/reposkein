@@ -54,11 +54,40 @@ fn basename_of(rel_path: &str) -> String {
 }
 
 /// Options for `index_tree_with`.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct IndexOptions<'a> {
     pub federation: bool,
     /// Optional per-file extraction cache (skips re-parsing unchanged files).
     pub cache: Option<&'a dyn cache::ExtractCache>,
+    /// Files larger than this are recorded as File nodes but never parsed.
+    /// `0` disables the cap.
+    ///
+    /// A tree-sitter CST runs roughly 10–20x the size of its source, so a
+    /// vendored minified bundle or a generated file turns a few megabytes on
+    /// disk into a gigabyte of peak RSS — for symbols nobody searches for.
+    ///
+    /// Comes from `[index] max_file_bytes` in the repo's committed
+    /// `.reposkein/config.toml`, NOT from the environment: the graph is a pure
+    /// function of the working tree, and a machine-local knob that changed
+    /// which files get parsed would break that.
+    pub max_file_bytes: u64,
+}
+
+/// Default `[index] max_file_bytes`. Hand-written source is far below this;
+/// what sits above it is generated, vendored, or minified.
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+impl Default for IndexOptions<'_> {
+    /// Hand-written so the cap defaults to DEFAULT_MAX_FILE_BYTES. A derived
+    /// Default would make it 0, which under the guard below means "no cap" —
+    /// the opposite of what every caller wants by default.
+    fn default() -> Self {
+        Self {
+            federation: false,
+            cache: None,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+        }
+    }
 }
 
 /// Information about a federated child repository detected during indexing.
@@ -109,6 +138,7 @@ pub fn index_tree_with(
     let mut all_heritage: Vec<extractor::RawHeritage> = Vec::new();
     let mut all_module_aliases: Vec<extractor::RawModuleAlias> = Vec::new();
     let mut all_constructions: Vec<extractor::RawConstruction> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     // Repository node (root_path is "." by convention).
     nodes.push(
@@ -180,31 +210,48 @@ pub fn index_tree_with(
 
             edges.push(Edge::new(parent_node, "CONTAINS", file_id.clone()));
 
+            let oversized = opts.max_file_bytes > 0 && bytes.len() as u64 > opts.max_file_bytes;
             if let Some(ext_impl) = extractors.iter().find(|x| x.language() == language) {
-                let ctx = FileContext {
-                    repo,
-                    rel_path: &e.rel_path,
-                    file_id: &file_id,
-                    source: &bytes,
-                };
-                let mut extracted = match opts.cache {
-                    Some(c) => match c.get(repo, &e.rel_path, &content_hash) {
-                        Some(hit) => hit,
-                        None => {
-                            let fresh = ext_impl.extract(&ctx);
-                            c.put(repo, &e.rel_path, &content_hash, &fresh);
-                            fresh
-                        }
-                    },
-                    None => ext_impl.extract(&ctx),
-                };
-                nodes.append(&mut extracted.nodes);
-                edges.append(&mut extracted.edges);
-                all_imports.append(&mut extracted.imports);
-                all_calls.append(&mut extracted.calls);
-                all_heritage.append(&mut extracted.heritage);
-                all_module_aliases.append(&mut extracted.module_aliases);
-                all_constructions.append(&mut extracted.constructions);
+                if oversized {
+                    // The File node stays — the tree really does contain this file,
+                    // and dropping it would move the graph around under callers.
+                    // Only the parse is skipped, which is where the memory goes.
+                    //
+                    // Checked INSIDE the extractor branch on purpose: a 3 MB .json
+                    // or .lock has no extractor, so it was never going to be parsed
+                    // and warning about it would be noise the user cannot act on.
+                    warnings.push(format!(
+                        "skipped parsing {} ({} bytes exceeds [index] max_file_bytes = {})",
+                        e.rel_path,
+                        bytes.len(),
+                        opts.max_file_bytes
+                    ));
+                } else {
+                    let ctx = FileContext {
+                        repo,
+                        rel_path: &e.rel_path,
+                        file_id: &file_id,
+                        source: &bytes,
+                    };
+                    let mut extracted = match opts.cache {
+                        Some(c) => match c.get(repo, &e.rel_path, &content_hash) {
+                            Some(hit) => hit,
+                            None => {
+                                let fresh = ext_impl.extract(&ctx);
+                                c.put(repo, &e.rel_path, &content_hash, &fresh);
+                                fresh
+                            }
+                        },
+                        None => ext_impl.extract(&ctx),
+                    };
+                    nodes.append(&mut extracted.nodes);
+                    edges.append(&mut extracted.edges);
+                    all_imports.append(&mut extracted.imports);
+                    all_calls.append(&mut extracted.calls);
+                    all_heritage.append(&mut extracted.heritage);
+                    all_module_aliases.append(&mut extracted.module_aliases);
+                    all_constructions.append(&mut extracted.constructions);
+                }
             }
         }
     }
@@ -235,7 +282,6 @@ pub fn index_tree_with(
 
     // --- Federation records for ReposkeinChild boundaries ---
     let mut children: Vec<ChildRepoInfo> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
     for b in &walk_out.boundaries {
         match b.kind {
             walk::BoundaryKind::ReposkeinChild => {
@@ -440,6 +486,7 @@ mod tests {
             IndexOptions {
                 federation: true,
                 cache: None,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
         )
         .unwrap();
@@ -579,6 +626,120 @@ mod tests {
     }
 
     #[test]
+    fn oversized_files_are_recorded_but_never_parsed() {
+        // A vendored/minified/generated blob costs a tree-sitter CST roughly
+        // 10-20x its own size. The File node still belongs in the graph — the
+        // tree really does contain the file — but nothing should parse it.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let big = "x".repeat(4096);
+        std::fs::write(dir.path().join("src/big.py"), &big).unwrap();
+        std::fs::write(dir.path().join("src/small.py"), "print(1)\n").unwrap();
+
+        let stub = StubExtractor;
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let opts = IndexOptions {
+            federation: false,
+            cache: None,
+            max_file_bytes: 1024,
+        };
+        let out = index_tree_with(dir.path(), "r", "demo", extractors, opts).unwrap();
+
+        let has_file = |p: &str| {
+            out.graph.nodes.iter().any(|n| {
+                n.labels == ["File"] && n.props.get("path").and_then(Value::as_str) == Some(p)
+            })
+        };
+        assert!(
+            has_file("src/big.py"),
+            "the oversized file is still a File node"
+        );
+        assert!(has_file("src/small.py"));
+
+        // The stub extractor emits one Function per file it is handed.
+        let parsed: Vec<&str> = out
+            .graph
+            .nodes
+            .iter()
+            .filter(|n| n.labels == ["Function"])
+            .filter_map(|n| n.props.get("file_path").and_then(Value::as_str))
+            .collect();
+        assert!(
+            !parsed.contains(&"src/big.py"),
+            "the oversized file must not reach the extractor"
+        );
+        assert!(parsed.contains(&"src/small.py"), "normal files still parse");
+
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("src/big.py") && w.contains("max_file_bytes")),
+            "the skip is reported, not silent: {:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn oversized_file_with_no_extractor_is_not_warned_about() {
+        // A 3 MB .json or .lock was never going to be parsed — there is no
+        // extractor for it — so reporting a "skipped parsing" for it is noise
+        // the user cannot act on.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/huge.json"), "x".repeat(4096)).unwrap();
+
+        let stub = StubExtractor; // registers "python" only
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let out = index_tree_with(
+            dir.path(),
+            "r",
+            "demo",
+            extractors,
+            IndexOptions {
+                federation: false,
+                cache: None,
+                max_file_bytes: 1024,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            out.warnings.is_empty(),
+            "no extractor for .json, so nothing was skipped: {:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn max_file_bytes_zero_disables_the_cap() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/big.py"), "x".repeat(4096)).unwrap();
+
+        let stub = StubExtractor;
+        let extractors: &[&dyn extractor::Extractor] = &[&stub];
+        let out = index_tree_with(
+            dir.path(),
+            "r",
+            "demo",
+            extractors,
+            IndexOptions {
+                federation: false,
+                cache: None,
+                max_file_bytes: 0,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            out.warnings.is_empty(),
+            "no cap, no skip: {:?}",
+            out.warnings
+        );
+        assert!(out.graph.nodes.iter().any(|n| n.labels == ["Function"]));
+    }
+
+    #[test]
     fn cache_warm_run_is_byte_identical_to_cold() {
         let dir = fixture(); // has src/a.py (python) + README.md
         let stub = StubExtractor;
@@ -595,6 +756,7 @@ mod tests {
         let opts = IndexOptions {
             federation: false,
             cache: Some(&c),
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
         };
         // First pass populates the cache (cold through the cache).
         let warm1 = index_tree_with(dir.path(), "r", "demo", extractors, opts)
@@ -666,6 +828,7 @@ mod tests {
             IndexOptions {
                 federation: true,
                 cache: None,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
         )
         .unwrap();
@@ -775,6 +938,7 @@ mod tests {
             IndexOptions {
                 federation: true,
                 cache: None,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
         )
         .unwrap();
@@ -831,6 +995,7 @@ mod tests {
         let opts = IndexOptions {
             federation: true,
             cache: None,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
         };
         let g1 = index_tree_with(dir.path(), "rootid", "root", extractors, opts)
             .unwrap()

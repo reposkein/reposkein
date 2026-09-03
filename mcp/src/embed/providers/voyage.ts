@@ -19,13 +19,15 @@
  *   VOYAGE_API_KEY           (required)
  */
 
-import type { EmbeddingProvider, EmbedKind } from "../provider.js";
+import type { EmbeddingProvider, EmbedKind, BatchLimits } from "../provider.js";
 
 const VOYAGE_ENDPOINT = "https://api.voyageai.com/v1/embeddings";
 const DEFAULT_MODEL = "voyage-code-3";
 const DEFAULT_DIMS = 1024;
-/** Max texts per request (Voyage API limit). */
-const BATCH_SIZE = 1000;
+/** Max texts per request (Voyage API limit). Enforced by the shared batcher. */
+const MAX_BATCH_ITEMS = 1000;
+/** Max tokens per request (Voyage API limit). Enforced by the shared batcher. */
+const MAX_BATCH_TOKENS = 120000;
 /** Default embedding request timeout in ms. Override with REPOSKEIN_EMBED_TIMEOUT_MS. */
 const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -71,71 +73,61 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
   id(): string { return this._id; }
   modelId(): string { return this._modelId; }
   dims(): number { return this._dims; }
+  limits(): BatchLimits {
+    return { maxItems: MAX_BATCH_ITEMS, maxTokens: MAX_BATCH_TOKENS };
+  }
 
-  async embed(texts: string[], kind: EmbedKind): Promise<number[][]> {
+  async embedBatch(texts: string[], kind: EmbedKind): Promise<number[][]> {
     if (texts.length === 0) return [];
 
-    const results: number[][] = [];
-
-    // Batch up to BATCH_SIZE texts per request
-    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-      const batch = texts.slice(i, i + BATCH_SIZE);
-      const body: Record<string, unknown> = {
-        input: batch,
-        model: this._modelId,
-        input_type: kind,
-      };
-      // Only send output_dimension when the user explicitly configured it.
-      // Voyage defaults to the model's native dimensionality when omitted.
-      if (this._dimsExplicit) {
-        body["output_dimension"] = this._dims;
-      }
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this._timeoutMs);
-      let res: Response;
-      try {
-        res = await fetch(VOYAGE_ENDPOINT, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${this._apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "(no body)");
-        throw new Error(`Voyage API error ${res.status}: ${text}`);
-      }
-
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) {
-        const text = await res.text().catch(() => "(unreadable body)");
-        throw new Error(`Voyage API returned non-JSON response (${contentType}): ${text.slice(0, 200)}`);
-      }
-      const json = (await res.json()) as VoyageResponse;
-      if (!Array.isArray(json.embeddings)) {
-        throw new Error(`Voyage API response missing embeddings array: ${JSON.stringify(json)}`);
-      }
-      if (json.embeddings.length !== batch.length) {
-        throw new Error(
-          `Voyage API returned ${json.embeddings.length} embeddings for batch of ${batch.length} texts — batch count mismatch`
-        );
-      }
-      results.push(...json.embeddings);
+    const body: Record<string, unknown> = {
+      input: texts,
+      model: this._modelId,
+      input_type: kind,
+    };
+    // Only send output_dimension when the user explicitly configured it.
+    // Voyage defaults to the model's native dimensionality when omitted.
+    if (this._dimsExplicit) {
+      body["output_dimension"] = this._dims;
     }
 
-    if (results.length !== texts.length) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this._timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(VOYAGE_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this._apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "(no body)");
+      throw new Error(`Voyage API error ${res.status}: ${text}`);
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      const text = await res.text().catch(() => "(unreadable body)");
+      throw new Error(`Voyage API returned non-JSON response (${contentType}): ${text.slice(0, 200)}`);
+    }
+    const json = (await res.json()) as VoyageResponse;
+    if (!Array.isArray(json.embeddings)) {
+      throw new Error(`Voyage API response missing embeddings array: ${JSON.stringify(json)}`);
+    }
+    if (json.embeddings.length !== texts.length) {
       throw new Error(
-        `Voyage API returned ${results.length} total embeddings for ${texts.length} input texts — total count mismatch`
+        `Voyage API returned ${json.embeddings.length} embeddings for batch of ${texts.length} texts — batch count mismatch`
       );
     }
 
-    return results;
+    return json.embeddings;
   }
 }
