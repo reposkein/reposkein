@@ -6,6 +6,90 @@ All notable changes to RepoSkein. Format roughly follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-03
+
+Memory. Every figure below is measured, not estimated — the shape that
+prompted this was a **root directory federating ~10 repos**, which is how a
+13k-node workload becomes a 130k-node process.
+
+### Fixed
+
+- **The embedding server's model cache was unwritable on a fresh install.**
+  The image never created `/home/app/.cache/huggingface`, so a named volume
+  mounted there was created root-owned and the `app` user could not write the
+  model it had just downloaded — `docker compose up` died on its *first*
+  request with `PermissionError`. Also: both docs pointed the volume at
+  `/root/.cache/huggingface`, which is not `HF_HOME`, so the cache silently did
+  nothing and the model re-downloaded on every start. (REP-38)
+- **The local `http` embedding adapter never batched.** It posted the entire
+  cold-cache corpus in one request — ~5 GB at 50k symbols — while the cloud
+  adapter chunked. The bound was adapter-local and one adapter simply omitted
+  it. A provider can now only express ONE request, so none can opt out. (REP-37)
+- **An interrupted first embed lost everything.** The cache was written once,
+  after the whole corpus succeeded, so an OOM-kill discarded every vector
+  computed and the next query reissued the identical request — a loop that
+  never made progress. Batches are appended as they land. (REP-37)
+- **A long summary disabled hybrid search permanently.** Document strings were
+  unbounded while the server capped input length, so one oversized document
+  failed the whole embed call and `semantic_find` fell back to lexical for
+  good. Documents are now trimmed to fit, summary first. (REP-37)
+
+### Added
+
+- `reposkein-indexer refresh` — the git hooks' new entry point. `post-checkout`
+  fires on every branch switch, stash and file checkout, and used to run a full
+  blocking index followed by a **detached** database import, with no lock: a few
+  quick switches left several indexers and several importers running at once,
+  after git had already handed control back. `refresh` takes an exclusive lock,
+  coalesces a burst into one pass, and runs the import inside that lock. (REP-41)
+- Kubernetes manifests for the two optional services (`deploy/k8s/`), with the
+  memory story documented honestly — the cluster enforces a budget and moves the
+  work off your workstation; it does not make the model smaller. (REP-48)
+- Declared memory budgets for `docker compose`: `mem_limit` on both services and
+  an explicit Neo4j heap. The Neo4j image pins only the page cache, so an unset
+  heap took 25% of the whole Docker VM — which on a stock Docker Desktop install
+  is ~8 GiB shared with the embedding server. Docs now state the RAM
+  prerequisite. (REP-39)
+- Embedding-server backpressure: single-flight model load, request caps → `413`,
+  bounded concurrency → `503` with `Retry-After`, sequence length capped at 1024
+  (the model card advertises 32768, and attention memory is quadratic in it),
+  and torch/OpenMP threads pinned. `/health` reports the live limits. (REP-38)
+- `[index] max_file_bytes` in the committed `config.toml` (default 2 MiB):
+  oversized files are recorded as `File` nodes but never parsed. A tree-sitter
+  syntax tree runs 10–20× its source, so one vendored bundle dominated an index.
+  Committed rather than an env var, so the graph stays a byte-identical function
+  of the tree on every machine. (REP-36)
+
+### Changed
+
+- **Federated graph load: 751 → 380 MiB RSS** (10 repos, 130k nodes, 111 MiB of
+  JSONL). The store held the complete text of every federated repo
+  simultaneously before parsing a line, then parsed each into its own full graph
+  before merging. It now streams line by line, interning node ids. (REP-43)
+- **Writing a summary no longer re-parses the graph.** One freshness key covered
+  two independent inputs, so every `write_semantic_summary` invalidated the
+  whole graph — K writes cost K full reloads. The keys are now separate. (REP-40)
+- **Vector storage is binary, off-heap.** 4,096 bytes per 1024-dim vector rather
+  than 21,865 of JSON text, held outside V8's ~4.19 GB heap cap rather than
+  against it. Ranking moved behind the store, so a query allocates k results
+  instead of one object per corpus node. The JSON cache is retired. (REP-44)
+- **Ranking allocates per limit, not per corpus.** BM25F retained a tokenised
+  copy of every field of every node through scoring; it is now two passes with a
+  bounded heap. Identical results. `read_cypher` stops streaming at its row cap
+  instead of materialising the database and then discarding all but 200
+  rows. (REP-46)
+- Database import writes in bounded chunks — one transaction per 5,000 rows
+  rather than one per label, which built a second full copy of the graph and ran
+  into the server's transaction ceiling. (REP-42)
+- The JSONL write path streams: **185.0 → 167.7 MiB peak RSS** on a real
+  13,394-node repo. The output file was previously built as one `String` beside
+  the graph it was serialised from. Sort, dedup and the edge prop-merge stay
+  where they are — they are the determinism guarantee, not overhead. (REP-47)
+- `load` no longer clones the whole graph to report a node count, and the index
+  delta keeps id → fingerprint instead of retaining the previous node
+  set. (REP-36)
+
+
 ## [0.8.0] - 2026-08-28
 
 ### Added
